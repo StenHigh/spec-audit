@@ -1,0 +1,10 @@
+# Local research may contain proprietary source snapshots and raw evidence.
+/.local/
+/bin/
+/prototypes/host/tool/pilot
+/prototypes/core/pilot
+*.test
+.DS_Store
+.env
+.env.*
+!.env.example
