@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -186,9 +185,10 @@ type ResultSummary struct {
 }
 
 type RequirementReport struct {
-	Requirement Requirement  `json:"requirement"`
-	Scope       string       `json:"scope"`
-	Roles       []RoleReport `json:"roles"`
+	Requirement Requirement           `json:"requirement"`
+	Scope       string                `json:"scope"`
+	Roles       []RoleReport          `json:"roles"`
+	Navigation  RequirementNavigation `json:"navigation"`
 }
 
 type Report struct {
@@ -205,6 +205,7 @@ type Report struct {
 	SemanticCompletenessProven bool                `json:"semantic_completeness_proven"`
 	HostReview                 *ReviewSummary      `json:"host_review,omitempty"`
 	RawProvenance              []RawProvenance     `json:"raw_provenance"`
+	Navigation                 ReportNavigation    `json:"navigation"`
 }
 
 func main() {
@@ -1076,6 +1077,7 @@ func execute(args []string) (any, error) {
 		if view.State == "current" {
 			report.Conclusion = "Хост согласовал результаты по текущим свидетельствам. Это его обоснованная оценка, не автоматическое соответствие или доказательство полноты ТЗ."
 		}
+		buildNavigation(&report, m)
 		var html bytes.Buffer
 		if err := reportTemplate.Execute(&html, report); err != nil {
 			return nil, err
@@ -1258,22 +1260,7 @@ func makeReport(runID string, m Manifest, state State, fresh bool) Report {
 							continue
 						}
 						role.Assessment = &assessment
-						for _, test := range assessment.Tests {
-							latest := TestExecution{TestID: test.TestID, State: "not_recorded"}
-							for _, receipt := range report.Executions {
-								for _, executed := range receipt.Tests {
-									if executed.ID != test.TestID {
-										continue
-									}
-									status := executed.State
-									if receipt.State == "stale" {
-										status = "stale"
-									}
-									latest = TestExecution{test.TestID, receipt.ID, status}
-								}
-							}
-							role.Executions = append(role.Executions, latest)
-						}
+						role.Executions = assessmentExecutions(assessment, report.Executions)
 					}
 				}
 				row.Roles = append(row.Roles, role)
@@ -1283,28 +1270,3 @@ func makeReport(runID string, m Manifest, state State, fresh bool) Report {
 	}
 	return report
 }
-
-var reportTemplate = template.Must(template.New("report").Parse(`<!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>spec-audit — {{.RunID}}</title><style>body{font:16px/1.55 system-ui,sans-serif;max-width:1080px;margin:2rem auto;padding:0 1rem;color:#182431;background:#f7f8fa}h1,h2,h3{line-height:1.25}section,article{background:white;border:1px solid #cdd5df;border-radius:8px;padding:1rem;margin:1rem 0}table{border-collapse:collapse}td,th{border:1px solid #cdd5df;padding:.4rem .7rem;text-align:left}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#eef1f5;padding:.8rem}code{overflow-wrap:anywhere}.missing{color:#9b2525}.meta{color:#506070;font-size:.9rem}</style></head>
-<body><h1>Проверка спецификации</h1><p>{{.Conclusion}}</p>
-<p class="meta">Run: {{.RunID}} · {{.GeneratedAt}}<br>Snapshot: <code>{{.SnapshotID}}</code></p>
-<p>Freshness: {{.Freshness}}. Получено {{.Submitted}} из {{.Expected}} заданий. Delivery complete: {{.DeliveryComplete}}. Объявленных норм: {{.RequirementsTotal}}.</p>
-<p>host_reconciliation_required: {{.HostReconciliationRequired}}. Перед решением обновите status/report: статическая страница не обнаруживает последующие изменения файлов.</p>
-{{if .Pending}}<h2>Ожидаются</h2><ul>{{range .Pending}}<li>{{.TaskID}}, attempt {{.Attempt}}</li>{{end}}</ul>{{end}}
-<h2>Границы проверки</h2><ul>{{range .Limitations}}<li>{{.}}</li>{{end}}</ul>
-{{if .Accepted}}<h2>История принятия индекса</h2><p>accepted_requirements_only · semantic_completeness_proven: false · {{.Accepted.Head}}</p>{{range .Accepted.History}}<h3>{{.Decision.DecisionID}}</h3><p>Raw: {{.Decision.RawSHA256}}</p>{{range .Decision.Operations}}<p>{{.Action}} · previous: {{.Previous}} · {{.Reason}}</p><ul>{{range .Targets}}<li>{{.Candidate}} · {{.Title}}</li>{{end}}</ul>{{end}}<ul>{{range .Assignments}}<li>{{.Candidate}} → {{.RequirementID}}</li>{{end}}</ul><ul>{{range .Limitations}}<li>{{.}}</li>{{end}}</ul>{{end}}{{end}}
-<h2>Итоги ролей</h2>{{range .Summaries}}<h3>{{.TaskID}}</h3><p>{{.Summary}}</p><ul>{{range .Limitations}}<li>{{.}}</li>{{end}}</ul>{{end}}
-<h2>Происхождение ответов</h2>{{range .RawProvenance}}<p>{{.TaskID}} · attempt {{.Attempt}} · {{.Kind}} · <code>{{.SHA256}}</code></p>{{end}}
-{{if .HostReview}}<section><h2>Согласование хоста — {{.HostReview.State}}</h2><p>Это суждение хоста, не автоматический сертификат. При outdated ниже только история; требуется новое решение.</p>{{range .HostReview.History}}<p>{{.ReviewID}} · {{.Reviewer}} · <code>{{.RawSHA256}}</code> · {{.Summary}}</p>{{end}}{{with .HostReview.Latest}}<h3>{{.ReviewID}} — {{.Reviewer}}</h3><p>{{.Summary}}</p><ul>{{range .Limitations}}<li>{{.}}</li>{{end}}</ul>{{range .Assessments}}<article><h3>{{.RequirementID}} — решение хоста</h3>{{template "assessment" .}}</article>{{end}}{{end}}</section>{{end}}
-<h2>Фактические запуски</h2>{{range .Executions}}<p>{{.ID}} — {{.State}} · {{.Runtime}} · exit {{.ExitCode}}</p><ul>{{range .Tests}}<li>{{.ID}} — {{.State}}</li>{{end}}</ul>{{else}}<p>Нет записанного исполнения.</p>{{end}}
-{{range .Requirements}}<section><h2>{{.Requirement.ID}} — {{.Requirement.Title}}</h2><p>Scope: {{.Scope}}</p>{{if .Requirement.Accepted}}<p>Редакция: {{.Requirement.Accepted.Revision}} · {{.Requirement.Accepted.Clarity}} · parents: {{.Requirement.Accepted.Parents}}</p><p>Условие: {{.Requirement.Condition}}</p><p>Требование: {{.Requirement.Statement}}</p><p>Способ проверки (хост): {{.Requirement.Verification}}</p><ul>{{range .Requirement.Accepted.Exceptions}}<li>Исключение: {{.}}</li>{{end}}{{range .Requirement.Accepted.Unresolved}}<li>Вопрос: {{.}}</li>{{end}}</ul>{{template "citations" .Requirement.Accepted.Citations}}{{else}}<pre>{{.Requirement.Source.Quote}}</pre>{{end}}
-{{range .Roles}}<article><h3>{{.Role}} · attempt {{.Attempt}}</h3>{{if .Assessment}}{{template "assessment" .Assessment}}{{else}}<p class="missing">pending: результат отсутствует.</p>{{end}}
-{{range .Executions}}<p>Последняя запись для {{.TestID}} — {{.State}} · receipt {{.ReceiptID}}. Полная история запусков выше.</p>{{end}}</article>{{end}}</section>{{end}}
-</body></html>
-{{define "citations"}}{{range .}}<p class="meta">{{.Path}}:{{.LineStart}}–{{.LineEnd}}</p><pre>{{.Quote}}</pre>{{end}}{{end}}
-{{define "assessment"}}<p>Норма: {{.Specification}} · Код: {{.Implementation}} · Assertion: {{.Assertion}}</p><p>{{.Statement}}</p>
-{{if .Spec}}<h5>Спецификация</h5>{{template "citations" .Spec}}{{end}}
-{{if .Code}}<h5>Код</h5>{{template "citations" .Code}}{{end}}
-{{if .Tests}}<h5>Текст тестов — не факт исполнения</h5>{{range .Tests}}<p>{{.TestID}} · {{.Citation.Path}}:{{.Citation.LineStart}}–{{.Citation.LineEnd}}</p><pre>{{.Citation.Quote}}</pre>{{end}}{{end}}
-{{if .Limitations}}<h4>Ограничения оценки</h4><ul>{{range .Limitations}}<li>{{.}}</li>{{end}}</ul>{{end}}{{end}}`))

@@ -76,7 +76,7 @@ func TestReviewLifecycle(t *testing.T) {
 		t.Fatal("report hides or overclaims review")
 	}
 	html := readFixture(t, filepath.Join(base, "runs/review/report.html"))
-	if bytes.Contains(html, []byte("<script>")) || !bytes.Contains(html, []byte("&lt;script&gt;")) {
+	if bytes.Contains(html, []byte("<script>not executable</script>")) || !bytes.Contains(html, []byte("&lt;script&gt;not executable&lt;/script&gt;")) {
 		t.Fatal("unsafe/missing host HTML")
 	}
 	beforeJournal := readFixture(t, filepath.Join(base, "runs/review/host-reviews.json"))

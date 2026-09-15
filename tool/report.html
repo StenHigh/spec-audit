@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'none'; base-uri 'none'; form-action 'none'">
+<title>spec-audit — {{.RunID}}</title>
+<style>
+:root{color-scheme:light;--ink:#20312d;--muted:#536960;--line:#d6e0db;--accent:#17694f;--paper:#fff;--wash:#f1f5f2}
+*{box-sizing:border-box}body{margin:0;background:var(--wash);color:var(--ink);font:16px/1.55 system-ui,sans-serif}main{max-width:1240px;margin:auto;padding:2rem 1.25rem 5rem}a{color:var(--accent);text-underline-offset:3px}a,code,summary,p,li{overflow-wrap:anywhere}h1,h2,h3{line-height:1.2}h1{font-size:2.5rem;margin:.4rem 0}h2{margin:2rem 0 1rem}h4,h5{margin:.8rem 0 .3rem}p{margin:.7rem 0}nav{display:flex;gap:1rem;flex-wrap:wrap;margin:1rem 0}.eyebrow{letter-spacing:.12em;text-transform:uppercase;font-size:.8rem;color:var(--accent);font-weight:700}.meta,small{color:var(--muted);font-size:.86rem}.notice{border-left:4px solid var(--accent);padding:1rem;background:#e5f0e9}.notice.stale{border-color:#aa503a;background:#fae9e2}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(195px,1fr));gap:.65rem}.card,details,article{border:1px solid var(--line);border-radius:9px;background:var(--paper);padding:1rem}.card strong{display:block;font-size:2rem}.card small{display:block}button.card{text-align:left;color:inherit;cursor:pointer}button.card:hover{border-color:var(--accent)}details{margin:.6rem 0}summary{cursor:pointer;font-weight:600}summary small{font-weight:400;display:block;margin:.3rem 0 0 1.1rem}details[open]>summary{margin-bottom:1rem}article{background:#f8faf8;margin:.7rem 0}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#edf2ef;padding:1rem;border-radius:6px;font:13px/1.6 ui-monospace,monospace}code{font-size:.85em}.controls{display:flex;flex-wrap:wrap;align-items:end;gap:.7rem;margin:1rem 0}.controls label{display:flex;flex-direction:column;font-size:.85rem;gap:.3rem}.controls label:first-child{flex:1;min-width:180px}input,select,button{font:inherit;padding:.55rem .7rem;border:1px solid #9aafa4;border-radius:5px;background:white;color:var(--ink);max-width:100%}button{cursor:pointer}.badge{display:inline-block;border-radius:4px;padding:.1rem .4rem;background:#edf2ef;font-size:.8rem;font-weight:500}.missing{color:#944231}.table-scroll{overflow:auto}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid var(--line);padding:.6rem;text-align:left;vertical-align:top}.evidence{border-top:1px solid var(--line);margin-top:1rem;padding-top:.5rem}.evidence:target,details:target{outline:3px solid #d18c2b;outline-offset:3px}a:focus-visible,input:focus-visible,select:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid #d18c2b;outline-offset:3px}[hidden]{display:none!important}.js-controls{display:none}.js .js-controls{display:flex}section{scroll-margin-top:1rem}li{margin:.2rem 0}.back{font-size:.85rem}@media(max-width:600px){main{padding:1rem .7rem 3rem}h1{font-size:1.85rem}details,article{padding:.75rem}.controls{align-items:stretch}.controls label{width:100%}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.card{padding:.7rem}.card strong{font-size:1.65rem}}
+</style>
+</head>
+<body><main id="top">
+<header><div class="eyebrow">spec-audit / карта проекта</div><h1>От требований к доказательствам</h1>
+<p>Где нужна доработка, что ещё не проверено и на чём основан вывод.</p>
+<div class="notice {{if eq .Freshness "stale"}}stale{{end}}"><strong>{{.Freshness}} · Согласование хоста — {{.HostReviewState}}</strong><p>{{.Conclusion}}</p></div>
+<p class="meta">Run: {{.RunID}} · {{.GeneratedAt}}<br>Snapshot: <code>{{.SnapshotID}}</code></p>
+<p class="meta">Статическая страница не отслеживает последующие изменения. Перед решением обновите status/report. Связь не означает соответствие; passed не означает достаточность теста.</p>
+<nav aria-label="Разделы отчёта"><a href="#overview">Обзор</a><a href="#requirements">Требования</a><a href="#files">ТЗ, код и тесты</a><a href="#executions">Исполнения</a><a href="#history">История и происхождение</a></nav>
+</header>
+<section id="overview"><h2>Область проверки</h2>
+<div class="cards"><div class="card"><strong>{{.RequirementsTotal}}</strong>норм в этом run<small>{{.CompletenessBasis}}</small></div><div class="card"><strong>{{.Submitted}} / {{.Expected}}</strong>ответов ролей<small>Delivery complete: {{.DeliveryComplete}}</small></div>{{range .Navigation.Groups}}<div class="card"><strong>{{.Files}}</strong>{{if eq .Kind "spec"}}файлов ТЗ{{else if eq .Kind "code"}}файлов кода{{else}}файлов тестов{{end}}<small>{{.Unlinked}} без текущих связей</small></div>{{end}}</div>
+<p>Инвентарь охватывает все выбранные файлы snapshot, а оценки — только нормы этого run. Документ без принятой нормы и код без связи требуют разбора, но не объявляются дефектом.</p>
+<details><summary>Какие источники выбраны</summary><div class="table-scroll"><table><thead><tr><th>Категория</th><th>Пути</th><th>Include</th><th>Exclude</th></tr></thead><tbody>{{range .Navigation.Groups}}<tr><td>{{.Kind}}</td><td>{{.Selection.Paths}}</td><td>{{.Selection.Include}}</td><td>{{.Selection.Exclude}}</td></tr>{{end}}</tbody></table></div>{{range .Navigation.Scopes}}<p><strong>{{.ID}}</strong> — {{.Focus}}</p>{{end}}</details>
+<h2>Области внимания</h2><p class="meta">{{if eq .HostReviewState "current"}}Основа — текущее решение хоста. Различия исходных ролей сохранены.{{else}}Основа — доступные оценки ролей без усреднения; согласование ещё требуется.{{end}} {{if eq .Freshness "stale"}}Все оценки ниже исторические.{{end}} Счётчики пересекаются, складывать их нельзя.</p>
+<div class="cards">{{range .Navigation.Filters}}<button class="card" type="button" data-filter="{{.ID}}"><strong>{{.Count}}</strong>{{.Label}}</button>{{end}}</div>
+<p class="meta">«Вопросы к ТЗ» — записанные неоднозначности и открытые вопросы, не автоматический поиск всех конфликтов. Различия мнений агентов не доказывают противоречие ТЗ.</p>
+</section>
+<section id="requirements"><h2>Требования и выводы</h2>
+<div class="controls js-controls"><label>Поиск нормы<input id="requirement-search" type="search" placeholder="ID, формулировка, путь…"></label><label>Область внимания<select id="requirement-filter"><option value="">Все состояния</option>{{range .Navigation.Filters}}<option value="{{.ID}}">{{.Label}}</option>{{end}}</select></label><label>Scope<select id="scope-filter"><option value="">Все scope</option>{{range .Navigation.Scopes}}<option>{{.ID}}</option>{{end}}</select></label><button type="button" id="reset-requirements">Сбросить</button></div>
+<p id="requirement-count" role="status" aria-live="polite">{{len .Requirements}} норм</p>
+<p id="no-requirements" hidden>По этим условиям нормы не найдены. Очистите поиск или фильтры.</p>
+{{range .Requirements}}<details class="requirement" id="req-{{.Requirement.ID}}" data-scope="{{.Scope}}" data-flags="{{join .Navigation.Flags " "}}">
+<summary>{{.Requirement.ID}} — {{.Requirement.Title}}<small>Scope: {{.Scope}} · Основа: {{.Navigation.Basis}}{{with .Navigation.Host}}{{if eq $.HostReviewState "current"}} · Код: {{.Implementation}} · Assertion: {{.Assertion}}{{end}}{{end}}</small></summary>
+<p>Условие: {{.Requirement.Condition}}</p><p>Требование: {{.Requirement.Statement}}</p><p>Способ проверки (хост): {{.Requirement.Verification}}</p>
+{{if .Requirement.Accepted}}<p class="meta">Редакция: {{.Requirement.Accepted.Revision}} · {{.Requirement.Accepted.Clarity}} · parents: {{.Requirement.Accepted.Parents}}</p><ul>{{range .Requirement.Accepted.Exceptions}}<li>Исключение: {{.}}</li>{{end}}{{range .Requirement.Accepted.Unresolved}}<li>Вопрос: {{.}}</li>{{end}}</ul>{{template "citations" .Requirement.Accepted.Citations}}{{else}}<p>{{template "citation" .Requirement.Source}}</p>{{end}}
+{{with .Navigation.Host}}<article><h3>Решение хоста · {{$.HostReviewState}}</h3>{{if ne $.HostReviewState "current"}}<p class="missing">История: это решение больше не является текущим основанием.</p>{{end}}{{template "assessment" .}}</article>{{end}}
+{{template "test-executions" .Navigation.HostExecutions}}
+{{range .Roles}}<article><h3>{{.Role}} · attempt {{.Attempt}}</h3>{{if .Assessment}}{{template "assessment" .Assessment}}{{else}}<p class="missing">pending: результат отсутствует.</p>{{end}}{{template "test-executions" .Executions}}</article>{{end}}
+<a class="back" href="#requirements">↑ К списку требований</a></details>{{end}}
+</section>
+<section id="files"><h2>ТЗ, код и тесты — обратная карта</h2>
+<p>Откройте файл, чтобы увидеть сохранённые фрагменты и связанные нормы. «Нет текущих связей» не означает «ТЗ не покрывает код»: смысловой разбор мог ещё не выполняться.</p>
+<div class="controls js-controls"><label>Поиск файла или фрагмента<input id="file-search" type="search" placeholder="Путь, метод в цитате, test_id…"></label><label>Категория<select id="file-kind"><option value="">Все файлы</option><option value="spec">ТЗ</option><option value="code">Код</option><option value="tests">Тесты</option></select></label><label>Связи<select id="file-links"><option value="">Все связи</option><option value="no">Нет текущих связей</option><option value="yes">Есть текущие связи</option></select></label><button type="button" id="reset-files">Сбросить</button></div>
+<p id="file-count" role="status" aria-live="polite">{{len .Navigation.Files}} файлов</p><p id="no-files" hidden>По этим условиям файлы не найдены. Очистите поиск или фильтры.</p>
+{{range .Navigation.Files}}<details class="source-file" id="{{.ID}}" data-kind="{{.Kind}}" data-linked="{{if .Current}}yes{{else}}no{{end}}"><summary>{{.Path}}<small>{{.Kind}} · {{if .Current}}есть текущие связи{{else if .Evidence}}только исторические связи{{else}}нет записанных связей{{end}}</small></summary>
+<p class="meta">{{.Bytes}} байт · SHA-256: <code>{{.SHA256}}</code></p>
+{{range .Evidence}}<div class="evidence" id="{{.ID}}"><h3>{{.Citation.Path}}:{{.Citation.LineStart}}–{{.Citation.LineEnd}}</h3><ul>{{range .Links}}<li><a href="#req-{{.RequirementID}}">{{.RequirementID}}</a> · {{.Origin}} · {{if .Current}}текущая привязка{{else}}история{{end}}{{if .TestID}} · test_id: <code>{{.TestID}}</code>{{end}}</li>{{end}}</ul><pre>{{.Citation.Quote}}</pre></div>{{else}}<p>Сохранённых цитат нет. Полный исходник не включён в HTML; это не заключение о его назначении или соответствии.</p>{{end}}
+<a class="back" href="#files">↑ К списку файлов</a></details>{{end}}
+</section>
+<section id="executions"><h2>Фактические запуски</h2><p class="meta">Полная история. Связь с assertion по test_id — суждение роли/хоста, а не доказательство покрытия ветви.</p>
+{{range .Executions}}<details id="run-{{.ID}}"><summary>{{.ID}} — {{.State}} · {{.Runtime}} · exit {{.ExitCode}}</summary><ul>{{range .Tests}}<li>{{.ID}} — {{.State}}</li>{{end}}</ul></details>{{else}}<p>Нет записанного исполнения.</p>{{end}}</section>
+<section id="history"><h2>История и происхождение</h2>
+{{if .HostReview}}<details><summary>Согласование хоста — {{.HostReview.State}}</summary><p>Это суждение хоста, не автоматический сертификат. При outdated решение в карточках — только история.</p>{{range .HostReview.History}}<p>{{.ReviewID}} · {{.Reviewer}} · <code>{{.RawSHA256}}</code> · {{.Summary}}</p>{{end}}{{with .HostReview.Latest}}<ul>{{range .Limitations}}<li>{{.}}</li>{{end}}</ul>{{end}}</details>{{end}}
+<details><summary>Итоги ролей и точное происхождение</summary>{{range .Summaries}}<h3>{{.TaskID}}</h3><p>{{.Summary}}</p><ul>{{range .Limitations}}<li>{{.}}</li>{{end}}</ul>{{end}}{{range .RawProvenance}}<p>{{.TaskID}} · attempt {{.Attempt}} · {{.Kind}} · <code>{{.SHA256}}</code></p>{{end}}</details>
+{{if .Accepted}}<details><summary>История принятия индекса</summary><p>accepted_requirements_only · semantic_completeness_proven: false · {{.Accepted.Head}}</p>{{range .Accepted.History}}<h3>{{.Decision.DecisionID}}</h3><p>Raw: {{.Decision.RawSHA256}}</p>{{range .Decision.Operations}}<p>{{.Action}} · previous: {{.Previous}} · {{.Reason}}</p><ul>{{range .Targets}}<li>{{.Candidate}} · {{.Title}}</li>{{end}}</ul>{{end}}<ul>{{range .Assignments}}<li>{{.Candidate}} → {{.RequirementID}}</li>{{end}}</ul><ul>{{range .Limitations}}<li>{{.}}</li>{{end}}</ul>{{end}}</details>{{end}}
+<details><summary>Границы проверки и ожидающие задания</summary><p>host_reconciliation_required: {{.HostReconciliationRequired}} · semantic_completeness_proven: {{.SemanticCompletenessProven}}</p><ul>{{range .Pending}}<li>{{.TaskID}}, attempt {{.Attempt}}</li>{{end}}</ul><ul>{{range .Limitations}}<li>{{.}}</li>{{end}}</ul></details>
+<p><a href="#top">↑ К обзору</a></p></section>
+<noscript><p>JavaScript отключён: фильтры недоступны, все нормы, файлы и цитаты доступны через ссылки и раскрывающиеся блоки.</p></noscript>
+</main>
+<script>
+(() => {
+  'use strict';
+  document.documentElement.classList.add('js');
+  const byId = id => document.getElementById(id);
+  const rows = selector => Array.from(document.querySelectorAll(selector), element => ({element, text: element.textContent.toLocaleLowerCase()}));
+  const requirements = rows('.requirement'), files = rows('.source-file');
+  const rq = byId('requirement-search'), rf = byId('requirement-filter'), rs = byId('scope-filter');
+  const fq = byId('file-search'), fk = byId('file-kind'), fl = byId('file-links');
+  function apply(rows, predicate, countId, emptyId, noun) {
+    let count = 0;
+    for (const row of rows) { row.element.hidden = !predicate(row); if (!row.element.hidden) count++; }
+    byId(countId).textContent = count + ' / ' + rows.length + ' ' + noun;
+    byId(emptyId).hidden = count !== 0;
+  }
+  function filterRequirements() {
+    const query = rq.value.trim().toLocaleLowerCase();
+    apply(requirements, row => row.text.includes(query) && (!rf.value || row.element.dataset.flags.split(' ').includes(rf.value)) && (!rs.value || row.element.dataset.scope === rs.value), 'requirement-count', 'no-requirements', 'норм');
+  }
+  function filterFiles() {
+    const query = fq.value.trim().toLocaleLowerCase();
+    apply(files, row => row.text.includes(query) && (!fk.value || row.element.dataset.kind === fk.value) && (!fl.value || row.element.dataset.linked === fl.value), 'file-count', 'no-files', 'файлов');
+  }
+  function resetRequirements() { rq.value = rf.value = rs.value = ''; filterRequirements(); }
+  function resetFiles() { fq.value = fk.value = fl.value = ''; filterFiles(); }
+  for (const input of [rq, rf, rs]) input.addEventListener('input', filterRequirements);
+  for (const input of [fq, fk, fl]) input.addEventListener('input', filterFiles);
+  byId('reset-requirements').addEventListener('click', resetRequirements);
+  byId('reset-files').addEventListener('click', resetFiles);
+  for (const button of document.querySelectorAll('[data-filter]')) button.addEventListener('click', () => {resetRequirements(); rf.value = button.dataset.filter; filterRequirements(); byId('requirements').scrollIntoView(); rf.focus({preventScroll:true});});
+  function reveal() {
+    let id;
+    try { id = decodeURIComponent(location.hash.slice(1)); } catch { return; }
+    const target = byId(id);
+    if (!target) return;
+    if (target.closest('.requirement')) resetRequirements();
+    if (target.closest('.source-file')) resetFiles();
+    for (let element = target; element; element = element.parentElement) {
+      if (element.tagName === 'DETAILS') element.open = true;
+    }
+    target.scrollIntoView();
+  }
+  window.addEventListener('hashchange', reveal);
+  // Clicking the same hash again must also reveal a subsequently filtered/collapsed target.
+  document.addEventListener('click', event => {const link = event.target.closest('a[href^="#"]'); if (link && link.getAttribute('href') === location.hash) reveal();});
+  filterRequirements(); filterFiles(); reveal();
+})();
+</script>
+</body></html>
+{{define "citation"}}<a href="#{{citationID .}}">{{.Path}}:{{.LineStart}}–{{.LineEnd}}</a>{{end}}
+{{define "citations"}}<ul>{{range .}}<li>{{template "citation" .}}</li>{{end}}</ul>{{end}}
+{{define "assessment"}}<p>Норма: <span class="badge">{{.Specification}}</span> · Код: <span class="badge">{{.Implementation}}</span> · Assertion: <span class="badge">{{.Assertion}}</span></p><p>{{.Statement}}</p>
+{{if .Spec}}<h4>Спецификация</h4>{{template "citations" .Spec}}{{end}}
+{{if .Code}}<h4>Код</h4>{{template "citations" .Code}}{{end}}
+{{if .Tests}}<h4>Текст тестов — не факт исполнения</h4><ul>{{range .Tests}}<li><code>{{.TestID}}</code> · {{template "citation" .Citation}}</li>{{end}}</ul>{{end}}
+{{if .Limitations}}<h4>Ограничения оценки</h4><ul>{{range .Limitations}}<li>{{.}}</li>{{end}}</ul>{{end}}{{end}}
+{{define "test-executions"}}{{range .}}<p class="meta">Последняя запись для {{.TestID}} — {{.State}}{{if .ReceiptID}} · <a href="#run-{{.ReceiptID}}">receipt {{.ReceiptID}}</a>{{end}}. Полная история запусков ниже.</p>{{end}}{{end}}
