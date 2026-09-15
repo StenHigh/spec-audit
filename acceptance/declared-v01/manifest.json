@@ -1,0 +1,152 @@
+{
+  "version": 1,
+  "config": {
+    "version": 1,
+    "project_root": "/Users/sh/PhpstormProjects/spec-audit/acceptance/corpus",
+    "specs": {
+      "paths": [
+        "rules.md"
+      ],
+      "include": null,
+      "exclude": null
+    },
+    "code": {
+      "paths": [
+        "go.mod",
+        "source.go"
+      ],
+      "include": null,
+      "exclude": null
+    },
+    "tests": {
+      "paths": [
+        "source_test.go"
+      ],
+      "include": null,
+      "exclude": null
+    },
+    "reports_dir": "/Users/sh/PhpstormProjects/spec-audit/.local/acceptance",
+    "runtime": {
+      "kind": "go",
+      "service": "",
+      "paths": [
+        "."
+      ],
+      "tests": [],
+      "timeout_seconds": 30
+    },
+    "scopes": [
+      {
+        "id": "all",
+        "focus": "Все объявленные требования",
+        "requirements": [
+          "REQ-DEMO-001",
+          "REQ-DEMO-002",
+          "REQ-DEMO-003",
+          "REQ-DEMO-004",
+          "REQ-DEMO-005"
+        ]
+      }
+    ]
+  },
+  "files": [
+    {
+      "path": "go.mod",
+      "kind": "code",
+      "sha256": "a1b5911b03b52918ab89f3c1a6a4639370b3f60d217b88fa7f758f4552ddfc11",
+      "bytes": 49
+    },
+    {
+      "path": "rules.md",
+      "kind": "spec",
+      "sha256": "7de262fd3414a0d5d88cd7948be966fce06d6faa344d963258e2eea60c43e439",
+      "bytes": 1983
+    },
+    {
+      "path": "source.go",
+      "kind": "code",
+      "sha256": "4396b2b3df9d9744b5906e11e48d4aeaddfbbe101336daafebec714d95fdd4eb",
+      "bytes": 371
+    },
+    {
+      "path": "source_test.go",
+      "kind": "tests",
+      "sha256": "2a0b180d52570de06027e11c5c246e70ded8d47f83899ce5f5dab77e22466913",
+      "bytes": 676
+    }
+  ],
+  "profile": "requirements/1;goldmark/1.8.6;protocol/1",
+  "requirements": [
+    {
+      "id": "REQ-DEMO-001",
+      "title": "Инверсия",
+      "condition": "вызвана Flip с произвольным значением bool.",
+      "statement": "результат должен быть логическим отрицанием входного значения.",
+      "verification": "проверить точный результат для false и true.",
+      "content_hash": "2255604d410837e1f0dd471fd3ebdf225df3ddd0b04ec806f1cf8cc0e1861225",
+      "source": {
+        "path": "rules.md",
+        "line_start": 6,
+        "line_end": 10,
+        "quote": "### REQ-DEMO-001 — Инверсия\n\nУсловие: вызвана Flip с произвольным значением bool.\nТребование: результат должен быть логическим отрицанием входного значения.\nПроверка: проверить точный результат для false и true."
+      }
+    },
+    {
+      "id": "REQ-DEMO-002",
+      "title": "Удвоение",
+      "condition": "вызвана Double(7).",
+      "statement": "результат должен быть равен 14.",
+      "verification": "сравнить результат с 14 на равенство.",
+      "content_hash": "1cb9e86f5146e1a9a06ea6dd417a86423ef0bdf63253fb10e76de4aead70a807",
+      "source": {
+        "path": "rules.md",
+        "line_start": 12,
+        "line_end": 16,
+        "quote": "### REQ-DEMO-002 — Удвоение\n\nУсловие: вызвана Double(7).\nТребование: результат должен быть равен 14.\nПроверка: сравнить результат с 14 на равенство."
+      }
+    },
+    {
+      "id": "REQ-DEMO-003",
+      "title": "Модуль",
+      "condition": "вызвана Absolute(-3).",
+      "statement": "результат должен быть равен 3.",
+      "verification": "сравнить результат с 3 на равенство.",
+      "content_hash": "703fec27d17fbc21f18de64673f215b9bb1f1b6aa2095df73fc2e2e97ff4ab19",
+      "source": {
+        "path": "rules.md",
+        "line_start": 18,
+        "line_end": 22,
+        "quote": "### REQ-DEMO-003 — Модуль\n\nУсловие: вызвана Absolute(-3).\nТребование: результат должен быть равен 3.\nПроверка: сравнить результат с 3 на равенство."
+      }
+    },
+    {
+      "id": "REQ-DEMO-004",
+      "title": "Сохранность",
+      "condition": "Save(store, \"note\") вернула nil.",
+      "statement": "строка \"note\" должна оставаться доступной в том же хранилище после перезапуска процесса.",
+      "verification": "после успешной записи завершить процесс и прочитать строку из того же хранилища новым процессом.",
+      "content_hash": "f8af883d2adc4bbfedf3e2ce1557f607883ee02baf5b37055da48735334b2277",
+      "source": {
+        "path": "rules.md",
+        "line_start": 24,
+        "line_end": 28,
+        "quote": "### REQ-DEMO-004 — Сохранность\n\nУсловие: Save(store, \"note\") вернула nil.\nТребование: строка \"note\" должна оставаться доступной в том же хранилище после перезапуска процесса.\nПроверка: после успешной записи завершить процесс и прочитать строку из того же хранилища новым процессом."
+      }
+    },
+    {
+      "id": "REQ-DEMO-005",
+      "title": "Представление имени",
+      "condition": "вызвана Normalize(\" Ada \").",
+      "statement": "результат должен содержать имя в стандартном представлении.",
+      "verification": "сравнить результат со стандартным представлением имени.",
+      "content_hash": "a426f49a29d2bbe4e6dad46230fe2ee769f5845ee89b81053d9d652d13852c1c",
+      "source": {
+        "path": "rules.md",
+        "line_start": 30,
+        "line_end": 34,
+        "quote": "### REQ-DEMO-005 — Представление имени\n\nУсловие: вызвана Normalize(\" Ada \").\nТребование: результат должен содержать имя в стандартном представлении.\nПроверка: сравнить результат со стандартным представлением имени."
+      }
+    }
+  ],
+  "snapshot_id": "b1de29c6196a72dda225c946bf3b238e2677329dcd98735dca83c6f547f79f21"
+}

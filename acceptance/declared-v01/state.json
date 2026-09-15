@@ -1,0 +1,586 @@
+{
+  "entries": [
+    {
+      "task": {
+        "task_id": "all-mapper",
+        "attempt": 1,
+        "snapshot_id": "b1de29c6196a72dda225c946bf3b238e2677329dcd98735dca83c6f547f79f21",
+        "role": "mapper",
+        "scope": "all",
+        "focus": "Все объявленные требования",
+        "requirements": [
+          {
+            "id": "REQ-DEMO-001",
+            "title": "Инверсия",
+            "condition": "вызвана Flip с произвольным значением bool.",
+            "statement": "результат должен быть логическим отрицанием входного значения.",
+            "verification": "проверить точный результат для false и true.",
+            "content_hash": "2255604d410837e1f0dd471fd3ebdf225df3ddd0b04ec806f1cf8cc0e1861225",
+            "source": {
+              "path": "rules.md",
+              "line_start": 6,
+              "line_end": 10,
+              "quote": "### REQ-DEMO-001 — Инверсия\n\nУсловие: вызвана Flip с произвольным значением bool.\nТребование: результат должен быть логическим отрицанием входного значения.\nПроверка: проверить точный результат для false и true."
+            }
+          },
+          {
+            "id": "REQ-DEMO-002",
+            "title": "Удвоение",
+            "condition": "вызвана Double(7).",
+            "statement": "результат должен быть равен 14.",
+            "verification": "сравнить результат с 14 на равенство.",
+            "content_hash": "1cb9e86f5146e1a9a06ea6dd417a86423ef0bdf63253fb10e76de4aead70a807",
+            "source": {
+              "path": "rules.md",
+              "line_start": 12,
+              "line_end": 16,
+              "quote": "### REQ-DEMO-002 — Удвоение\n\nУсловие: вызвана Double(7).\nТребование: результат должен быть равен 14.\nПроверка: сравнить результат с 14 на равенство."
+            }
+          },
+          {
+            "id": "REQ-DEMO-003",
+            "title": "Модуль",
+            "condition": "вызвана Absolute(-3).",
+            "statement": "результат должен быть равен 3.",
+            "verification": "сравнить результат с 3 на равенство.",
+            "content_hash": "703fec27d17fbc21f18de64673f215b9bb1f1b6aa2095df73fc2e2e97ff4ab19",
+            "source": {
+              "path": "rules.md",
+              "line_start": 18,
+              "line_end": 22,
+              "quote": "### REQ-DEMO-003 — Модуль\n\nУсловие: вызвана Absolute(-3).\nТребование: результат должен быть равен 3.\nПроверка: сравнить результат с 3 на равенство."
+            }
+          },
+          {
+            "id": "REQ-DEMO-004",
+            "title": "Сохранность",
+            "condition": "Save(store, \"note\") вернула nil.",
+            "statement": "строка \"note\" должна оставаться доступной в том же хранилище после перезапуска процесса.",
+            "verification": "после успешной записи завершить процесс и прочитать строку из того же хранилища новым процессом.",
+            "content_hash": "f8af883d2adc4bbfedf3e2ce1557f607883ee02baf5b37055da48735334b2277",
+            "source": {
+              "path": "rules.md",
+              "line_start": 24,
+              "line_end": 28,
+              "quote": "### REQ-DEMO-004 — Сохранность\n\nУсловие: Save(store, \"note\") вернула nil.\nТребование: строка \"note\" должна оставаться доступной в том же хранилище после перезапуска процесса.\nПроверка: после успешной записи завершить процесс и прочитать строку из того же хранилища новым процессом."
+            }
+          },
+          {
+            "id": "REQ-DEMO-005",
+            "title": "Представление имени",
+            "condition": "вызвана Normalize(\" Ada \").",
+            "statement": "результат должен содержать имя в стандартном представлении.",
+            "verification": "сравнить результат со стандартным представлением имени.",
+            "content_hash": "a426f49a29d2bbe4e6dad46230fe2ee769f5845ee89b81053d9d652d13852c1c",
+            "source": {
+              "path": "rules.md",
+              "line_start": 30,
+              "line_end": 34,
+              "quote": "### REQ-DEMO-005 — Представление имени\n\nУсловие: вызвана Normalize(\" Ada \").\nТребование: результат должен содержать имя в стандартном представлении.\nПроверка: сравнить результат со стандартным представлением имени."
+            }
+          }
+        ]
+      },
+      "result": {
+        "task_id": "all-mapper",
+        "attempt": 1,
+        "snapshot_id": "b1de29c6196a72dda225c946bf3b238e2677329dcd98735dca83c6f547f79f21",
+        "role": "mapper",
+        "scope": "all",
+        "summary": "Инверсия подтверждается реализацией и точными проверками обеих ветвей. Удвоение реализовано согласно норме, но тест проверяет только положительность. Реализация модуля числа и его тест противоречат требованию. Сохранность после перезапуска нельзя установить без конкретного Store. Норма представления имени неоднозначна.",
+        "assessments": [
+          {
+            "requirement_id": "REQ-DEMO-001",
+            "specification": "clear",
+            "implementation": "supported",
+            "assertion": "relevant",
+            "statement": "Flip возвращает !value. TestFlip задаёт false → true и true → false и сравнивает каждый фактический результат с соответствующим ожидаемым значением.",
+            "spec": [
+              {
+                "path": "rules.md",
+                "line_start": 8,
+                "line_end": 10,
+                "quote": "Условие: вызвана Flip с произвольным значением bool.\nТребование: результат должен быть логическим отрицанием входного значения.\nПроверка: проверить точный результат для false и true."
+              }
+            ],
+            "code": [
+              {
+                "path": "source.go",
+                "line_start": 5,
+                "line_end": 7,
+                "quote": "func Flip(value bool) bool {\n\treturn !value\n}"
+              }
+            ],
+            "tests": [
+              {
+                "test_id": "example.test/specaudit-fixture::TestFlip",
+                "citation": {
+                  "path": "source_test.go",
+                  "line_start": 5,
+                  "line_end": 17,
+                  "quote": "func TestFlip(t *testing.T) {\n\tfor _, tc := range []struct {\n\t\tinput bool\n\t\twant  bool\n\t}{\n\t\t{false, true},\n\t\t{true, false},\n\t} {\n\t\tif got := Flip(tc.input); got != tc.want {\n\t\t\tt.Fatalf(\"Flip(%v) = %v; want %v\", tc.input, got, tc.want)\n\t\t}\n\t}\n}"
+                }
+              }
+            ],
+            "limitations": []
+          },
+          {
+            "requirement_id": "REQ-DEMO-002",
+            "specification": "clear",
+            "implementation": "supported",
+            "assertion": "weak",
+            "statement": "Double умножает вход на 2, поэтому Double(7) возвращает 14. TestDouble вызывает нужный вход, но отклоняет только значения \u003c= 0: любое другое положительное значение тоже удовлетворяет тесту, хотя норма требует точного равенства 14.",
+            "spec": [
+              {
+                "path": "rules.md",
+                "line_start": 14,
+                "line_end": 16,
+                "quote": "Условие: вызвана Double(7).\nТребование: результат должен быть равен 14.\nПроверка: сравнить результат с 14 на равенство."
+              }
+            ],
+            "code": [
+              {
+                "path": "source.go",
+                "line_start": 9,
+                "line_end": 11,
+                "quote": "func Double(value int) int {\n\treturn value * 2\n}"
+              }
+            ],
+            "tests": [
+              {
+                "test_id": "example.test/specaudit-fixture::TestDouble",
+                "citation": {
+                  "path": "source_test.go",
+                  "line_start": 19,
+                  "line_end": 23,
+                  "quote": "func TestDouble(t *testing.T) {\n\tif got := Double(7); got \u003c= 0 {\n\t\tt.Fatalf(\"Double(7) = %d; want a positive value\", got)\n\t}\n}"
+                }
+              }
+            ],
+            "limitations": []
+          },
+          {
+            "requirement_id": "REQ-DEMO-003",
+            "specification": "clear",
+            "implementation": "contradicted",
+            "assertion": "contradicts",
+            "statement": "Absolute возвращает вход без изменения: для -3 результат равен -3, тогда как требование задаёт 3. TestAbsolute явно ожидает -3; реализация, возвращающая требуемое значение 3, не удовлетворяла бы этому assertion.",
+            "spec": [
+              {
+                "path": "rules.md",
+                "line_start": 20,
+                "line_end": 22,
+                "quote": "Условие: вызвана Absolute(-3).\nТребование: результат должен быть равен 3.\nПроверка: сравнить результат с 3 на равенство."
+              }
+            ],
+            "code": [
+              {
+                "path": "source.go",
+                "line_start": 13,
+                "line_end": 15,
+                "quote": "func Absolute(value int) int {\n\treturn value\n}"
+              }
+            ],
+            "tests": [
+              {
+                "test_id": "example.test/specaudit-fixture::TestAbsolute",
+                "citation": {
+                  "path": "source_test.go",
+                  "line_start": 25,
+                  "line_end": 29,
+                  "quote": "func TestAbsolute(t *testing.T) {\n\tif got := Absolute(-3); got != -3 {\n\t\tt.Fatalf(\"Absolute(-3) = %d; want -3\", got)\n\t}\n}"
+                }
+              }
+            ],
+            "limitations": []
+          },
+          {
+            "requirement_id": "REQ-DEMO-004",
+            "specification": "clear",
+            "implementation": "unknown",
+            "assertion": "missing",
+            "statement": "Save передаёт значение Store.Put и возвращает его ошибку. Доступный интерфейс не раскрывает, сохраняет ли конкретный Store данные после перезапуска; отсутствие этой реализации не доказывает нарушение сохранности. В разрешённом файле тестов нет проверки успешной Save(store, \"note\") с последующим чтением новым процессом.",
+            "spec": [
+              {
+                "path": "rules.md",
+                "line_start": 26,
+                "line_end": 28,
+                "quote": "Условие: Save(store, \"note\") вернула nil.\nТребование: строка \"note\" должна оставаться доступной в том же хранилище после перезапуска процесса.\nПроверка: после успешной записи завершить процесс и прочитать строку из того же хранилища новым процессом."
+              }
+            ],
+            "code": [
+              {
+                "path": "source.go",
+                "line_start": 17,
+                "line_end": 23,
+                "quote": "type Store interface {\n\tPut(string) error\n}\n\nfunc Save(store Store, value string) error {\n\treturn store.Put(value)\n}"
+              }
+            ],
+            "tests": [],
+            "limitations": [
+              "Не представлены реализация Store, способ повторного открытия того же хранилища и чтение данных после перезапуска.",
+              "Отсутствие assertion установлено только для разрешённого среза тестов."
+            ]
+          },
+          {
+            "requirement_id": "REQ-DEMO-005",
+            "specification": "ambiguous",
+            "implementation": "unknown",
+            "assertion": "unknown",
+            "statement": "Норма не определяет «стандартное представление» имени. Normalize удаляет крайние пробельные символы, а TestNormalize для \" Ada \" ожидает \"Ada\". Это конкретная трактовка представления, но по тексту нормы нельзя установить ни соответствие реализации, ни соответствие ожидаемого значения теста.",
+            "spec": [
+              {
+                "path": "rules.md",
+                "line_start": 32,
+                "line_end": 34,
+                "quote": "Условие: вызвана Normalize(\" Ada \").\nТребование: результат должен содержать имя в стандартном представлении.\nПроверка: сравнить результат со стандартным представлением имени."
+              }
+            ],
+            "code": [
+              {
+                "path": "source.go",
+                "line_start": 25,
+                "line_end": 27,
+                "quote": "func Normalize(value string) string {\n\treturn strings.TrimSpace(value)\n}"
+              }
+            ],
+            "tests": [
+              {
+                "test_id": "example.test/specaudit-fixture::TestNormalize",
+                "citation": {
+                  "path": "source_test.go",
+                  "line_start": 31,
+                  "line_end": 35,
+                  "quote": "func TestNormalize(t *testing.T) {\n\tif got := Normalize(\" Ada \"); got != \"Ada\" {\n\t\tt.Fatalf(\"Normalize returned %q; want %q\", got, \"Ada\")\n\t}\n}"
+                }
+              }
+            ],
+            "limitations": [
+              "Для оценки соответствия отсутствует определение стандартного представления либо точное ожидаемое значение для указанного входа."
+            ]
+          }
+        ],
+        "limitations": [
+          "Оценка основана на статическом чтении только разрешённых файлов; тесты не запускались.",
+          "Фактическое исполнение и проверка результата хостом в эту оценку не входят."
+        ]
+      }
+    },
+    {
+      "task": {
+        "task_id": "all-redteam",
+        "attempt": 1,
+        "snapshot_id": "b1de29c6196a72dda225c946bf3b238e2677329dcd98735dca83c6f547f79f21",
+        "role": "redteam",
+        "scope": "all",
+        "focus": "Все объявленные требования",
+        "requirements": [
+          {
+            "id": "REQ-DEMO-001",
+            "title": "Инверсия",
+            "condition": "вызвана Flip с произвольным значением bool.",
+            "statement": "результат должен быть логическим отрицанием входного значения.",
+            "verification": "проверить точный результат для false и true.",
+            "content_hash": "2255604d410837e1f0dd471fd3ebdf225df3ddd0b04ec806f1cf8cc0e1861225",
+            "source": {
+              "path": "rules.md",
+              "line_start": 6,
+              "line_end": 10,
+              "quote": "### REQ-DEMO-001 — Инверсия\n\nУсловие: вызвана Flip с произвольным значением bool.\nТребование: результат должен быть логическим отрицанием входного значения.\nПроверка: проверить точный результат для false и true."
+            }
+          },
+          {
+            "id": "REQ-DEMO-002",
+            "title": "Удвоение",
+            "condition": "вызвана Double(7).",
+            "statement": "результат должен быть равен 14.",
+            "verification": "сравнить результат с 14 на равенство.",
+            "content_hash": "1cb9e86f5146e1a9a06ea6dd417a86423ef0bdf63253fb10e76de4aead70a807",
+            "source": {
+              "path": "rules.md",
+              "line_start": 12,
+              "line_end": 16,
+              "quote": "### REQ-DEMO-002 — Удвоение\n\nУсловие: вызвана Double(7).\nТребование: результат должен быть равен 14.\nПроверка: сравнить результат с 14 на равенство."
+            }
+          },
+          {
+            "id": "REQ-DEMO-003",
+            "title": "Модуль",
+            "condition": "вызвана Absolute(-3).",
+            "statement": "результат должен быть равен 3.",
+            "verification": "сравнить результат с 3 на равенство.",
+            "content_hash": "703fec27d17fbc21f18de64673f215b9bb1f1b6aa2095df73fc2e2e97ff4ab19",
+            "source": {
+              "path": "rules.md",
+              "line_start": 18,
+              "line_end": 22,
+              "quote": "### REQ-DEMO-003 — Модуль\n\nУсловие: вызвана Absolute(-3).\nТребование: результат должен быть равен 3.\nПроверка: сравнить результат с 3 на равенство."
+            }
+          },
+          {
+            "id": "REQ-DEMO-004",
+            "title": "Сохранность",
+            "condition": "Save(store, \"note\") вернула nil.",
+            "statement": "строка \"note\" должна оставаться доступной в том же хранилище после перезапуска процесса.",
+            "verification": "после успешной записи завершить процесс и прочитать строку из того же хранилища новым процессом.",
+            "content_hash": "f8af883d2adc4bbfedf3e2ce1557f607883ee02baf5b37055da48735334b2277",
+            "source": {
+              "path": "rules.md",
+              "line_start": 24,
+              "line_end": 28,
+              "quote": "### REQ-DEMO-004 — Сохранность\n\nУсловие: Save(store, \"note\") вернула nil.\nТребование: строка \"note\" должна оставаться доступной в том же хранилище после перезапуска процесса.\nПроверка: после успешной записи завершить процесс и прочитать строку из того же хранилища новым процессом."
+            }
+          },
+          {
+            "id": "REQ-DEMO-005",
+            "title": "Представление имени",
+            "condition": "вызвана Normalize(\" Ada \").",
+            "statement": "результат должен содержать имя в стандартном представлении.",
+            "verification": "сравнить результат со стандартным представлением имени.",
+            "content_hash": "a426f49a29d2bbe4e6dad46230fe2ee769f5845ee89b81053d9d652d13852c1c",
+            "source": {
+              "path": "rules.md",
+              "line_start": 30,
+              "line_end": 34,
+              "quote": "### REQ-DEMO-005 — Представление имени\n\nУсловие: вызвана Normalize(\" Ada \").\nТребование: результат должен содержать имя в стандартном представлении.\nПроверка: сравнить результат со стандартным представлением имени."
+            }
+          }
+        ]
+      },
+      "result": {
+        "task_id": "all-redteam",
+        "attempt": 1,
+        "snapshot_id": "b1de29c6196a72dda225c946bf3b238e2677329dcd98735dca83c6f547f79f21",
+        "role": "redteam",
+        "scope": "all",
+        "summary": "Flip соответствует отрицанию bool, а тест проверяет оба возможных входа. Double(7) возвращает 14, но его тест допускает любое положительное значение. Absolute(-3) возвращает -3, и тест закрепляет этот результат вопреки норме. Сохранность после перезапуска нельзя установить без внешней реализации Store. Стандартное представление имени не определено, поэтому соответствие Normalize и его теста этой норме не установлено.",
+        "assessments": [
+          {
+            "requirement_id": "REQ-DEMO-001",
+            "specification": "clear",
+            "implementation": "supported",
+            "assertion": "relevant",
+            "statement": "Flip непосредственно возвращает !value: false превращается в true, true — в false. TestFlip задаёт обе пары входа и результата и сравнивает вызов с точным ожидаемым значением. В пределах полного множества bool-входов опровержение не найдено.",
+            "spec": [
+              {
+                "path": "rules.md",
+                "line_start": 8,
+                "line_end": 10,
+                "quote": "Условие: вызвана Flip с произвольным значением bool.\nТребование: результат должен быть логическим отрицанием входного значения.\nПроверка: проверить точный результат для false и true."
+              }
+            ],
+            "code": [
+              {
+                "path": "source.go",
+                "line_start": 5,
+                "line_end": 7,
+                "quote": "func Flip(value bool) bool {\n\treturn !value\n}"
+              }
+            ],
+            "tests": [
+              {
+                "test_id": "example.test/specaudit-fixture::TestFlip",
+                "citation": {
+                  "path": "source_test.go",
+                  "line_start": 5,
+                  "line_end": 17,
+                  "quote": "func TestFlip(t *testing.T) {\n\tfor _, tc := range []struct {\n\t\tinput bool\n\t\twant  bool\n\t}{\n\t\t{false, true},\n\t\t{true, false},\n\t} {\n\t\tif got := Flip(tc.input); got != tc.want {\n\t\t\tt.Fatalf(\"Flip(%v) = %v; want %v\", tc.input, got, tc.want)\n\t\t}\n\t}\n}"
+                }
+              }
+            ],
+            "limitations": []
+          },
+          {
+            "requirement_id": "REQ-DEMO-002",
+            "specification": "clear",
+            "implementation": "supported",
+            "assertion": "weak",
+            "statement": "При указанном входе 7 выражение value * 2 возвращает 14. TestDouble вызывает нужный вход, но отклоняет только результат \u003c= 0; например, ошибочные 1 или 15 удовлетворили бы его проверке. Это недостаток проверки точного результата, а не обнаруженное противоречие в реализации Double.",
+            "spec": [
+              {
+                "path": "rules.md",
+                "line_start": 14,
+                "line_end": 16,
+                "quote": "Условие: вызвана Double(7).\nТребование: результат должен быть равен 14.\nПроверка: сравнить результат с 14 на равенство."
+              }
+            ],
+            "code": [
+              {
+                "path": "source.go",
+                "line_start": 9,
+                "line_end": 11,
+                "quote": "func Double(value int) int {\n\treturn value * 2\n}"
+              }
+            ],
+            "tests": [
+              {
+                "test_id": "example.test/specaudit-fixture::TestDouble",
+                "citation": {
+                  "path": "source_test.go",
+                  "line_start": 19,
+                  "line_end": 23,
+                  "quote": "func TestDouble(t *testing.T) {\n\tif got := Double(7); got \u003c= 0 {\n\t\tt.Fatalf(\"Double(7) = %d; want a positive value\", got)\n\t}\n}"
+                }
+              }
+            ],
+            "limitations": []
+          },
+          {
+            "requirement_id": "REQ-DEMO-003",
+            "specification": "clear",
+            "implementation": "contradicted",
+            "assertion": "contradicts",
+            "statement": "Absolute возвращает вход без изменений, поэтому Absolute(-3) даёт -3 вместо требуемых 3. TestAbsolute явно требует -3 и отверг бы соответствующий норме результат 3; этот assertion закрепляет противоположное норме поведение.",
+            "spec": [
+              {
+                "path": "rules.md",
+                "line_start": 20,
+                "line_end": 22,
+                "quote": "Условие: вызвана Absolute(-3).\nТребование: результат должен быть равен 3.\nПроверка: сравнить результат с 3 на равенство."
+              }
+            ],
+            "code": [
+              {
+                "path": "source.go",
+                "line_start": 13,
+                "line_end": 15,
+                "quote": "func Absolute(value int) int {\n\treturn value\n}"
+              }
+            ],
+            "tests": [
+              {
+                "test_id": "example.test/specaudit-fixture::TestAbsolute",
+                "citation": {
+                  "path": "source_test.go",
+                  "line_start": 25,
+                  "line_end": 29,
+                  "quote": "func TestAbsolute(t *testing.T) {\n\tif got := Absolute(-3); got != -3 {\n\t\tt.Fatalf(\"Absolute(-3) = %d; want -3\", got)\n\t}\n}"
+                }
+              }
+            ],
+            "limitations": []
+          },
+          {
+            "requirement_id": "REQ-DEMO-004",
+            "specification": "clear",
+            "implementation": "unknown",
+            "assertion": "missing",
+            "statement": "Save передаёт строку в Store.Put и возвращает его ошибку. Интерфейс Put(string) error не раскрывает способ хранения или гарантию сохранности после nil. Внешняя реализация Store отсутствует в разрешённом срезе: она могла бы сохранять данные надёжно либо терять их при завершении процесса, поэтому ни соответствие, ни конкретное нарушение не установлены. В предоставленном source_test.go нет проверки Save или чтения новым процессом после успешной записи.",
+            "spec": [
+              {
+                "path": "rules.md",
+                "line_start": 26,
+                "line_end": 28,
+                "quote": "Условие: Save(store, \"note\") вернула nil.\nТребование: строка \"note\" должна оставаться доступной в том же хранилище после перезапуска процесса.\nПроверка: после успешной записи завершить процесс и прочитать строку из того же хранилища новым процессом."
+              }
+            ],
+            "code": [
+              {
+                "path": "source.go",
+                "line_start": 17,
+                "line_end": 23,
+                "quote": "type Store interface {\n\tPut(string) error\n}\n\nfunc Save(store Store, value string) error {\n\treturn store.Put(value)\n}"
+              }
+            ],
+            "tests": [],
+            "limitations": [
+              "Не предоставлены конкретная реализация Store и её тесты; нельзя проверить сохранение и повторное чтение тем же хранилищем после перезапуска.",
+              "Оценка missing относится к разрешённому срезу тестов и не утверждает отсутствие проверки во внешнем приложении."
+            ]
+          },
+          {
+            "requirement_id": "REQ-DEMO-005",
+            "specification": "ambiguous",
+            "implementation": "unknown",
+            "assertion": "unknown",
+            "statement": "Normalize удаляет крайние пробелы через strings.TrimSpace, поэтому для указанного входа возвращает Ada. TestNormalize проверяет именно этот вход и точное значение Ada. Однако норма не определяет стандартное представление имени: из неё нельзя вывести ожидаемые пробелы, регистр или иной формат. Существование ожидания в тесте не разрешает неоднозначность нормы, поэтому соответствие реализации и смысловая релевантность assertion не установлены.",
+            "spec": [
+              {
+                "path": "rules.md",
+                "line_start": 32,
+                "line_end": 34,
+                "quote": "Условие: вызвана Normalize(\" Ada \").\nТребование: результат должен содержать имя в стандартном представлении.\nПроверка: сравнить результат со стандартным представлением имени."
+              }
+            ],
+            "code": [
+              {
+                "path": "source.go",
+                "line_start": 25,
+                "line_end": 27,
+                "quote": "func Normalize(value string) string {\n\treturn strings.TrimSpace(value)\n}"
+              }
+            ],
+            "tests": [
+              {
+                "test_id": "example.test/specaudit-fixture::TestNormalize",
+                "citation": {
+                  "path": "source_test.go",
+                  "line_start": 31,
+                  "line_end": 35,
+                  "quote": "func TestNormalize(t *testing.T) {\n\tif got := Normalize(\" Ada \"); got != \"Ada\" {\n\t\tt.Fatalf(\"Normalize returned %q; want %q\", got, \"Ada\")\n\t}\n}"
+                }
+              }
+            ],
+            "limitations": [
+              "Для определения соответствия нужно нормативное определение стандартного представления имени либо нормативный ожидаемый результат для данного входа."
+            ]
+          }
+        ],
+        "limitations": [
+          "Выводы основаны только на статическом чтении файлов, разрешённых packet; тесты и приложение не запускались.",
+          "Внешняя реализация Store и её тесты не входят в предоставленный срез."
+        ]
+      }
+    }
+  ],
+  "executions": [
+    {
+      "id": "observed-green",
+      "snapshot_id": "b1de29c6196a72dda225c946bf3b238e2677329dcd98735dca83c6f547f79f21",
+      "started_at": "2026-09-14T22:49:52.497219Z",
+      "finished_at": "2026-09-14T22:49:56.868332Z",
+      "runtime": "go version go1.27.0 darwin/arm64",
+      "command": [
+        "go",
+        "test",
+        "-json",
+        "-count=1",
+        "."
+      ],
+      "exit_code": 0,
+      "state": "passed",
+      "tests": [
+        {
+          "id": "example.test/specaudit-fixture::TestAbsolute",
+          "state": "passed"
+        },
+        {
+          "id": "example.test/specaudit-fixture::TestDouble",
+          "state": "passed"
+        },
+        {
+          "id": "example.test/specaudit-fixture::TestFlip",
+          "state": "passed"
+        },
+        {
+          "id": "example.test/specaudit-fixture::TestNormalize",
+          "state": "passed"
+        }
+      ],
+      "stdout": {
+        "sha256": "5e6120446d13535d43a45e3202a0ccc0b9c4ca2ff8af72b4c7af7f26090ed04c",
+        "bytes": 3046,
+        "truncated": false
+      },
+      "stderr": {
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0,
+        "truncated": false
+      },
+      "limitations": [
+        "Процесс исполняет доверенный код проекта; выбранный snapshot не фиксирует всё состояние внешних сервисов и зависимостей.",
+        "passed не доказывает релевантность assertion или соответствие продукта."
+      ]
+    }
+  ]
+}

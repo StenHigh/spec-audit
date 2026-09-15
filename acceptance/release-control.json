@@ -1,0 +1,128 @@
+{
+  "version": 1,
+  "purpose": "Frozen before release-control code or independent role dispatch. Synthetic control of SA-016…021, not proof of SMSPlace completeness.",
+  "audit_cases": [
+    {
+      "id": "full",
+      "files": {
+        "go.mod": "module example.org/release-control\n\ngo 1.27.0\n",
+        "rules.md": "# Контракт маршрутов\n\nКлиентский запрос входит от клиента в систему. Ответ поставщика приходит из внешней системы после запроса к ней. Это разные направления; общий helper не переносит обязанности между ними.\n\n### REQ-CTRL-001 — Клиентский идентификатор\n\nУсловие: Client принимает идентификатор из входящего клиентского запроса.\n\nТребование: Client должен вернуть идентификатор без изменения регистра и пробелов.\n\nПроверка: вход « Ab » возвращается как « Ab ».\n\n### REQ-CTRL-002 — Метка поставщика\n\nУсловие: Supplier принимает метку из ответа поставщика.\n\nТребование: Supplier должен вернуть метку в нижнем регистре без краевых пробелов.\n\nПроверка: вход « Ab » возвращается как «ab».\n\n### REQ-CTRL-003 — Завершение операции\n\nУсловие: Complete вызывается один раз для новой операции с ID x.\n\nТребование: Complete должен установить статус done и добавить ровно одну запись с ID x.\n\nПроверка: одновременно проверяются статус, количество записей и ID записи.\n",
+        "source.go": "package control\n\nimport \"strings\"\n\nfunc normalize(s string) string { return strings.ToLower(strings.TrimSpace(s)) }\nfunc Client(s string) string { return normalize(s) }\nfunc Supplier(s string) string { return normalize(s) }\n\ntype Operation struct { ID, Status string; Records []string }\nfunc Complete(op *Operation) { op.Status = \"done\"; op.Records = append(op.Records, op.ID) }\n",
+        "source_test.go": "package control\n\nimport \"testing\"\n\nfunc TestClient(t *testing.T) { if got := Client(\" Ab \"); got != \"ab\" { t.Fatal(got) } }\nfunc TestSupplier(t *testing.T) { if got := Supplier(\" Ab \"); got != \"ab\" { t.Fatal(got) } }\nfunc TestComplete(t *testing.T) {\n op := Operation{ID: \"x\"}\n Complete(&op)\n if op.Status != \"done\" { t.Fatal(op.Status) }\n if len(op.Records) != 1 || op.Records[0] != \"x\" { t.Fatal(op.Records) }\n}\n"
+      },
+      "expected": [
+        {
+          "id": "REQ-CTRL-001",
+          "specification": "clear",
+          "implementation": "contradicted",
+          "assertion": "contradicts"
+        },
+        {
+          "id": "REQ-CTRL-002",
+          "specification": "clear",
+          "implementation": "supported",
+          "assertion": "relevant"
+        },
+        {
+          "id": "REQ-CTRL-003",
+          "specification": "clear",
+          "implementation": "supported",
+          "assertion": "relevant"
+        }
+      ]
+    },
+    {
+      "id": "partial",
+      "files": {
+        "go.mod": "module example.org/release-control\n\ngo 1.27.0\n",
+        "rules.md": "# Контракт маршрутов\n\nКлиентский запрос входит от клиента в систему. Ответ поставщика приходит из внешней системы после запроса к ней. Это разные направления; общий helper не переносит обязанности между ними.\n\n### REQ-CTRL-001 — Клиентский идентификатор\n\nУсловие: Client принимает идентификатор из входящего клиентского запроса.\n\nТребование: Client должен вернуть идентификатор без изменения регистра и пробелов.\n\nПроверка: вход « Ab » возвращается как « Ab ».\n\n### REQ-CTRL-002 — Метка поставщика\n\nУсловие: Supplier принимает метку из ответа поставщика.\n\nТребование: Supplier должен вернуть метку в нижнем регистре без краевых пробелов.\n\nПроверка: вход « Ab » возвращается как «ab».\n\n### REQ-CTRL-003 — Завершение операции\n\nУсловие: Complete вызывается один раз для новой операции с ID x.\n\nТребование: Complete должен установить статус done и добавить ровно одну запись с ID x.\n\nПроверка: одновременно проверяются статус, количество записей и ID записи.\n",
+        "source.go": "package control\n\nimport \"strings\"\n\nfunc normalize(s string) string { return strings.ToLower(strings.TrimSpace(s)) }\nfunc Client(s string) string { return normalize(s) }\nfunc Supplier(s string) string { return normalize(s) }\n\ntype Operation struct { ID, Status string; Records []string }\nfunc Complete(op *Operation) { op.Status = \"done\"; op.Records = append(op.Records, op.ID) }\n",
+        "source_test.go": "package control\n\nimport \"testing\"\n\nfunc TestClient(t *testing.T) { if got := Client(\" Ab \"); got != \"ab\" { t.Fatal(got) } }\nfunc TestSupplier(t *testing.T) { if got := Supplier(\" Ab \"); got != \"ab\" { t.Fatal(got) } }\nfunc TestComplete(t *testing.T) {\n op := Operation{ID: \"x\"}\n Complete(&op)\n if op.Status != \"done\" { t.Fatal(op.Status) }\n}\n"
+      },
+      "expected": [
+        {
+          "id": "REQ-CTRL-001",
+          "specification": "clear",
+          "implementation": "contradicted",
+          "assertion": "contradicts"
+        },
+        {
+          "id": "REQ-CTRL-002",
+          "specification": "clear",
+          "implementation": "supported",
+          "assertion": "relevant"
+        },
+        {
+          "id": "REQ-CTRL-003",
+          "specification": "clear",
+          "implementation": "supported",
+          "assertion": "weak"
+        }
+      ]
+    }
+  ],
+  "extraction": {
+    "files": {
+      "narrative.md": "# Уведомления\n\nСистема должна сохранять уведомление в журнале до отправки.\nЭто нужно для последующего разбора сбоев.\nВладелец обязан согласовать канал уведомления перед запуском.\nСистема должна уведомить владельца об отказе в установленный срок; значение срока пока не согласовано.\n"
+    },
+    "expected_norms": [
+      {
+        "id": "G01",
+        "line": 3,
+        "facets": [
+          "Запись уведомления в журнал до отправки"
+        ],
+        "must_not": [
+          "Превратить обязанность в notes"
+        ]
+      },
+      {
+        "id": "G02",
+        "line": 5,
+        "facets": [
+          "Владелец согласует канал до запуска"
+        ],
+        "must_not": [
+          "Исключить из норм из-за человеческого исполнителя"
+        ]
+      },
+      {
+        "id": "G03",
+        "line": 6,
+        "facets": [
+          "Уведомление владельца об отказе",
+          "Несогласованный срок остаётся unresolved"
+        ],
+        "must_not": [
+          "Выдумать срок",
+          "Снять обязанность из-за неопределённости"
+        ]
+      }
+    ],
+    "expected_notes": [
+      {
+        "id": "GN01",
+        "line": 4,
+        "kind": "context",
+        "facet": "Цель журналирования — разбор сбоев, не самостоятельная обязанность"
+      }
+    ],
+    "extra_notes_policy": "Дополнительная note допустима, если independent reviewer обосновал её источником, не обнаружил новую/потерянную норму и явно классифицировал её как context/open_question. Она учитывается отдельно от обязательных GN и нормативного gold; старый contextCount/legacyCount не меняется."
+  },
+  "mechanical_guards": [
+    "historical declared/accepted read",
+    "exact first raw including whitespace/CRLF",
+    "semantic duplicate preserves original raw",
+    "orphan result recovery uses first bytes",
+    "raw tamper detected",
+    "pending/foreign/duplicate/missing IDs refused",
+    "Assessment citations and accepted ambiguity preserved",
+    "exact decision raw, replay and conflicting id",
+    "CAS snapshot/state/previous review; concurrent submissions one winner",
+    "retry/receipt/source change invalidates current review",
+    "bounded 64 records and 32 MiB journal without truncation",
+    "same HTML/JSON shows host alongside roles, escapes content, never automatic PASS",
+    "source tree unchanged, no PHP/business execution"
+  ],
+  "acceptance": "Independent extraction/review and mapper/redteam see only source/protocol; gold and other raw withheld. All assigned IDs present; expected statuses in both variants; source support reviewed, not word-matched. Any disagreement preserved and triaged. Runtime none remains not_recorded even when source_test.go is syntactically runnable."
+}

@@ -24,13 +24,27 @@ var requirementID = regexp.MustCompile(`^REQ-[A-Z0-9]+-[0-9]{3,}$`)
 var requirementHeading = regexp.MustCompile(`^(REQ-[A-Z0-9]+-[0-9]{3,}) — (.+)$`)
 
 type Requirement struct {
-	ID           string   `json:"id"`
-	Title        string   `json:"title"`
-	Condition    string   `json:"condition"`
-	Statement    string   `json:"statement"`
-	Verification string   `json:"verification"`
-	ContentHash  string   `json:"content_hash"`
-	Source       Citation `json:"source"`
+	ID           string           `json:"id"`
+	Title        string           `json:"title"`
+	Condition    string           `json:"condition"`
+	Statement    string           `json:"statement"`
+	Verification string           `json:"verification"`
+	ContentHash  string           `json:"content_hash"`
+	Source       Citation         `json:"source"`
+	Accepted     *AcceptedDetails `json:"accepted,omitempty"`
+}
+
+func (req Requirement) containsSource(citation Citation) bool {
+	sources := []Citation{req.Source}
+	if req.Accepted != nil {
+		sources = req.Accepted.Citations
+	}
+	for _, source := range sources {
+		if citation.Path == source.Path && citation.LineStart >= source.LineStart && citation.LineEnd <= source.LineEnd {
+			return true
+		}
+	}
+	return false
 }
 
 func parseRequirements(path string, source []byte) ([]Requirement, error) {
@@ -112,6 +126,9 @@ func parseRequirements(path string, source []byte) ([]Requirement, error) {
 }
 
 func assignRequirements(m *Manifest) error {
+	if len(m.Requirements) > 512 {
+		return errors.New("не более 512 требований")
+	}
 	sort.Slice(m.Requirements, func(i, j int) bool { return m.Requirements[i].ID < m.Requirements[j].ID })
 	ids := map[string]bool{}
 	all := []string{}
@@ -162,8 +179,12 @@ func indexConfig(cfg Config) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	basis := "declared_requirements_only"
+	if m.Accepted != nil {
+		basis = "accepted_requirements_only"
+	}
 	return map[string]any{"snapshot_id": m.SnapshotID, "profile": m.Profile, "requirements": m.Requirements, "files": m.Files,
-		"completeness_basis": "declared_requirements_only", "semantic_completeness_proven": false,
+		"completeness_basis": basis, "semantic_completeness_proven": false, "accepted": m.Accepted,
 		"project_root": filepath.Clean(cfg.ProjectRoot)}, nil
 }
 

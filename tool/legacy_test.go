@@ -9,32 +9,9 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"reflect"
-	"regexp"
 	"strings"
 	"testing"
 )
-
-// Test-only experiment: exact provenance is mechanical; semantic labels come from an independent reviewer.
-type legacyCandidate struct {
-	ID         string     `json:"id"`
-	Condition  string     `json:"condition"`
-	Statement  string     `json:"statement"`
-	Exceptions []string   `json:"exceptions"`
-	Clarity    string     `json:"clarity"`
-	Unresolved []string   `json:"unresolved"`
-	Citations  []Citation `json:"citations"`
-}
-
-type legacyRaw struct {
-	Version   int `json:"version"`
-	SourceSet []struct {
-		Path   string `json:"path"`
-		SHA256 string `json:"sha256"`
-	} `json:"source_set"`
-	Candidates  []legacyCandidate `json:"candidates"`
-	Limitations []string          `json:"limitations"`
-}
 
 type legacyGold struct {
 	Version      int    `json:"version"`
@@ -69,63 +46,6 @@ type legacyReview struct {
 	} `json:"candidates"`
 	GoldObjections []string `json:"gold_objections"`
 	Limitations    []string `json:"limitations"`
-}
-
-func legacyDecode(data []byte, out any) error {
-	if len(data) > 4<<20 {
-		return errors.New("ответ больше 4 MiB")
-	}
-	if err := strictJSON(data, out); err != nil {
-		return err
-	}
-	return requiredJSON(data, reflect.TypeOf(out).Elem())
-}
-
-func legacyValidate(data []byte, sources map[string][]byte) (legacyRaw, error) {
-	var raw legacyRaw
-	if err := legacyDecode(data, &raw); err != nil {
-		return raw, err
-	}
-	if raw.Version != 1 || len(raw.SourceSet) != len(sources) || len(raw.Candidates) > 64 {
-		return raw, errors.New("неверная версия, набор источников или число кандидатов")
-	}
-	seen := map[string]bool{}
-	for _, source := range raw.SourceSet {
-		content, ok := sources[source.Path]
-		if !ok || seen[source.Path] || digest(content) != source.SHA256 {
-			return raw, errors.New("неверный путь, повторный источник или stale hash")
-		}
-		seen[source.Path] = true
-	}
-	seen = map[string]bool{}
-	idPattern := regexp.MustCompile(`^C[0-9]{3}$`)
-	for _, candidate := range raw.Candidates {
-		if !idPattern.MatchString(candidate.ID) || seen[candidate.ID] || strings.TrimSpace(candidate.Condition) == "" || strings.TrimSpace(candidate.Statement) == "" {
-			return raw, errors.New("неверный/повторный ID или пустая норма")
-		}
-		seen[candidate.ID] = true
-		if (candidate.Clarity != "clear" && candidate.Clarity != "ambiguous") || (candidate.Clarity == "ambiguous") != (len(candidate.Unresolved) > 0) {
-			return raw, errors.New("clarity и unresolved не согласованы")
-		}
-		for _, list := range [][]string{candidate.Exceptions, candidate.Unresolved} {
-			for _, value := range list {
-				if strings.TrimSpace(value) == "" {
-					return raw, errors.New("пустое исключение или вопрос")
-				}
-			}
-		}
-		if len(candidate.Citations) < 1 || len(candidate.Citations) > 16 {
-			return raw, errors.New("нужно от 1 до 16 цитат")
-		}
-		for _, cite := range candidate.Citations {
-			content, ok := sources[cite.Path]
-			quote, err := lineQuote(content, cite.LineStart, cite.LineEnd)
-			if !ok || err != nil || quote != cite.Quote {
-				return raw, errors.New("цитата не совпадает с выбранным источником")
-			}
-		}
-	}
-	return raw, nil
 }
 
 func legacyCount(data, rawBytes, goldBytes []byte, raw legacyRaw, gold legacyGold) (map[string]int, error) {
@@ -379,5 +299,54 @@ func TestLegacyReview(t *testing.T) {
 	t.Logf("reviewer_counts=%s", legacyMarshal(t, counts))
 	if counts["preserved"] != counts["gold_total"] || counts["supported"] != counts["candidates_total"] || counts["gold_objections"] != 0 {
 		t.Fatal("смысловой контроль не пройден по оценкам reviewer; это не ошибка JSON")
+	}
+}
+
+// Explicit external study inputs; the frozen synthetic control above is never overridden.
+func TestExternalExtractionReview(t *testing.T) {
+	path := os.Getenv("SPEC_AUDIT_EXTERNAL_CONFIG")
+	if path == "" {
+		t.Skip("внешний эксперимент не задан: SPEC_AUDIT_EXTERNAL_CONFIG")
+	}
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, sources, err := acceptedSources(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawBytes := legacyExternal(t, "SPEC_AUDIT_LEGACY_RAW")
+	raw, err := legacyValidate(rawBytes, sources)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goldBytes := legacyExternal(t, "SPEC_AUDIT_LEGACY_GOLD")
+	var gold legacyGold
+	if err := legacyDecode(goldBytes, &gold); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	if gold.Version != 1 || strings.TrimSpace(gold.Provenance) == "" || len(gold.Requirements) == 0 {
+		t.Fatal("неполный эталон")
+	}
+	for _, requirement := range gold.Requirements {
+		if requirement.ID == "" || seen[requirement.ID] || len(requirement.Facets) == 0 || len(requirement.Sources) == 0 {
+			t.Fatal("неверная строка эталона")
+		}
+		seen[requirement.ID] = true
+		for _, source := range requirement.Sources {
+			if _, err := lineQuote(sources[source.Path], source.LineStart, source.LineEnd); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	counts, err := legacyCount(legacyExternal(t, "SPEC_AUDIT_LEGACY_REVIEW"), rawBytes, goldBytes, raw, gold)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("reviewer_counts=%s", legacyMarshal(t, counts))
+	if counts["preserved"] != counts["gold_total"] || counts["supported"] != counts["candidates_total"] || counts["gold_objections"] != 0 {
+		t.Fatal("семантический контроль не пройден по оценкам reviewer, а не по совпадению слов")
 	}
 }

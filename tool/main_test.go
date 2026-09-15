@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,67 @@ func writeFixture(t *testing.T, path string, data []byte) {
 	}
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAtomicFailurePreservesTarget(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	directory := t.TempDir()
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err := atomicWrite(root, "probe.json", []byte("before"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Write+execute permits create/rename through the open Root, but not a new directory read.
+	if err := os.Chmod(directory, 0300); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(directory, 0700) })
+	writeErr := atomicWrite(root, "probe.json", []byte("after"), 0600)
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	data := readFixture(t, filepath.Join(directory, "probe.json"))
+	if writeErr != nil && string(data) != "before" {
+		t.Fatalf("reported refusal after publication: err=%v target=%q", writeErr, data)
+	}
+	if writeErr == nil && string(data) != "after" {
+		t.Fatal("success without publication")
+	}
+}
+
+func TestPublishedSyncWarning(t *testing.T) {
+	directory := t.TempDir()
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	writeFixture(t, filepath.Join(directory, "prepared"), []byte("private-payload"))
+	dir, err := root.Open(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dir.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	logger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	defer slog.SetDefault(logger)
+	if err := publishPreparedFile(root, "prepared", "published", dir); err != nil {
+		t.Fatalf("false refusal after rename: %v", err)
+	}
+	if string(readFixture(t, filepath.Join(directory, "published"))) != "private-payload" {
+		t.Fatal("publication lost")
+	}
+	if !strings.Contains(logs.String(), `"level":"WARN"`) || strings.Contains(logs.String(), "private-payload") {
+		t.Fatal("missing or unsafe durability warning")
 	}
 }
 

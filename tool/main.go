@@ -61,6 +61,7 @@ type Sources struct {
 }
 
 type Config struct {
+	IndexMode   string  `yaml:"index_mode,omitempty" json:"index_mode,omitempty"`
 	Version     int     `yaml:"version" json:"version"`
 	ProjectRoot string  `yaml:"project_root" json:"project_root"`
 	Specs       Sources `yaml:"specs" json:"specs"`
@@ -79,12 +80,13 @@ type SourceFile struct {
 }
 
 type Manifest struct {
-	Version      int           `json:"version"`
-	Config       Config        `json:"config"`
-	Files        []SourceFile  `json:"files"`
-	Profile      string        `json:"profile"`
-	Requirements []Requirement `json:"requirements"`
-	SnapshotID   string        `json:"snapshot_id"`
+	Version      int              `json:"version"`
+	Config       Config           `json:"config"`
+	Files        []SourceFile     `json:"files"`
+	Profile      string           `json:"profile"`
+	Requirements []Requirement    `json:"requirements"`
+	SnapshotID   string           `json:"snapshot_id"`
+	Accepted     *AcceptedSummary `json:"accepted,omitempty"`
 }
 
 type Task struct {
@@ -133,8 +135,9 @@ type Result struct {
 }
 
 type Entry struct {
-	Task   Task    `json:"task"`
-	Result *Result `json:"result,omitempty"`
+	Task      Task    `json:"task"`
+	Result    *Result `json:"result,omitempty"`
+	RawSHA256 string  `json:"raw_sha256,omitempty"`
 }
 
 type State struct {
@@ -160,6 +163,7 @@ type Status struct {
 	Expected          int    `json:"expected"`
 	Submitted         int    `json:"submitted"`
 	Pending           []Task `json:"pending"`
+	HostReviewState   string `json:"host_review_state,omitempty"`
 }
 
 type TestExecution struct {
@@ -196,6 +200,11 @@ type Report struct {
 	Executions                 []Receipt           `json:"executions"`
 	Summaries                  []ResultSummary     `json:"summaries"`
 	HostReconciliationRequired bool                `json:"host_reconciliation_required"`
+	Accepted                   *AcceptedSummary    `json:"accepted,omitempty"`
+	CompletenessBasis          string              `json:"completeness_basis"`
+	SemanticCompletenessProven bool                `json:"semantic_completeness_proven"`
+	HostReview                 *ReviewSummary      `json:"host_review,omitempty"`
+	RawProvenance              []RawProvenance     `json:"raw_provenance"`
 }
 
 func main() {
@@ -301,6 +310,9 @@ func loadConfig(path string, history ...bool) (Config, error) {
 	}
 	if cfg.Version != 1 || cfg.ProjectRoot == "" || cfg.ReportsDir == "" || len(cfg.Scopes) > 16 {
 		return cfg, errors.New("нужны version: 1, project_root, reports_dir; не более 16 scope")
+	}
+	if !oneOf(cfg.IndexMode, "", "accepted") {
+		return cfg, errors.New("index_mode: допустимо только accepted или отсутствие поля")
 	}
 	base, err := filepath.Abs(filepath.Dir(path))
 	if err != nil {
@@ -424,6 +436,39 @@ func lineQuote(data []byte, start, end int) (string, error) {
 }
 
 func snapshot(cfg Config) (Manifest, error) {
+	m, err := scanSnapshot(cfg)
+	if err != nil {
+		return m, err
+	}
+	if cfg.IndexMode == "accepted" {
+		_, state, err := readAccepted(cfg.ReportsDir)
+		if err != nil {
+			return m, err
+		}
+		if !acceptedFresh(state, m.Files) {
+			return m, errors.New("принятый индекс отсутствует или stale; нужен reconcile")
+		}
+		m.Profile, m.Accepted = "accepted-index/1;protocol/1", &state.AcceptedSummary
+		for _, record := range state.Records {
+			if record.Status == "active" {
+				m.Requirements = append(m.Requirements, record.Requirement)
+			}
+		}
+	}
+	if err := assignRequirements(&m); err != nil {
+		return m, err
+	}
+	identity := m
+	identity.Config.ProjectRoot, identity.Config.ReportsDir = "", ""
+	data, err := json.Marshal(identity)
+	if err != nil {
+		return m, err
+	}
+	m.SnapshotID = digest(data)
+	return m, nil
+}
+
+func scanSnapshot(cfg Config) (Manifest, error) {
 	m := Manifest{Version: 1, Config: cfg, Files: []SourceFile{}, Profile: markdownProfile, Requirements: []Requirement{}}
 	root, err := os.OpenRoot(cfg.ProjectRoot)
 	if err != nil {
@@ -477,7 +522,7 @@ func snapshot(cfg Config) (Manifest, error) {
 					return errors.New("снимок превышает 512 MiB или 25000 файлов")
 				}
 				m.Files = append(m.Files, SourceFile{path, group.kind, digest(data), len(data)})
-				if group.kind == "spec" {
+				if group.kind == "spec" && cfg.IndexMode == "" {
 					reqs, err := parseRequirements(path, data)
 					if err != nil {
 						return err
@@ -498,16 +543,6 @@ func snapshot(cfg Config) (Manifest, error) {
 		}
 	}
 	sort.Slice(m.Files, func(i, j int) bool { return m.Files[i].Path < m.Files[j].Path })
-	if err := assignRequirements(&m); err != nil {
-		return m, err
-	}
-	identity := m
-	identity.Config.ProjectRoot, identity.Config.ReportsDir = "", ""
-	data, err := json.Marshal(identity)
-	if err != nil {
-		return m, err
-	}
-	m.SnapshotID = digest(data)
 	return m, nil
 }
 
@@ -673,6 +708,9 @@ func validateResult(result Result, task Task, m Manifest, checkSources bool) err
 		if !oneOf(assessment.Specification, "clear", "ambiguous") || !oneOf(assessment.Implementation, "supported", "contradicted", "unknown") || !oneOf(assessment.Assertion, "relevant", "weak", "contradicts", "missing", "unknown") {
 			return errors.New("недопустимое состояние specification/implementation/assertion")
 		}
+		if req.Accepted != nil && req.Accepted.Clarity == "ambiguous" && assessment.Specification != "ambiguous" {
+			return errors.New("принятая неоднозначность требует новой редакции, не оценки clear")
+		}
 		if len(assessment.Spec) == 0 || (assessment.Implementation != "unknown" && len(assessment.Code) == 0) {
 			return errors.New("нужна spec; supported/contradicted требуют code")
 		}
@@ -706,7 +744,7 @@ func validateResult(result Result, task Task, m Manifest, checkSources bool) err
 				if citation.LineStart < 1 || citation.LineEnd < citation.LineStart {
 					return errors.New("неверный диапазон цитаты")
 				}
-				if group.kind == "spec" && (citation.Path != req.Source.Path || citation.LineStart < req.Source.LineStart || citation.LineEnd > req.Source.LineEnd) {
+				if group.kind == "spec" && !req.containsSource(citation) {
 					return errors.New("цитата вне блока назначенного требования")
 				}
 				if !checkSources {
@@ -755,15 +793,23 @@ func atomicWrite(root *os.Root, path string, data []byte, mode os.FileMode) erro
 	if err != nil {
 		return err
 	}
-	if err = root.Rename(tmp, path); err != nil {
-		return err
-	}
 	dir, err := root.Open(".")
 	if err != nil {
 		return err
 	}
 	defer dir.Close()
-	return dir.Sync()
+	return publishPreparedFile(root, tmp, path, dir)
+}
+
+func publishPreparedFile(root *os.Root, tmp, path string, dir *os.File) error {
+	if err := root.Rename(tmp, path); err != nil {
+		return err
+	}
+	// Rename is the commit point. A later durability failure cannot mean refusal.
+	if err := dir.Sync(); err != nil {
+		slog.Warn("запись опубликована; сохранность после сбоя питания не подтверждена")
+	}
+	return nil
 }
 
 func writeJSON(root *os.Root, path string, value any, mode os.FileMode) error {
@@ -781,13 +827,20 @@ func saveState(root *os.Root, state State) error {
 	if err := checkStateSize(state); err != nil {
 		return err
 	}
+	if err := invalidateReports(root); err != nil {
+		return err
+	}
+	return writeJSON(root, "state.json", state, 0600)
+}
+
+func invalidateReports(root *os.Root) error {
 	// Reports are disposable projections; invalidate them before changing authoritative state.
 	for _, path := range []string{"report.json", "report.html"} {
 		if err := root.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
-	return writeJSON(root, "state.json", state, 0600)
+	return nil
 }
 
 func checkStateSize(state State) error {
@@ -843,6 +896,16 @@ func makeStatus(runID string, m Manifest, state State, fresh bool) Status {
 }
 
 func execute(args []string) (any, error) {
+	if len(args) > 0 && args[0] == "reconcile" {
+		if len(args) != 2 && len(args) != 4 {
+			return nil, errors.New("reconcile CONFIG [RAW DECISION]")
+		}
+		cfg, err := loadConfig(args[1], len(args) == 2)
+		if err != nil {
+			return nil, err
+		}
+		return reconcile(cfg, args[2:])
+	}
 	if len(args) == 2 && args[0] == "init" {
 		if err := initConfig(args[1]); err != nil {
 			return nil, err
@@ -857,14 +920,15 @@ func execute(args []string) (any, error) {
 		return indexConfig(cfg)
 	}
 	if len(args) < 3 {
-		return nil, errors.New("команды: init/index CONFIG; prepare/tasks/status/report CONFIG RUN_ID; submit/retry/test/php-facts CONFIG RUN_ID ...")
+		return nil, errors.New("команды: init/index CONFIG; reconcile CONFIG [RAW DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION]; submit/retry/test/php-facts CONFIG RUN_ID ...")
 	}
 	command, runID := args[0], args[2]
-	argc := map[string]int{"prepare": 3, "tasks": 3, "status": 3, "report": 3, "submit": 5, "retry": 4, "test": 4, "php-facts": -1}
-	if count, ok := argc[command]; !ok || (count != -1 && len(args) != count) || (count == -1 && len(args) < 4) || !slugRE.MatchString(runID) {
+	argc := map[string]int{"prepare": 3, "tasks": 3, "status": 3, "report": 3, "review": -2, "submit": 5, "retry": 4, "test": 4, "php-facts": -1}
+	if count, ok := argc[command]; !ok || (count >= 0 && len(args) != count) || (count == -1 && len(args) < 4) || (count == -2 && len(args) != 3 && len(args) != 4) || !slugRE.MatchString(runID) {
 		return nil, errors.New("неизвестная команда, неверные аргументы или недопустимый RUN_ID")
 	}
-	cfg, err := loadConfig(args[1], oneOf(command, "status", "report"))
+	readOnly := oneOf(command, "status", "report") || (command == "review" && len(args) == 3)
+	cfg, err := loadConfig(args[1], readOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -945,7 +1009,7 @@ func execute(args []string) (any, error) {
 		}
 		current, snapshotErr := snapshot(cfg)
 		fresh = snapshotErr == nil && current.SnapshotID == m.SnapshotID
-		if !fresh && !oneOf(command, "status", "report") {
+		if !fresh && !readOnly {
 			return nil, errors.New("снимок stale; нужен новый run")
 		}
 		m.Config.ProjectRoot, m.Config.ReportsDir = cfg.ProjectRoot, cfg.ReportsDir
@@ -971,6 +1035,16 @@ func execute(args []string) (any, error) {
 					return nil, fmt.Errorf("сохранённый результат повреждён: %w", err)
 				}
 			}
+			if entry.RawSHA256 != "" {
+				if entry.Result == nil || !validDigest(entry.RawSHA256) {
+					return nil, errors.New("неверное происхождение raw")
+				}
+				raw, err := readRoot(run, fmt.Sprintf("results/%s-attempt-%d.json", entry.Task.TaskID, entry.Task.Attempt), maxResult)
+				var recorded Result
+				if err != nil || digest(raw) != entry.RawSHA256 || strictJSON(raw, &recorded) != nil || !reflect.DeepEqual(recorded, *entry.Result) {
+					return nil, errors.New("сохранённый raw не совпадает с hash/state")
+				}
+			}
 		}
 		state = savedState
 	}
@@ -978,9 +1052,30 @@ func execute(args []string) (any, error) {
 	case "prepare", "tasks":
 		return TaskBatch{runID, m.SnapshotID, cfg.ProjectRoot, cfg.Runtime, pending(state), m.Files}, nil
 	case "status":
-		return makeStatus(runID, m, state, fresh), nil
+		view, err := reviewContext(run, runID, m, state, fresh)
+		if err != nil {
+			return nil, err
+		}
+		status := makeStatus(runID, m, state, fresh)
+		status.HostReviewState = view.State
+		return status, nil
+	case "review":
+		if len(args) == 4 {
+			return submitReview(run, runID, m, state, args[3])
+		}
+		return reviewContext(run, runID, m, state, fresh)
 	case "report":
 		report := makeReport(runID, m, state, fresh)
+		view, err := reviewContext(run, runID, m, state, fresh)
+		if err != nil {
+			return nil, err
+		}
+		report.HostReview = &view.ReviewSummary
+		report.HostReviewState = view.State
+		report.HostReconciliationRequired = view.State != "current"
+		if view.State == "current" {
+			report.Conclusion = "Хост согласовал результаты по текущим свидетельствам. Это его обоснованная оценка, не автоматическое соответствие или доказательство полноты ТЗ."
+		}
 		var html bytes.Buffer
 		if err := reportTemplate.Execute(&html, report); err != nil {
 			return nil, err
@@ -1045,6 +1140,7 @@ func execute(args []string) (any, error) {
 	if command == "retry" {
 		entry.Task.Attempt++
 		entry.Result = nil
+		entry.RawSHA256 = ""
 		if err := saveState(run, state); err != nil {
 			return nil, err
 		}
@@ -1083,10 +1179,12 @@ func execute(args []string) (any, error) {
 		if err := strictJSON(prior, &priorResult); err != nil || !reflect.DeepEqual(priorResult, result) {
 			return nil, errors.New("конфликт с ранее записанным результатом этой attempt")
 		}
+		data = prior // Recover the first accepted bytes after publication interrupted before state.
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
 	entry.Result = &result
+	entry.RawSHA256 = digest(data)
 	if err := checkStateSize(state); err != nil {
 		return nil, err
 	}
@@ -1094,7 +1192,7 @@ func execute(args []string) (any, error) {
 	if err != nil || current.SnapshotID != m.SnapshotID {
 		return nil, errors.New("источники изменились во время submit")
 	}
-	if err := writeJSON(run, resultPath, result, 0400); err != nil {
+	if err := atomicWrite(run, resultPath, data, 0400); err != nil {
 		return nil, err
 	}
 	if err := saveState(run, state); err != nil {
@@ -1108,7 +1206,10 @@ func makeReport(runID string, m Manifest, state State, fresh bool) Report {
 		Status: makeStatus(runID, m, state, fresh), GeneratedAt: time.Now().UTC().Format(time.RFC3339), Requirements: []RequirementReport{}, Executions: append([]Receipt{}, state.Executions...),
 		Conclusion:                 "Результаты ролей собраны; требуется согласование хост-сессией. Автоматический вывод о соответствии не делается.",
 		HostReconciliationRequired: true,
+		Accepted:                   m.Accepted,
+		CompletenessBasis:          "declared_requirements_only",
 		Summaries:                  []ResultSummary{},
+		RawProvenance:              []RawProvenance{},
 		Limitations: []string{
 			"delivery_complete означает получение двух оценок каждой объявленной нормы. Полнота естественно-языкового ТЗ не доказана.",
 			"Проверены структура JSON, принадлежность файлов снимку и точность цитат; смысл утверждений оценивает хост-сессия.",
@@ -1116,6 +1217,10 @@ func makeReport(runID string, m Manifest, state State, fresh bool) Report {
 			"Роли представлены отдельно. Вердикты отдельных утверждений не переносятся на весь scope; семантическое согласование и разрешение противоречий выполняет хост-сессия.",
 			"Модельные API, стоимость, usage и время inference отсутствуют; агентов запускает хост-сессия.",
 		},
+	}
+	if m.Accepted != nil {
+		report.CompletenessBasis = "accepted_requirements_only"
+		report.Limitations = append(report.Limitations, "База полноты: accepted_requirements_only. История содержит также reject/defer/retire; принятие не доказывает полноту Markdown и правильность решений хоста.")
 	}
 	if !report.DeliveryComplete {
 		report.Conclusion = "Аудит не завершён: отсутствуют результаты заданий. Вывод о соответствии невозможен."
@@ -1131,6 +1236,11 @@ func makeReport(runID string, m Manifest, state State, fresh bool) Report {
 	for _, entry := range state.Entries {
 		if entry.Result != nil {
 			report.Summaries = append(report.Summaries, ResultSummary{entry.Task.TaskID, entry.Result.Summary, entry.Result.Limitations})
+			kind := "legacy_canonical"
+			if entry.RawSHA256 != "" {
+				kind = "exact_raw"
+			}
+			report.RawProvenance = append(report.RawProvenance, RawProvenance{entry.Task.TaskID, entry.Task.Attempt, kind, entry.RawSHA256})
 		}
 	}
 	for _, req := range m.Requirements {
@@ -1183,9 +1293,12 @@ var reportTemplate = template.Must(template.New("report").Parse(`<!doctype html>
 <p>host_reconciliation_required: {{.HostReconciliationRequired}}. Перед решением обновите status/report: статическая страница не обнаруживает последующие изменения файлов.</p>
 {{if .Pending}}<h2>Ожидаются</h2><ul>{{range .Pending}}<li>{{.TaskID}}, attempt {{.Attempt}}</li>{{end}}</ul>{{end}}
 <h2>Границы проверки</h2><ul>{{range .Limitations}}<li>{{.}}</li>{{end}}</ul>
+{{if .Accepted}}<h2>История принятия индекса</h2><p>accepted_requirements_only · semantic_completeness_proven: false · {{.Accepted.Head}}</p>{{range .Accepted.History}}<h3>{{.Decision.DecisionID}}</h3><p>Raw: {{.Decision.RawSHA256}}</p>{{range .Decision.Operations}}<p>{{.Action}} · previous: {{.Previous}} · {{.Reason}}</p><ul>{{range .Targets}}<li>{{.Candidate}} · {{.Title}}</li>{{end}}</ul>{{end}}<ul>{{range .Assignments}}<li>{{.Candidate}} → {{.RequirementID}}</li>{{end}}</ul><ul>{{range .Limitations}}<li>{{.}}</li>{{end}}</ul>{{end}}{{end}}
 <h2>Итоги ролей</h2>{{range .Summaries}}<h3>{{.TaskID}}</h3><p>{{.Summary}}</p><ul>{{range .Limitations}}<li>{{.}}</li>{{end}}</ul>{{end}}
+<h2>Происхождение ответов</h2>{{range .RawProvenance}}<p>{{.TaskID}} · attempt {{.Attempt}} · {{.Kind}} · <code>{{.SHA256}}</code></p>{{end}}
+{{if .HostReview}}<section><h2>Согласование хоста — {{.HostReview.State}}</h2><p>Это суждение хоста, не автоматический сертификат. При outdated ниже только история; требуется новое решение.</p>{{range .HostReview.History}}<p>{{.ReviewID}} · {{.Reviewer}} · <code>{{.RawSHA256}}</code> · {{.Summary}}</p>{{end}}{{with .HostReview.Latest}}<h3>{{.ReviewID}} — {{.Reviewer}}</h3><p>{{.Summary}}</p><ul>{{range .Limitations}}<li>{{.}}</li>{{end}}</ul>{{range .Assessments}}<article><h3>{{.RequirementID}} — решение хоста</h3>{{template "assessment" .}}</article>{{end}}{{end}}</section>{{end}}
 <h2>Фактические запуски</h2>{{range .Executions}}<p>{{.ID}} — {{.State}} · {{.Runtime}} · exit {{.ExitCode}}</p><ul>{{range .Tests}}<li>{{.ID}} — {{.State}}</li>{{end}}</ul>{{else}}<p>Нет записанного исполнения.</p>{{end}}
-{{range .Requirements}}<section><h2>{{.Requirement.ID}} — {{.Requirement.Title}}</h2><p>Scope: {{.Scope}}</p><pre>{{.Requirement.Source.Quote}}</pre>
+{{range .Requirements}}<section><h2>{{.Requirement.ID}} — {{.Requirement.Title}}</h2><p>Scope: {{.Scope}}</p>{{if .Requirement.Accepted}}<p>Редакция: {{.Requirement.Accepted.Revision}} · {{.Requirement.Accepted.Clarity}} · parents: {{.Requirement.Accepted.Parents}}</p><p>Условие: {{.Requirement.Condition}}</p><p>Требование: {{.Requirement.Statement}}</p><p>Способ проверки (хост): {{.Requirement.Verification}}</p><ul>{{range .Requirement.Accepted.Exceptions}}<li>Исключение: {{.}}</li>{{end}}{{range .Requirement.Accepted.Unresolved}}<li>Вопрос: {{.}}</li>{{end}}</ul>{{template "citations" .Requirement.Accepted.Citations}}{{else}}<pre>{{.Requirement.Source.Quote}}</pre>{{end}}
 {{range .Roles}}<article><h3>{{.Role}} · attempt {{.Attempt}}</h3>{{if .Assessment}}{{template "assessment" .Assessment}}{{else}}<p class="missing">pending: результат отсутствует.</p>{{end}}
 {{range .Executions}}<p>Последняя запись для {{.TestID}} — {{.State}} · receipt {{.ReceiptID}}. Полная история запусков выше.</p>{{end}}</article>{{end}}</section>{{end}}
 </body></html>
