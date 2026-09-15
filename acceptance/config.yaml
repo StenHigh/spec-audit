@@ -1,0 +1,15 @@
+version: 1
+project_root: corpus
+specs:
+  paths: [rules.md]
+code:
+  paths: [source.go, go.mod]
+tests:
+  paths: [source_test.go]
+reports_dir: ../.local/acceptance
+runtime:
+  kind: go
+  paths: ['.']
+  tests: []
+  timeout_seconds: 30
+scopes: []

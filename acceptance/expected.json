@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "origin": "Независимая подготовка по спецификации до новой реализации CLI; gold не выдаётся mapper/redteam.",
+  "requirements": [
+    {"requirement_id":"REQ-DEMO-001","specification":"clear","implementation":"supported","assertion":"relevant","test_id":"example.test/specaudit-fixture::TestFlip"},
+    {"requirement_id":"REQ-DEMO-002","specification":"clear","implementation":"supported","assertion":"weak","test_id":"example.test/specaudit-fixture::TestDouble"},
+    {"requirement_id":"REQ-DEMO-003","specification":"clear","implementation":"contradicted","assertion":"contradicts","test_id":"example.test/specaudit-fixture::TestAbsolute"},
+    {"requirement_id":"REQ-DEMO-004","specification":"clear","implementation":"unknown","assertion":"missing","test_id":""},
+    {"requirement_id":"REQ-DEMO-005","specification":"ambiguous","implementation":"unknown","assertion":"unknown","test_id":"example.test/specaudit-fixture::TestNormalize"}
+  ],
+  "runtime": {"state":"passed","tests":4},
+  "limits": "Контрактные проверки не измеряют интеллект. Один слепой проход не устанавливает статистическую точность."
+}
