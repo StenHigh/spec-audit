@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"html/template"
 	"log/slog"
+	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -16,12 +18,23 @@ import (
 var reportHTML string
 
 var reportTemplate = template.Must(template.New("report").Funcs(template.FuncMap{
-	"citationID": citationID,
-	"join":       strings.Join,
+	"citationID":     citationID,
+	"join":           strings.Join,
+	"assertionLabel": assertionLabel,
+	"percent": func(count, total, reviewed int) string {
+		if total == 0 {
+			return "—"
+		}
+		if reviewed == 0 {
+			return "не оценено"
+		}
+		return fmt.Sprintf("%.1f%%", 100*float64(count)/float64(total))
+	},
 }).Parse(reportHTML))
 
 // Navigation is a projection, never an additional audit or a persisted decision.
 type RequirementNavigation struct {
+	Section        string          `json:"section"`
 	Basis          string          `json:"basis"`
 	Flags          []string        `json:"flags"`
 	Host           *Assessment     `json:"-"`
@@ -62,10 +75,98 @@ type NavigationFilter struct {
 }
 
 type ReportNavigation struct {
-	Groups  []NavigationGroup  `json:"groups"`
-	Files   []NavigationFile   `json:"files"`
-	Filters []NavigationFilter `json:"filters"`
-	Scopes  []Scope            `json:"scopes"`
+	Groups   []NavigationGroup  `json:"groups"`
+	Files    []NavigationFile   `json:"files"`
+	Filters  []NavigationFilter `json:"filters"`
+	Scopes   []Scope            `json:"scopes"`
+	Metrics  AuditMetrics       `json:"metrics"`
+	Sections []AuditSection     `json:"sections"`
+	Editor   EditorDefaults     `json:"editor"`
+}
+
+type EditorDefaults struct {
+	CodeRoot   string `json:"code_root"`
+	SpecRoot   string `json:"spec_root"`
+	SpecPrefix string `json:"spec_prefix"`
+}
+
+type AuditSection struct {
+	Path   string `json:"path"`
+	FileID string `json:"file_id"`
+	AuditMetrics
+}
+
+// Each counter counts requirements, never citations, roles, test cases or issues.
+type AuditMetrics struct {
+	Total       int `json:"total"`
+	Reviewed    int `json:"reviewed"`
+	Unreviewed  int `json:"unreviewed"`
+	Supported   int `json:"supported"`
+	Gaps        int `json:"gaps"`
+	Unknown     int `json:"unknown"`
+	Questions   int `json:"questions"`
+	WithTests   int `json:"with_tests"`
+	Relevant    int `json:"relevant"`
+	Weak        int `json:"weak"`
+	Contradicts int `json:"contradicts"`
+	Missing     int `json:"missing"`
+	TestUnknown int `json:"test_unknown"`
+	Ready       int `json:"ready"`
+}
+
+func (counts *AuditMetrics) add(row RequirementReport, current bool) {
+	counts.Total++
+	a := row.Navigation.Host
+	if !current || a == nil {
+		counts.Unreviewed++
+		return
+	}
+	counts.Reviewed++
+	switch a.Implementation {
+	case "supported":
+		counts.Supported++
+	case "contradicted":
+		counts.Gaps++
+	default:
+		counts.Unknown++
+	}
+	if len(a.Tests) != 0 {
+		counts.WithTests++
+	}
+	switch a.Assertion {
+	case "relevant":
+		counts.Relevant++
+	case "weak":
+		counts.Weak++
+	case "contradicts":
+		counts.Contradicts++
+	case "missing":
+		counts.Missing++
+	default:
+		counts.TestUnknown++
+	}
+	question := oneOf("spec_question", row.Navigation.Flags...)
+	if question {
+		counts.Questions++
+	}
+	if a.Specification == "clear" && a.Implementation == "supported" && a.Assertion == "relevant" && !question {
+		counts.Ready++
+	}
+}
+
+func assertionLabel(value string) string {
+	switch value {
+	case "relevant":
+		return "Достаточность подтверждена автором оценки"
+	case "weak":
+		return "Тесты есть, но проверка частичная или слабая"
+	case "contradicts":
+		return "Тестовая проверка противоречит требованию"
+	case "missing":
+		return "Подходящая проверка не найдена"
+	default:
+		return "Достаточность тестов неизвестна"
+	}
 }
 
 func citationID(c Citation) string {
@@ -98,9 +199,13 @@ func buildNavigation(report *Report, m Manifest) {
 	nav := ReportNavigation{
 		Groups: []NavigationGroup{{Kind: "spec", Selection: m.Config.Specs}, {Kind: "code", Selection: m.Config.Code}, {Kind: "tests", Selection: m.Config.Tests}},
 		Files:  []NavigationFile{}, Scopes: m.Config.Scopes,
+		Sections: []AuditSection{},
+		Editor:   EditorDefaults{CodeRoot: m.Config.ProjectRoot},
 		Filters: []NavigationFilter{
 			{ID: "implementation_gap", Label: "Противоречие реализации"},
 			{ID: "test_gap", Label: "Недостаточно проверок в тестах"},
+			{ID: "partial_test", Label: "Тесты есть, но проверка частичная / слабая"},
+			{ID: "missing_test", Label: "Подходящая проверка не найдена"},
 			{ID: "spec_question", Label: "Вопросы к ТЗ"},
 			{ID: "unknown", Label: "Неизвестность"},
 			{ID: "pending", Label: "Ожидается ответ роли"},
@@ -109,11 +214,27 @@ func buildNavigation(report *Report, m Manifest) {
 		},
 	}
 	files := map[string]int{}
+	sections := map[string]int{}
+	specDir := ""
 	evidence := map[string]int{}
 	for _, file := range m.Files {
 		files[file.Path] = len(nav.Files)
 		nav.Files = append(nav.Files, NavigationFile{SourceFile: file, ID: "f-" + digest([]byte(file.Path)), Evidence: []NavigationEvidence{}})
+		if file.Kind == "spec" {
+			sections[file.Path] = len(nav.Sections)
+			nav.Sections = append(nav.Sections, AuditSection{Path: file.Path, FileID: nav.Files[len(nav.Files)-1].ID})
+			if specDir == "" {
+				specDir = path.Dir(file.Path)
+			}
+			for specDir != "." && !strings.HasPrefix(file.Path, specDir+"/") {
+				specDir = path.Dir(specDir)
+			}
+		}
 	}
+	if specDir != "" && specDir != "." {
+		nav.Editor.SpecPrefix = specDir + "/"
+	}
+	nav.Editor.SpecRoot = filepath.Join(m.Config.ProjectRoot, specDir)
 	add := func(c Citation, link NavigationLink) {
 		index, ok := files[c.Path]
 		if !ok { // Only manifest files can be navigated, including in historical reports.
@@ -148,7 +269,7 @@ func buildNavigation(report *Report, m Manifest) {
 	for i := range report.Requirements {
 		row := &report.Requirements[i]
 		req := row.Requirement
-		row.Navigation = RequirementNavigation{Basis: "roles", Flags: []string{}, Host: host[req.ID], HostExecutions: []TestExecution{}}
+		row.Navigation = RequirementNavigation{Section: req.Source.Path, Basis: "roles", Flags: []string{}, Host: host[req.ID], HostExecutions: []TestExecution{}}
 		flags := map[string]bool{"unreviewed": !currentHost}
 		if !fresh {
 			row.Navigation.Basis = "history"
@@ -178,6 +299,8 @@ func buildNavigation(report *Report, m Manifest) {
 			if basis {
 				flags["implementation_gap"] = flags["implementation_gap"] || a.Implementation == "contradicted"
 				flags["test_gap"] = flags["test_gap"] || oneOf(a.Assertion, "weak", "missing", "contradicts")
+				flags["partial_test"] = flags["partial_test"] || a.Assertion == "weak"
+				flags["missing_test"] = flags["missing_test"] || a.Assertion == "missing"
 				flags["spec_question"] = flags["spec_question"] || a.Specification == "ambiguous"
 				flags["unknown"] = flags["unknown"] || a.Implementation == "unknown" || a.Assertion == "unknown"
 			}
@@ -203,6 +326,10 @@ func buildNavigation(report *Report, m Manifest) {
 				row.Navigation.Flags = append(row.Navigation.Flags, nav.Filters[j].ID)
 				nav.Filters[j].Count++
 			}
+		}
+		nav.Metrics.add(*row, currentHost)
+		if section, ok := sections[row.Navigation.Section]; ok {
+			nav.Sections[section].AuditMetrics.add(*row, currentHost)
 		}
 	}
 	for i := range nav.Files {

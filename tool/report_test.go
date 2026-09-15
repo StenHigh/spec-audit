@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -187,5 +188,144 @@ func TestReportNavigationDisagreementBasis(t *testing.T) {
 	buildNavigation(&r, m)
 	if !oneOf("disagreement", r.Requirements[0].Navigation.Flags...) || oneOf("implementation_gap", r.Requirements[0].Navigation.Flags...) || oneOf("unreviewed", r.Requirements[0].Navigation.Flags...) {
 		t.Fatal("current decision either overwrote roles or ignored")
+	}
+}
+
+func TestReportMetricsSeparateEvidenceAndFreshness(t *testing.T) {
+	c := Citation{"TZ/section.md", 1, 3, "requirement"}
+	m := Manifest{Config: Config{ProjectRoot: "/work/project"}, Files: []SourceFile{
+		{Path: c.Path, Kind: "spec"}, {Path: "TZ/other.md", Kind: "spec"},
+		{Path: "src/code.go", Kind: "code"}, {Path: "tests/code_test.go", Kind: "tests"},
+	}}
+	r := Report{Status: Status{Freshness: "fresh"}, HostReview: &ReviewSummary{
+		State: "current", Latest: &ReviewDecision{ReviewID: "host"},
+	}}
+	for i, assertion := range []string{"relevant", "weak", "contradicts", "missing", "unknown", "relevant", "relevant"} {
+		id := fmt.Sprintf("REQ-MET-00%d", i+1)
+		req := Requirement{ID: id, Source: c}
+		a := Assessment{RequirementID: id, Specification: "clear", Implementation: "supported", Assertion: assertion,
+			Tests: []TestCitation{{TestID: "TestShared", Citation: Citation{"tests/code_test.go", 1, 1, "assert"}}},
+		}
+		if i == 2 {
+			a.Implementation = "contradicted"
+		}
+		if i == 4 {
+			a.Implementation = "unknown"
+		}
+		if i == 5 {
+			a.Specification = "ambiguous"
+		}
+		if i == 6 {
+			req.Accepted = &AcceptedDetails{Clarity: "clear", Unresolved: []string{"Threshold?"}, Citations: []Citation{c, {"TZ/other.md", 1, 1, "context"}}}
+		}
+		r.Requirements = append(r.Requirements, RequirementReport{Requirement: req})
+		r.HostReview.Latest.Assessments = append(r.HostReview.Latest.Assessments, a)
+	}
+	// A shared green receipt must neither multiply counts nor upgrade weak/missing.
+	r.Executions = []Receipt{{ID: "green", State: "passed", Tests: []ExecutedTest{{ID: "TestShared", State: "passed"}}}}
+	buildNavigation(&r, m)
+	want := AuditMetrics{Total: 7, Reviewed: 7, Supported: 5, Gaps: 1, Unknown: 1, Questions: 2,
+		WithTests: 7, Relevant: 3, Weak: 1, Contradicts: 1, Missing: 1, TestUnknown: 1, Ready: 1}
+	if r.Navigation.Metrics != want || r.Navigation.Sections[0].AuditMetrics != want || r.Navigation.Sections[1].Total != 0 {
+		t.Fatal("counts must use primary sources, not citations or receipts", r.Navigation)
+	}
+	if r.Navigation.Editor != (EditorDefaults{CodeRoot: "/work/project", SpecRoot: "/work/project/TZ", SpecPrefix: "TZ/"}) {
+		t.Fatal("spec root must strip its exact shared prefix once", r.Navigation.Editor)
+	}
+	if !oneOf("partial_test", r.Requirements[1].Navigation.Flags...) || !oneOf("missing_test", r.Requirements[3].Navigation.Flags...) {
+		t.Fatal("test insufficiency filters lost")
+	}
+	for _, phase := range []string{"outdated", "missing", "stale"} {
+		r.HostReview.State = phase
+		if phase == "stale" {
+			r.Freshness = "stale"
+			r.HostReview.State = "current"
+		}
+		buildNavigation(&r, m)
+		if r.Navigation.Metrics != (AuditMetrics{Total: 7, Unreviewed: 7}) {
+			t.Fatal("historical or preliminary data promoted to current", phase, r.Navigation.Metrics)
+		}
+		var page bytes.Buffer
+		if err := reportTemplate.Execute(&page, r); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(page.String(), "не оценено") || strings.Contains(page.String(), "0.0%") {
+			t.Fatal("unreviewed represented as zero coverage")
+		}
+	}
+	for _, value := range []string{"relevant", "weak", "contradicts", "missing", "unknown"} {
+		if assertionLabel(value) == value || assertionLabel(value) == "" {
+			t.Fatal("unexplained assertion", value)
+		}
+	}
+}
+
+func TestReportEditorRootsAndEmptyMetrics(t *testing.T) {
+	for _, tc := range []struct {
+		paths  []string
+		prefix string
+	}{
+		{[]string{"TZ/nested/a.md", "TZ/nested/b.md"}, "TZ/nested/"},
+		{[]string{"TZ/a.md", "TZ-more/b.md"}, ""},
+		{[]string{"rules.md", "TZ/a.md"}, ""},
+		{[]string{"TZ/a.md", "docs/b.md"}, ""},
+	} {
+		m := Manifest{Config: Config{ProjectRoot: "/new/project"}}
+		for _, p := range tc.paths {
+			m.Files = append(m.Files, SourceFile{Kind: "spec", Path: p})
+		}
+		r := Report{}
+		buildNavigation(&r, m)
+		if r.Navigation.Editor.SpecPrefix != tc.prefix || r.Navigation.Editor.SpecRoot != filepath.Join("/new/project", tc.prefix) {
+			t.Fatal("incorrect shared directory", r.Navigation.Editor)
+		}
+		var html bytes.Buffer
+		if err := reportTemplate.Execute(&html, r); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(html.String(), "NaN") || strings.Contains(html.String(), "100.0%") {
+			t.Fatal("empty section manufactured coverage")
+		}
+	}
+}
+
+// Optional output is a NEW synthetic page for the dev-only browser check, never a real audit.
+func TestReportUIFixture(t *testing.T) {
+	spec := Citation{"TZ/Цена #50% '\" &.md", 12, 13, "requirement <script>window.injected = true</script>"}
+	code := Citation{"src/calc:9.go", 27, 27, "return price"}
+	test := TestCitation{TestID: "TestPrice", Citation: Citation{"tests/check_test.go", 31, 31, "assert(price)"}}
+	m := Manifest{Config: Config{ProjectRoot: "/workspace/My Project", Scopes: []Scope{{ID: "all"}}}, Files: []SourceFile{
+		{Path: spec.Path, Kind: "spec"}, {Path: "TZ/other.md", Kind: "spec"},
+		{Path: code.Path, Kind: "code"}, {Path: test.Citation.Path, Kind: "tests"},
+	}}
+	r := Report{Status: Status{RunID: "ui-fixture", Freshness: "fresh", HostReviewState: "current", RequirementsTotal: 2},
+		HostReview: &ReviewSummary{State: "current", Latest: &ReviewDecision{ReviewID: "host"}}}
+	for i, assertion := range []string{"weak", "relevant"} {
+		id := fmt.Sprintf("REQ-UI-00%d", i+1)
+		source := spec
+		if i == 1 {
+			source = Citation{"TZ/other.md", 1, 1, "another requirement"}
+		}
+		a := Assessment{RequirementID: id, Specification: "clear", Implementation: "supported", Assertion: assertion,
+			Statement: "Проверяем код и существенные результаты отдельно.", Spec: []Citation{source}, Code: []Citation{code}, Tests: []TestCitation{test}}
+		r.Requirements = append(r.Requirements, RequirementReport{Requirement: Requirement{ID: id, Title: "Тестовая норма", Source: source}, Scope: "all",
+			Roles: []RoleReport{{Role: "mapper", Attempt: 1, Assessment: &a}, {Role: "redteam", Attempt: 1, Assessment: &a}}})
+		r.HostReview.Latest.Assessments = append(r.HostReview.Latest.Assessments, a)
+	}
+	buildNavigation(&r, m)
+	var page bytes.Buffer
+	if err := reportTemplate.Execute(&page, r); err != nil {
+		t.Fatal(err)
+	}
+	checkReportAnchors(t, page.Bytes())
+	for _, text := range []string{assertionLabel("weak"), "50.0%", "section-filter", "prefers-color-scheme:dark", "Нет записанного исполнения."} {
+		if !strings.Contains(page.String(), text) {
+			t.Fatal("missing UI contract", text)
+		}
+	}
+	if output := os.Getenv("SPEC_AUDIT_HTML_FIXTURE"); output != "" {
+		if err := os.WriteFile(output, page.Bytes(), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

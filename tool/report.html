@@ -5,8 +5,11 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'none'; base-uri 'none'; form-action 'none'">
 <title>spec-audit — {{.RunID}}</title>
 <style>
-:root{color-scheme:light;--ink:#20312d;--muted:#536960;--line:#d6e0db;--accent:#17694f;--paper:#fff;--wash:#f1f5f2}
-*{box-sizing:border-box}body{margin:0;background:var(--wash);color:var(--ink);font:16px/1.55 system-ui,sans-serif}main{max-width:1240px;margin:auto;padding:2rem 1.25rem 5rem}a{color:var(--accent);text-underline-offset:3px}a,code,summary,p,li{overflow-wrap:anywhere}h1,h2,h3{line-height:1.2}h1{font-size:2.5rem;margin:.4rem 0}h2{margin:2rem 0 1rem}h4,h5{margin:.8rem 0 .3rem}p{margin:.7rem 0}nav{display:flex;gap:1rem;flex-wrap:wrap;margin:1rem 0}.eyebrow{letter-spacing:.12em;text-transform:uppercase;font-size:.8rem;color:var(--accent);font-weight:700}.meta,small{color:var(--muted);font-size:.86rem}.notice{border-left:4px solid var(--accent);padding:1rem;background:#e5f0e9}.notice.stale{border-color:#aa503a;background:#fae9e2}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(195px,1fr));gap:.65rem}.card,details,article{border:1px solid var(--line);border-radius:9px;background:var(--paper);padding:1rem}.card strong{display:block;font-size:2rem}.card small{display:block}button.card{text-align:left;color:inherit;cursor:pointer}button.card:hover{border-color:var(--accent)}details{margin:.6rem 0}summary{cursor:pointer;font-weight:600}summary small{font-weight:400;display:block;margin:.3rem 0 0 1.1rem}details[open]>summary{margin-bottom:1rem}article{background:#f8faf8;margin:.7rem 0}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#edf2ef;padding:1rem;border-radius:6px;font:13px/1.6 ui-monospace,monospace}code{font-size:.85em}.controls{display:flex;flex-wrap:wrap;align-items:end;gap:.7rem;margin:1rem 0}.controls label{display:flex;flex-direction:column;font-size:.85rem;gap:.3rem}.controls label:first-child{flex:1;min-width:180px}input,select,button{font:inherit;padding:.55rem .7rem;border:1px solid #9aafa4;border-radius:5px;background:white;color:var(--ink);max-width:100%}button{cursor:pointer}.badge{display:inline-block;border-radius:4px;padding:.1rem .4rem;background:#edf2ef;font-size:.8rem;font-weight:500}.missing{color:#944231}.table-scroll{overflow:auto}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid var(--line);padding:.6rem;text-align:left;vertical-align:top}.evidence{border-top:1px solid var(--line);margin-top:1rem;padding-top:.5rem}.evidence:target,details:target{outline:3px solid #d18c2b;outline-offset:3px}a:focus-visible,input:focus-visible,select:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid #d18c2b;outline-offset:3px}[hidden]{display:none!important}.js-controls{display:none}.js .js-controls{display:flex}section{scroll-margin-top:1rem}li{margin:.2rem 0}.back{font-size:.85rem}@media(max-width:600px){main{padding:1rem .7rem 3rem}h1{font-size:1.85rem}details,article{padding:.75rem}.controls{align-items:stretch}.controls label{width:100%}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.card{padding:.7rem}.card strong{font-size:1.65rem}}
+:root{color-scheme:light;--ink:#20312d;--muted:#536960;--line:#d6e0db;--accent:#17694f;--paper:#fff;--wash:#f1f5f2;--notice:#e5f0e9;--alert:#fae9e2;--danger:#944231;--article:#f8faf8;--code:#edf2ef;--control:#9aafa4;--focus:#b6771b;--warn:#925c10}
+:root[data-theme=dark]{color-scheme:dark;--ink:#e3ece7;--muted:#a9beb3;--line:#3c5045;--accent:#8bdfba;--paper:#1d2822;--wash:#141c18;--notice:#263d30;--alert:#402923;--danger:#ffad96;--article:#233129;--code:#17211b;--control:#648170;--focus:#f5bd66;--warn:#f4c47e}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){color-scheme:dark;--ink:#e3ece7;--muted:#a9beb3;--line:#3c5045;--accent:#8bdfba;--paper:#1d2822;--wash:#141c18;--notice:#263d30;--alert:#402923;--danger:#ffad96;--article:#233129;--code:#17211b;--control:#648170;--focus:#f5bd66;--warn:#f4c47e}}
+*{box-sizing:border-box}body{margin:0;background:var(--wash);color:var(--ink);font:16px/1.55 system-ui,sans-serif}main{max-width:1240px;margin:auto;padding:2rem 1.25rem 5rem}a{color:var(--accent);text-underline-offset:3px}a,code,summary,p,li{overflow-wrap:anywhere}h1,h2,h3{line-height:1.2}h1{font-size:2.5rem;margin:.4rem 0}h2{margin:2rem 0 1rem}h4,h5{margin:.8rem 0 .3rem}p{margin:.7rem 0}nav{display:flex;gap:1rem;flex-wrap:wrap;margin:1rem 0}.eyebrow{letter-spacing:.12em;text-transform:uppercase;font-size:.8rem;color:var(--accent);font-weight:700}.meta,small{color:var(--muted);font-size:.86rem}.notice{border-left:4px solid var(--accent);padding:1rem;background:var(--notice)}.notice.stale{border-color:var(--danger);background:var(--alert)}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(195px,1fr));gap:.65rem}.card,details,article{border:1px solid var(--line);border-radius:9px;background:var(--paper);padding:1rem}.card strong{display:block;font-size:2rem}.card small{display:block}button.card{text-align:left;color:inherit;cursor:pointer}button.card:hover{border-color:var(--accent)}details{margin:.6rem 0}summary{cursor:pointer;font-weight:600}summary small{font-weight:400;display:block;margin:.3rem 0 0 1.1rem}details[open]>summary{margin-bottom:1rem}article{background:var(--article);margin:.7rem 0}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--code);padding:1rem;border-radius:6px;font:13px/1.6 ui-monospace,monospace}code{font-size:.85em}.controls{display:flex;flex-wrap:wrap;align-items:end;gap:.7rem;margin:1rem 0}.controls label{display:flex;flex-direction:column;font-size:.85rem;gap:.3rem}.controls label:first-child{flex:1;min-width:180px}input,select,button{font:inherit;padding:.55rem .7rem;border:1px solid var(--control);border-radius:5px;background:var(--paper);color:var(--ink);max-width:100%}button{cursor:pointer}.badge{display:inline-block;border-radius:4px;padding:.1rem .4rem;background:var(--code);font-size:.8rem;font-weight:500}.missing{color:var(--danger)}.table-scroll{overflow:auto}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid var(--line);padding:.6rem;text-align:left;vertical-align:top}.evidence{border-top:1px solid var(--line);margin-top:1rem;padding-top:.5rem}.evidence:target,details:target{outline:3px solid var(--focus);outline-offset:3px}a:focus-visible,input:focus-visible,select:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid var(--focus);outline-offset:3px}[hidden]{display:none!important}.js-controls{display:none}.js .js-controls{display:flex}section{scroll-margin-top:1rem}li{margin:.2rem 0}.back{font-size:.85rem}@media(max-width:600px){main{padding:1rem .7rem 3rem}h1{font-size:1.85rem}details,article{padding:.75rem}.controls{align-items:stretch}.controls label{width:100%}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.card{padding:.7rem}.card strong{font-size:1.65rem}}
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem}.metric{display:block;margin:.6rem 0}.metric small{display:block}meter{display:block;width:100%;height:1.1rem;accent-color:var(--accent)}meter::-webkit-meter-bar{background:var(--line);border:0}meter::-webkit-meter-optimum-value{background:var(--accent)}meter::-moz-meter-bar{background:var(--accent)}.warning{color:var(--warn)}.badge.weak,.badge.missing,.badge.contradicts{color:var(--danger);background:var(--alert)}.editor-link{margin-left:.6rem;font-size:.8rem}.preferences .controls label{flex:1;min-width:200px}.section-button{border:0;background:none;padding:0;color:var(--accent);text-decoration:underline;text-align:left}.section-table{min-width:760px}.section-table th:first-child{width:32%}.ratio{white-space:nowrap;font-variant-numeric:tabular-nums}.js-only{display:none}.js .js-only{display:inline}
 </style>
 </head>
 <body><main id="top">
@@ -15,8 +18,14 @@
 <div class="notice {{if eq .Freshness "stale"}}stale{{end}}"><strong>{{.Freshness}} · Согласование хоста — {{.HostReviewState}}</strong><p>{{.Conclusion}}</p></div>
 <p class="meta">Run: {{.RunID}} · {{.GeneratedAt}}<br>Snapshot: <code>{{.SnapshotID}}</code></p>
 <p class="meta">Статическая страница не отслеживает последующие изменения. Перед решением обновите status/report. Связь не означает соответствие; passed не означает достаточность теста.</p>
-<nav aria-label="Разделы отчёта"><a href="#overview">Обзор</a><a href="#requirements">Требования</a><a href="#files">ТЗ, код и тесты</a><a href="#executions">Исполнения</a><a href="#history">История и происхождение</a></nav>
+<nav aria-label="Разделы отчёта"><a href="#overview">Обзор</a><a href="#charts">Графики по ТЗ</a><a href="#requirements">Требования</a><a href="#files">ТЗ, код и тесты</a><a href="#executions">Исполнения</a><a href="#preferences">Настройки</a><a href="#history">История и происхождение</a></nav>
 </header>
+<details id="preferences" class="preferences"><summary>Настройки · редактор, пути и тема</summary>
+<div class="controls js-controls"><label>Редактор<select id="editor"><option value="">Не выбран</option><option value="zed">Zed</option><option value="phpstorm">PhpStorm</option><option value="cursor">Cursor</option><option value="vscode">VS Code / GitHub Copilot</option></select></label><label>Тема<select id="theme"><option value="system">Системная</option><option value="light">Светлая</option><option value="dark">Тёмная</option></select></label></div>
+<div class="controls js-controls"><label>Корень кода и тестов<input id="code-root" type="text" spellcheck="false" value="{{.Navigation.Editor.CodeRoot}}"></label><label>Каталог ТЗ<input id="spec-root" type="text" spellcheck="false" value="{{.Navigation.Editor.SpecRoot}}" data-prefix="{{.Navigation.Editor.SpecPrefix}}"></label><button type="button" id="reset-preferences">Сбросить настройки</button></div>
+<p class="meta">Пути заполнены из CONFIG генерации. Введите абсолютные каталоги macOS/Linux (без ~). {{if .Navigation.Editor.SpecPrefix}}Каталог ТЗ заменяет префикс <code>{{.Navigation.Editor.SpecPrefix}}</code> в путях snapshot.{{else}}Для ТЗ сохранены пути относительно корня проекта.{{end}} Каталоги не выбираются через файловый диалог: автономная страница не имеет доступа к абсолютным путям вашей файловой системы.</p>
+<p class="meta">Сохраняется только выбор в браузере, не YAML. Редактор должен быть установлен с обработчиком ссылок; браузер может запросить разрешение. Ссылка открывает текущий локальный файл, не snapshot: строки могли сместиться. Сохранённая цитата всегда остаётся в отчёте.</p>
+<p id="preferences-status" role="status" aria-live="polite"></p></details>
 <section id="overview"><h2>Область проверки</h2>
 <div class="cards"><div class="card"><strong>{{.RequirementsTotal}}</strong>норм в этом run<small>{{.CompletenessBasis}}</small></div><div class="card"><strong>{{.Submitted}} / {{.Expected}}</strong>ответов ролей<small>Delivery complete: {{.DeliveryComplete}}</small></div>{{range .Navigation.Groups}}<div class="card"><strong>{{.Files}}</strong>{{if eq .Kind "spec"}}файлов ТЗ{{else if eq .Kind "code"}}файлов кода{{else}}файлов тестов{{end}}<small>{{.Unlinked}} без текущих связей</small></div>{{end}}</div>
 <p>Инвентарь охватывает все выбранные файлы snapshot, а оценки — только нормы этого run. Документ без принятой нормы и код без связи требуют разбора, но не объявляются дефектом.</p>
@@ -25,12 +34,25 @@
 <div class="cards">{{range .Navigation.Filters}}<button class="card" type="button" data-filter="{{.ID}}"><strong>{{.Count}}</strong>{{.Label}}</button>{{end}}</div>
 <p class="meta">«Вопросы к ТЗ» — записанные неоднозначности и открытые вопросы, не автоматический поиск всех конфликтов. Различия мнений агентов не доказывают противоречие ТЗ.</p>
 </section>
+<section id="charts"><h2>Графики по разделам ТЗ</h2>
+<p>Здесь раздел — <strong>основной файл ТЗ</strong>. Каждая норма считается один раз; дополнительные цитаты не увеличивают итог. Графики охватывают только принятые или объявленные нормы этого run, не весь продукт и не покрытие строк/ветвей кода.</p>
+{{if or (ne .Freshness "fresh") (ne .HostReviewState "current")}}<p class="notice stale">Нет актуального согласования: текущие положительные показатели не рассчитаны. Предварительные оценки и история доступны в карточках ниже.</p>{{end}}
+{{with .Navigation.Metrics}}
+<div class="cards"><div class="card"><strong>{{percent .Ready .Total .Reviewed}}</strong>код + достаточные тесты<small>{{.Ready}} / {{.Total}} норм · статическая оценка хоста, не готовность к релизу</small></div><div class="card"><strong>{{.Gaps}}</strong>норм с GAP реализации<small>Не число уникальных дефектов или задач</small></div><div class="card"><strong>{{.Weak}}</strong>частичная / слабая проверка<small>Тесты есть, но достаточности нет</small></div><div class="card"><strong>{{.Missing}}</strong>без подходящей проверки<small>Найденный тест мог не проверять эту норму</small></div></div>
+<div class="charts"><article><h3>Реализация и наличие тестов</h3>
+<div class="metric">Поддержано кодом <strong>{{.Supported}} / {{.Total}} · {{percent .Supported .Total .Reviewed}}</strong>{{if .Total}}<meter aria-label="Нормы, поддержанные кодом" min="0" max="{{.Total}}" value="{{.Supported}}"></meter>{{end}}</div>
+<div class="metric">Есть тестовые свидетельства <strong>{{.WithTests}} / {{.Total}} · {{percent .WithTests .Total .Reviewed}}</strong>{{if .Total}}<meter aria-label="Нормы с тестовыми свидетельствами" min="0" max="{{.Total}}" value="{{.WithTests}}"></meter>{{end}}</div>
+<p class="meta">Код: {{.Unknown}} неизвестно · {{.Questions}} вопросов к ТЗ · {{.Unreviewed}} без текущей оценки. Запуск теста здесь не учитывается: смотрите «Фактические запуски».</p></article>
+<article><h3>Достаточность тестов</h3><div class="metric">Достаточность подтверждена хостом <strong>{{.Relevant}} / {{.Total}} · {{percent .Relevant .Total .Reviewed}}</strong>{{if .Total}}<meter aria-label="Нормы с достаточными тестовыми проверками" min="0" max="{{.Total}}" value="{{.Relevant}}"></meter>{{end}}</div>
+<ul><li>Частичная / слабая проверка: {{.Weak}}</li><li>Проверка противоречит норме: {{.Contradicts}}</li><li>Подходящая проверка не найдена: {{.Missing}}</li><li>Достаточность неизвестна: {{.TestUnknown}}</li><li>Нет текущей оценки: {{.Unreviewed}}</li></ul><p class="meta">Состояния достаточности не пересекаются. Наличие цитаты, relevant и passed — три разных факта.</p></article></div>{{end}}
+<div class="table-scroll"><table class="section-table"><caption>Нормы по основному файлу ТЗ · доли от всех норм строки</caption><thead><tr><th scope="col">Файл ТЗ / нормы</th><th scope="col">Поддержка кодом</th><th scope="col">Есть тесты</th><th scope="col">Достаточные проверки</th><th scope="col">Проблемы и неизвестность</th></tr></thead><tbody>{{range .Navigation.Sections}}<tr data-section-stats="{{.Path}}"><th scope="row"><button type="button" class="section-button" data-section="{{.Path}}">{{.Path}}</button><small class="metric">{{.Total}} норм · {{.Reviewed}} согласовано</small><small class="metric">Код + достаточные тесты: {{.Ready}} / {{.Total}} · {{percent .Ready .Total .Reviewed}}</small><a class="back" href="#{{.FileID}}">К источнику</a></th><td><span class="ratio">{{.Supported}} / {{.Total}} · {{percent .Supported .Total .Reviewed}}</span>{{if .Total}}<meter aria-label="Поддержка кодом" min="0" max="{{.Total}}" value="{{.Supported}}"></meter>{{end}}</td><td><span class="ratio">{{.WithTests}} / {{.Total}} · {{percent .WithTests .Total .Reviewed}}</span>{{if .Total}}<meter aria-label="Есть тестовые свидетельства" min="0" max="{{.Total}}" value="{{.WithTests}}"></meter>{{end}}</td><td><span class="ratio">{{.Relevant}} / {{.Total}} · {{percent .Relevant .Total .Reviewed}}</span>{{if .Total}}<meter aria-label="Достаточные проверки" min="0" max="{{.Total}}" value="{{.Relevant}}"></meter>{{end}}<small>Частичные/слабые: {{.Weak}}</small></td><td>GAP: {{.Gaps}} · без проверки: {{.Missing}}<br><small>Противоречащих тестов: {{.Contradicts}} · неизвестно (код / тест): {{.Unknown}} / {{.TestUnknown}} · без оценки: {{.Unreviewed}} · вопросы ТЗ: {{.Questions}}</small>{{if not .Total}}<p class="meta">Нет основных норм этого run; доля не определена.</p>{{end}}</td></tr>{{end}}</tbody></table></div>
+</section>
 <section id="requirements"><h2>Требования и выводы</h2>
-<div class="controls js-controls"><label>Поиск нормы<input id="requirement-search" type="search" placeholder="ID, формулировка, путь…"></label><label>Область внимания<select id="requirement-filter"><option value="">Все состояния</option>{{range .Navigation.Filters}}<option value="{{.ID}}">{{.Label}}</option>{{end}}</select></label><label>Scope<select id="scope-filter"><option value="">Все scope</option>{{range .Navigation.Scopes}}<option>{{.ID}}</option>{{end}}</select></label><button type="button" id="reset-requirements">Сбросить</button></div>
+<div class="controls js-controls"><label>Поиск нормы<input id="requirement-search" type="search" placeholder="ID, формулировка, путь…"></label><label>Область внимания<select id="requirement-filter"><option value="">Все состояния</option>{{range .Navigation.Filters}}<option value="{{.ID}}">{{.Label}}</option>{{end}}</select></label><label>Scope<select id="scope-filter"><option value="">Все scope</option>{{range .Navigation.Scopes}}<option>{{.ID}}</option>{{end}}</select></label><label>Основной файл ТЗ<select id="section-filter"><option value="">Все файлы ТЗ</option>{{range .Navigation.Sections}}<option value="{{.Path}}">{{.Path}}</option>{{end}}</select></label><button type="button" id="reset-requirements">Сбросить</button></div>
 <p id="requirement-count" role="status" aria-live="polite">{{len .Requirements}} норм</p>
 <p id="no-requirements" hidden>По этим условиям нормы не найдены. Очистите поиск или фильтры.</p>
-{{range .Requirements}}<details class="requirement" id="req-{{.Requirement.ID}}" data-scope="{{.Scope}}" data-flags="{{join .Navigation.Flags " "}}">
-<summary>{{.Requirement.ID}} — {{.Requirement.Title}}<small>Scope: {{.Scope}} · Основа: {{.Navigation.Basis}}{{with .Navigation.Host}}{{if eq $.HostReviewState "current"}} · Код: {{.Implementation}} · Assertion: {{.Assertion}}{{end}}{{end}}</small></summary>
+{{range .Requirements}}<details class="requirement" id="req-{{.Requirement.ID}}" data-scope="{{.Scope}}" data-section="{{.Navigation.Section}}" data-flags="{{join .Navigation.Flags " "}}">
+<summary>{{.Requirement.ID}} — {{.Requirement.Title}}<small>Scope: {{.Scope}} · Основа: {{.Navigation.Basis}}{{with .Navigation.Host}}{{if eq $.HostReviewState "current"}} · Код: {{.Implementation}} · <span class="badge {{.Assertion}}">{{assertionLabel .Assertion}} ({{.Assertion}})</span>{{end}}{{end}}</small></summary>
 <p>Условие: {{.Requirement.Condition}}</p><p>Требование: {{.Requirement.Statement}}</p><p>Способ проверки (хост): {{.Requirement.Verification}}</p>
 {{if .Requirement.Accepted}}<p class="meta">Редакция: {{.Requirement.Accepted.Revision}} · {{.Requirement.Accepted.Clarity}} · parents: {{.Requirement.Accepted.Parents}}</p><ul>{{range .Requirement.Accepted.Exceptions}}<li>Исключение: {{.}}</li>{{end}}{{range .Requirement.Accepted.Unresolved}}<li>Вопрос: {{.}}</li>{{end}}</ul>{{template "citations" .Requirement.Accepted.Citations}}{{else}}<p>{{template "citation" .Requirement.Source}}</p>{{end}}
 {{with .Navigation.Host}}<article><h3>Решение хоста · {{$.HostReviewState}}</h3>{{if ne $.HostReviewState "current"}}<p class="missing">История: это решение больше не является текущим основанием.</p>{{end}}{{template "assessment" .}}</article>{{end}}
@@ -42,9 +64,10 @@
 <p>Откройте файл, чтобы увидеть сохранённые фрагменты и связанные нормы. «Нет текущих связей» не означает «ТЗ не покрывает код»: смысловой разбор мог ещё не выполняться.</p>
 <div class="controls js-controls"><label>Поиск файла или фрагмента<input id="file-search" type="search" placeholder="Путь, метод в цитате, test_id…"></label><label>Категория<select id="file-kind"><option value="">Все файлы</option><option value="spec">ТЗ</option><option value="code">Код</option><option value="tests">Тесты</option></select></label><label>Связи<select id="file-links"><option value="">Все связи</option><option value="no">Нет текущих связей</option><option value="yes">Есть текущие связи</option></select></label><button type="button" id="reset-files">Сбросить</button></div>
 <p id="file-count" role="status" aria-live="polite">{{len .Navigation.Files}} файлов</p><p id="no-files" hidden>По этим условиям файлы не найдены. Очистите поиск или фильтры.</p>
-{{range .Navigation.Files}}<details class="source-file" id="{{.ID}}" data-kind="{{.Kind}}" data-linked="{{if .Current}}yes{{else}}no{{end}}"><summary>{{.Path}}<small>{{.Kind}} · {{if .Current}}есть текущие связи{{else if .Evidence}}только исторические связи{{else}}нет записанных связей{{end}}</small></summary>
+{{range .Navigation.Files}}<details class="source-file" id="{{.ID}}" data-path="{{.Path}}" data-kind="{{.Kind}}" data-linked="{{if .Current}}yes{{else}}no{{end}}"><summary>{{.Path}}<small>{{.Kind}} · {{if .Current}}есть текущие связи{{else if .Evidence}}только исторические связи{{else}}нет записанных связей{{end}}</small></summary>
+<a class="editor-link" data-path="{{.Path}}" data-line="1" hidden>Открыть в редакторе</a>
 <p class="meta">{{.Bytes}} байт · SHA-256: <code>{{.SHA256}}</code></p>
-{{range .Evidence}}<div class="evidence" id="{{.ID}}"><h3>{{.Citation.Path}}:{{.Citation.LineStart}}–{{.Citation.LineEnd}}</h3><ul>{{range .Links}}<li><a href="#req-{{.RequirementID}}">{{.RequirementID}}</a> · {{.Origin}} · {{if .Current}}текущая привязка{{else}}история{{end}}{{if .TestID}} · test_id: <code>{{.TestID}}</code>{{end}}</li>{{end}}</ul><pre>{{.Citation.Quote}}</pre></div>{{else}}<p>Сохранённых цитат нет. Полный исходник не включён в HTML; это не заключение о его назначении или соответствии.</p>{{end}}
+{{range .Evidence}}<div class="evidence" id="{{.ID}}"><h3>{{.Citation.Path}}:{{.Citation.LineStart}}–{{.Citation.LineEnd}}</h3><a class="editor-link" data-path="{{.Citation.Path}}" data-line="{{.Citation.LineStart}}" hidden>Открыть строку в редакторе</a><ul>{{range .Links}}<li><a href="#req-{{.RequirementID}}">{{.RequirementID}}</a> · {{.Origin}} · {{if .Current}}текущая привязка{{else}}история{{end}}{{if .TestID}} · test_id: <code>{{.TestID}}</code>{{end}}</li>{{end}}</ul><pre>{{.Citation.Quote}}</pre></div>{{else}}<p>Сохранённых цитат нет. Полный исходник не включён в HTML; это не заключение о его назначении или соответствии.</p>{{end}}
 <a class="back" href="#files">↑ К списку файлов</a></details>{{end}}
 </section>
 <section id="executions"><h2>Фактические запуски</h2><p class="meta">Полная история. Связь с assertion по test_id — суждение роли/хоста, а не доказательство покрытия ветви.</p>
@@ -62,9 +85,73 @@
   'use strict';
   document.documentElement.classList.add('js');
   const byId = id => document.getElementById(id);
+  const editor = byId('editor'), theme = byId('theme'), codeRoot = byId('code-root'), specRoot = byId('spec-root');
+  const preferenceKey = 'spec-audit:editor:' + codeRoot.defaultValue;
+  const editorNames = {zed:'Zed', phpstorm:'PhpStorm', cursor:'Cursor', vscode:'VS Code'};
+  const kinds = new Map(Array.from(document.querySelectorAll('.source-file'), e => [e.dataset.path, e.dataset.kind]));
+  const editorLinks = Array.from(document.querySelectorAll('.editor-link'));
+  let storageWarning = '';
+  function stored(key) {
+    try { return JSON.parse(localStorage.getItem(key)); }
+    catch { storageWarning = 'Настройки не восстановлены: хранилище браузера недоступно или повреждено.'; return null; }
+  }
+  function save(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); }
+    catch { storageWarning = 'Выбор действует на этой странице, но браузер не разрешил его сохранить.'; }
+  }
+  function validPath(value, absolute) {
+    if (typeof value !== 'string' || !value || value.length > 4096 || /[\\\x00-\x1f\x7f]/.test(value)) return false;
+    if (absolute !== value.startsWith('/') || value.startsWith('//')) return false;
+    return (absolute && value === '/') || value.split('/').every((part, i) => (i === 0 && absolute) || (part !== '' && part !== '.' && part !== '..'));
+  }
+  const rootValue = input => input.value.trim().replace(/\/+$/, '') || (input.value.trim() === '/' ? '/' : '');
+  function editorURL(path, line) {
+    const kind = kinds.get(path), base = rootValue(kind === 'spec' ? specRoot : codeRoot);
+    if (!Object.hasOwn(editorNames, editor.value) || !kind || !validPath(base, true) || !validPath(path, false) || !/^[1-9]\d*$/.test(line) || !Number.isSafeInteger(Number(line))) return '';
+    if (kind === 'spec' && specRoot.dataset.prefix) {
+      if (!path.startsWith(specRoot.dataset.prefix)) return '';
+      path = path.slice(specRoot.dataset.prefix.length);
+    }
+    if (!validPath(path, false)) return '';
+    const absolute = base.replace(/\/$/, '') + '/' + path;
+    if (editor.value === 'phpstorm') return 'phpstorm://open?file=' + encodeURIComponent(absolute) + '&line=' + line;
+    // POSIX absolute path already begins with '/', do not insert a second slash after 'file'.
+    return editor.value + '://file' + absolute.split('/').map(encodeURIComponent).join('/') + ':' + line + ':1';
+  }
+  function applyPreferences(persist = false) {
+    document.documentElement.dataset.theme = ['light', 'dark'].includes(theme.value) ? theme.value : 'system';
+    let invalid = false;
+    for (const input of [codeRoot, specRoot]) {
+      const valid = validPath(rootValue(input), true);
+      input.setAttribute('aria-invalid', String(!valid)); invalid ||= !valid;
+    }
+    for (const link of editorLinks) {
+      const url = editorURL(link.dataset.path, link.dataset.line);
+      link.hidden = !url;
+      if (url) {link.setAttribute('href', url); link.textContent = 'Открыть в ' + editorNames[editor.value];}
+      else link.removeAttribute('href');
+    }
+    if (persist) {
+      save('spec-audit:theme', theme.value);
+      if (!invalid) save(preferenceKey, {editor:editor.value, codeRoot:rootValue(codeRoot), specRoot:rootValue(specRoot)});
+    }
+    byId('preferences-status').textContent = (invalid ? 'Исправьте путь: нужен абсолютный каталог без .., URL и управляющих символов. ' : editor.value ? 'Ссылки редактора доступны рядом с цитатами и в карточках файлов. ' : 'Выберите редактор, чтобы показать ссылки на локальные файлы. ') + storageWarning;
+  }
+  const saved = stored(preferenceKey), savedTheme = stored('spec-audit:theme');
+  if (saved && typeof saved === 'object') {
+    if (Object.hasOwn(editorNames, saved.editor)) editor.value = saved.editor;
+    if (validPath(saved.codeRoot, true)) codeRoot.value = saved.codeRoot;
+    if (validPath(saved.specRoot, true)) specRoot.value = saved.specRoot;
+  }
+  if (['system', 'light', 'dark'].includes(savedTheme)) theme.value = savedTheme;
+  for (const input of [editor, theme, codeRoot, specRoot]) input.addEventListener('input', () => applyPreferences(true));
+  byId('reset-preferences').addEventListener('click', () => {
+    editor.value = ''; theme.value = 'system'; codeRoot.value = codeRoot.defaultValue; specRoot.value = specRoot.defaultValue; applyPreferences(true);
+  });
+  applyPreferences();
   const rows = selector => Array.from(document.querySelectorAll(selector), element => ({element, text: element.textContent.toLocaleLowerCase()}));
   const requirements = rows('.requirement'), files = rows('.source-file');
-  const rq = byId('requirement-search'), rf = byId('requirement-filter'), rs = byId('scope-filter');
+  const rq = byId('requirement-search'), rf = byId('requirement-filter'), rs = byId('scope-filter'), section = byId('section-filter');
   const fq = byId('file-search'), fk = byId('file-kind'), fl = byId('file-links');
   function apply(rows, predicate, countId, emptyId, noun) {
     let count = 0;
@@ -74,19 +161,20 @@
   }
   function filterRequirements() {
     const query = rq.value.trim().toLocaleLowerCase();
-    apply(requirements, row => row.text.includes(query) && (!rf.value || row.element.dataset.flags.split(' ').includes(rf.value)) && (!rs.value || row.element.dataset.scope === rs.value), 'requirement-count', 'no-requirements', 'норм');
+    apply(requirements, row => row.text.includes(query) && (!rf.value || row.element.dataset.flags.split(' ').includes(rf.value)) && (!rs.value || row.element.dataset.scope === rs.value) && (!section.value || row.element.dataset.section === section.value), 'requirement-count', 'no-requirements', 'норм');
   }
   function filterFiles() {
     const query = fq.value.trim().toLocaleLowerCase();
     apply(files, row => row.text.includes(query) && (!fk.value || row.element.dataset.kind === fk.value) && (!fl.value || row.element.dataset.linked === fl.value), 'file-count', 'no-files', 'файлов');
   }
-  function resetRequirements() { rq.value = rf.value = rs.value = ''; filterRequirements(); }
+  function resetRequirements() { rq.value = rf.value = rs.value = section.value = ''; filterRequirements(); }
   function resetFiles() { fq.value = fk.value = fl.value = ''; filterFiles(); }
-  for (const input of [rq, rf, rs]) input.addEventListener('input', filterRequirements);
+  for (const input of [rq, rf, rs, section]) input.addEventListener('input', filterRequirements);
   for (const input of [fq, fk, fl]) input.addEventListener('input', filterFiles);
   byId('reset-requirements').addEventListener('click', resetRequirements);
   byId('reset-files').addEventListener('click', resetFiles);
   for (const button of document.querySelectorAll('[data-filter]')) button.addEventListener('click', () => {resetRequirements(); rf.value = button.dataset.filter; filterRequirements(); byId('requirements').scrollIntoView(); rf.focus({preventScroll:true});});
+  for (const button of document.querySelectorAll('button[data-section]')) button.addEventListener('click', () => {resetRequirements(); section.value = button.dataset.section; filterRequirements(); byId('requirements').scrollIntoView(); section.focus({preventScroll:true});});
   function reveal() {
     let id;
     try { id = decodeURIComponent(location.hash.slice(1)); } catch { return; }
@@ -106,9 +194,9 @@
 })();
 </script>
 </body></html>
-{{define "citation"}}<a href="#{{citationID .}}">{{.Path}}:{{.LineStart}}–{{.LineEnd}}</a>{{end}}
+{{define "citation"}}<a href="#{{citationID .}}">{{.Path}}:{{.LineStart}}–{{.LineEnd}}</a><a class="editor-link" data-path="{{.Path}}" data-line="{{.LineStart}}" hidden>Открыть в редакторе</a>{{end}}
 {{define "citations"}}<ul>{{range .}}<li>{{template "citation" .}}</li>{{end}}</ul>{{end}}
-{{define "assessment"}}<p>Норма: <span class="badge">{{.Specification}}</span> · Код: <span class="badge">{{.Implementation}}</span> · Assertion: <span class="badge">{{.Assertion}}</span></p><p>{{.Statement}}</p>
+{{define "assessment"}}<p>Норма: <span class="badge">{{.Specification}}</span> · Код: <span class="badge">{{.Implementation}}</span></p><p class="badge {{.Assertion}}">{{assertionLabel .Assertion}} ({{.Assertion}})</p><p class="meta">Тестовое свидетельство: {{if .Tests}}есть{{else}}не представлено{{end}}. Сила проверки — оценка автора, не результат запуска.</p><p>{{.Statement}}</p>
 {{if .Spec}}<h4>Спецификация</h4>{{template "citations" .Spec}}{{end}}
 {{if .Code}}<h4>Код</h4>{{template "citations" .Code}}{{end}}
 {{if .Tests}}<h4>Текст тестов — не факт исполнения</h4><ul>{{range .Tests}}<li><code>{{.TestID}}</code> · {{template "citation" .Citation}}</li>{{end}}</ul>{{end}}
