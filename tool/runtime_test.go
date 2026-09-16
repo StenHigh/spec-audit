@@ -224,6 +224,14 @@ func init() {
 				os.Exit(1)
 			case "slow":
 				os.Exit(124)
+			case "killed":
+				os.Exit(137)
+			case "huge_stderr":
+				chunk := strings.Repeat("e", 1<<16)
+				for i := 0; i < 80; i++ {
+					fmt.Fprint(os.Stderr, chunk)
+				}
+				os.Exit(1)
 			case "exit_2":
 				fmt.Print("Invalid configuration")
 				os.Exit(2)

@@ -145,10 +145,6 @@ final class FactCollector implements Collector
             'citation' => ['path' => $path, 'line_start' => $start, 'line_end' => $end, 'quote' => $quote],
             'syntax' => $syntax,
         ];
-        if (!$nameNode instanceof Identifier) {
-            return $base + ['name' => '{dynamic}', 'origin' => 'phpstan', 'resolution' => 'dynamic', 'receiver_type' => '', 'targets' => []];
-        }
-        $name = $nameNode->toString();
         if ($node instanceof Expr\StaticCall) {
             $receiver = $node->class instanceof Name
                 ? $scope->resolveTypeByName($node->class)
@@ -159,6 +155,11 @@ final class FactCollector implements Collector
                 $receiver = TypeCombinator::removeNull($receiver);
             }
         }
+        $receiverType = $receiver->describe(VerbosityLevel::typeOnly());
+        if (!$nameNode instanceof Identifier) {
+            return $base + ['name' => '{dynamic}', 'origin' => 'phpstan', 'resolution' => 'dynamic', 'receiver_type' => $receiverType, 'targets' => []];
+        }
+        $name = $nameNode->toString();
         $targets = [];
         $origin = 'phpstan';
         foreach ($receiver->getObjectClassReflections() as $class) {
@@ -191,7 +192,7 @@ final class FactCollector implements Collector
             'name' => $name,
             'origin' => $origin,
             'resolution' => $resolution,
-            'receiver_type' => $receiver->describe(VerbosityLevel::typeOnly()),
+            'receiver_type' => $receiverType,
             'targets' => $targets,
         ];
     }
@@ -209,7 +210,9 @@ final class FactCollector implements Collector
                 $reflection = $declaring->getNativeReflection()->getMethod($name);
                 $fileName = $reflection->getFileName();
                 $startLine = $reflection->getStartLine();
-                if (is_string($fileName) && $fileName !== '' && is_int($startLine) && $startLine > 0) {
+                if (is_string($fileName) && str_starts_with($fileName, 'phar://')) {
+                    $native = true; // объявление внутри phar анализатора (stubs) — как встроенное, без выдуманного файла
+                } elseif (is_string($fileName) && $fileName !== '' && is_int($startLine) && $startLine > 0) {
                     $rel = Paths::relative($fileName);
                     $file = $rel ?? $fileName;
                     $line = $startLine;

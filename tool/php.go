@@ -459,8 +459,8 @@ func leadingDigits(value string) string {
 }
 
 // serviceExec запускает служебный шаг внутри контейнера с собственным коротким таймаутом.
-func serviceExec(cfg Config, id string, env []string, stdin []byte, script string, arg string) (processResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), sdkServiceTimeout+2*time.Second)
+func serviceExec(parent context.Context, cfg Config, id string, env []string, stdin []byte, script string, arg string) (processResult, error) {
+	ctx, cancel := context.WithTimeout(parent, sdkServiceTimeout+2*time.Second)
 	defer cancel()
 	args := append(containerCommand(id, env...), "timeout", strconv.Itoa(int(sdkServiceTimeout/time.Second)), "php", "-r", script, "--", arg)
 	return runProcess(ctx, cfg, stdin, nil, "docker", args...)
@@ -519,7 +519,7 @@ func phpTyped(cfg Config, m Manifest, paths []string) (typedResult, error) {
 		env = append(env, laravelIsolationEnv...)
 	}
 	slog.Debug("php-typed: env", "keys", len(env))
-	preflight, err := serviceExec(cfg, id, env, nil, preflightPHP, profile)
+	preflight, err := serviceExec(ctx, cfg, id, env, nil, preflightPHP, profile)
 	if err != nil || preflight.incomplete || preflight.exitCode != 0 {
 		if message, known := preflightErrors[preflight.exitCode]; known && err == nil && !preflight.incomplete {
 			return result, errors.New(message)
@@ -530,14 +530,14 @@ func phpTyped(cfg Config, m Manifest, paths []string) (typedResult, error) {
 	workdir := "/tmp/spec-audit-" + rand.Text()
 	slog.Debug("php-typed: workspace", "suffix", strings.TrimPrefix(workdir, "/tmp/spec-audit-"))
 	cleanup := func() {
-		process, err := serviceExec(cfg, id, nil, nil, cleanupPHP, workdir)
+		process, err := serviceExec(context.Background(), cfg, id, nil, nil, cleanupPHP, workdir) // очистка выполняется и после таймаута analyse
 		if err != nil || process.incomplete || process.exitCode != 0 {
 			slog.Warn("php-typed: очистка workspace не удалась", "suffix", strings.TrimPrefix(workdir, "/tmp/spec-audit-"))
 		}
 	}
 	defer cleanup()
 	for name, content := range map[string][]byte{"sdk-typed.php": sdkTyped, "phpstan.neon": renderNeon(workdir, profile, extensionInstaller)} {
-		process, err := serviceExec(cfg, id, nil, content, setupPHP, workdir+"/"+name)
+		process, err := serviceExec(ctx, cfg, id, nil, content, setupPHP, workdir+"/"+name)
 		if err != nil || process.incomplete || process.exitCode != 0 {
 			return result, errors.New("php-typed: не удалось подготовить рабочую область")
 		}
@@ -631,6 +631,15 @@ func verifyTyped(body []byte, m Manifest, cfg Config, paths []string, lock []byt
 		return envelope, err
 	}
 	defer root.Close()
+	analysed := map[string]bool{}
+	for _, file := range envelope.Files {
+		analysed[file.Path] = true
+	}
+	for _, path := range paths {
+		if !analysed[path] {
+			return envelope, errors.New("SDK не проанализировал часть выбранных файлов")
+		}
+	}
 	sources, err := sdkSources(root, m, paths, envelope.Files)
 	if err != nil {
 		return envelope, err
@@ -684,7 +693,7 @@ func verifyFact(fact TypedFact, sources map[string][]byte) error {
 	if !oneOf(fact.Syntax, "Stmt_ClassMethod", "Expr_MethodCall", "Expr_StaticCall", "Expr_NullsafeMethodCall") || !oneOf(fact.Origin, "phpstan", "larastan") || !oneOf(fact.Resolution, "declared", "resolved", "ambiguous", "unresolved", "virtual", "dynamic") {
 		return errors.New("неверный тип SDK fact")
 	}
-	if fact.Name == "" || len(fact.Name) > maxSDKString || len(fact.ReceiverType) > maxReceiverType || !utf8.ValidString(fact.Name) || !utf8.ValidString(fact.ReceiverType) || (fact.Resolution == "dynamic") != (fact.Name == "{dynamic}") {
+	if fact.Name == "" || len(fact.Name) > maxSDKString || len(fact.ReceiverType) > maxReceiverType || !utf8.ValidString(fact.Name) || !utf8.ValidString(fact.ReceiverType) || (fact.Resolution == "dynamic") != (fact.Name == "{dynamic}") || (fact.ReceiverType == "") != (fact.Resolution == "declared") {
 		return errors.New("неверное имя или тип получателя SDK fact")
 	}
 	if len(fact.Targets) > maxTypedTargets {

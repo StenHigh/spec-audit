@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -272,6 +273,9 @@ func TestTypedBoundary(t *testing.T) {
 			"dynamic_ok": func(e *TypedEnvelope) {
 				e.Facts[1].Resolution, e.Facts[1].Name, e.Facts[1].Targets = "dynamic", "{dynamic}", []TypedTarget{}
 			},
+			"phar_target_native_ok": func(e *TypedEnvelope) {
+				e.Facts[1].Targets = []TypedTarget{{Class: "Stub", Method: "answer", Native: true}}
+			},
 		}
 		for name, mutate := range accepted {
 			if _, err := verifyTyped(f.body(t, mutate), f.manifest, f.cfg, []string{"Subject.php"}, lock); err != nil {
@@ -303,19 +307,39 @@ func TestTypedBoundary(t *testing.T) {
 			"dynamic_with_targets": func(e *TypedEnvelope) {
 				e.Facts[1].Resolution, e.Facts[1].Name = "dynamic", "{dynamic}"
 			},
-			"dynamic_wrong_name":       func(e *TypedEnvelope) { e.Facts[1].Resolution, e.Facts[1].Targets = "dynamic", []TypedTarget{} },
-			"unresolved_with_targets":  func(e *TypedEnvelope) { e.Facts[1].Resolution = "unresolved" },
-			"ambiguous_single":         func(e *TypedEnvelope) { e.Facts[1].Resolution = "ambiguous" },
-			"declared_two_targets":     func(e *TypedEnvelope) { e.Facts[0].Targets = append(e.Facts[1].Targets, e.Facts[1].Targets[0]) },
-			"line_without_file":        func(e *TypedEnvelope) { e.Facts[1].Targets[0].File = "" },
-			"file_without_line":        func(e *TypedEnvelope) { e.Facts[1].Targets[0].Line = 0 },
-			"target_traversal":         func(e *TypedEnvelope) { e.Facts[1].Targets[0].File = "../Subject.php" },
-			"target_mount_absolute":    func(e *TypedEnvelope) { e.Facts[1].Targets[0].File = containerMount + "/Subject.php" },
-			"syntax_unknown":           func(e *TypedEnvelope) { e.Facts[1].Syntax = "Expr_FuncCall" },
-			"origin_unknown":           func(e *TypedEnvelope) { e.Facts[1].Origin = "psalm" },
-			"resolution_unknown":       func(e *TypedEnvelope) { e.Facts[1].Resolution = "guessed" },
-			"name_empty":               func(e *TypedEnvelope) { e.Facts[1].Name = "" },
-			"receiver_too_long":        func(e *TypedEnvelope) { e.Facts[1].ReceiverType = strings.Repeat("x", maxReceiverType+1) },
+			"dynamic_wrong_name":        func(e *TypedEnvelope) { e.Facts[1].Resolution, e.Facts[1].Targets = "dynamic", []TypedTarget{} },
+			"unresolved_with_targets":   func(e *TypedEnvelope) { e.Facts[1].Resolution = "unresolved" },
+			"ambiguous_single":          func(e *TypedEnvelope) { e.Facts[1].Resolution = "ambiguous" },
+			"declared_two_targets":      func(e *TypedEnvelope) { e.Facts[0].Targets = append(e.Facts[1].Targets, e.Facts[1].Targets[0]) },
+			"line_without_file":         func(e *TypedEnvelope) { e.Facts[1].Targets[0].File = "" },
+			"file_without_line":         func(e *TypedEnvelope) { e.Facts[1].Targets[0].Line = 0 },
+			"target_traversal":          func(e *TypedEnvelope) { e.Facts[1].Targets[0].File = "../Subject.php" },
+			"target_mount_absolute":     func(e *TypedEnvelope) { e.Facts[1].Targets[0].File = containerMount + "/Subject.php" },
+			"syntax_unknown":            func(e *TypedEnvelope) { e.Facts[1].Syntax = "Expr_FuncCall" },
+			"origin_unknown":            func(e *TypedEnvelope) { e.Facts[1].Origin = "psalm" },
+			"resolution_unknown":        func(e *TypedEnvelope) { e.Facts[1].Resolution = "guessed" },
+			"name_empty":                func(e *TypedEnvelope) { e.Facts[1].Name = "" },
+			"receiver_too_long":         func(e *TypedEnvelope) { e.Facts[1].ReceiverType = strings.Repeat("x", maxReceiverType+1) },
+			"receiver_empty_for_call":   func(e *TypedEnvelope) { e.Facts[1].ReceiverType = "" },
+			"receiver_set_for_declared": func(e *TypedEnvelope) { e.Facts[0].ReceiverType = "Demo" },
+			"name_too_long":             func(e *TypedEnvelope) { e.Facts[1].Name = strings.Repeat("n", maxSDKString+1) },
+			"target_class_too_long":     func(e *TypedEnvelope) { e.Facts[1].Targets[0].Class = strings.Repeat("c", maxSDKString+1) },
+			"targets_over_limit": func(e *TypedEnvelope) {
+				e.Facts[1].Resolution = "ambiguous"
+				for i := 0; i <= maxTypedTargets; i++ {
+					e.Facts[1].Targets = append(e.Facts[1].Targets, TypedTarget{Class: fmt.Sprintf("C%d", i), Method: "answer", File: "Subject.php", Line: 3})
+				}
+			},
+			"facts_over_limit": func(e *TypedEnvelope) {
+				for len(e.Facts) <= maxTypedFacts {
+					e.Facts = append(e.Facts, e.Facts[0])
+				}
+			},
+			"basis_over_limit": func(e *TypedEnvelope) {
+				for i := 0; i <= maxBasisFiles; i++ {
+					e.Basis = append(e.Basis, SDKFile{fmt.Sprintf("vendor/x/%d.php", i), digest([]byte("x")), 1})
+				}
+			},
 			"profile_mismatch":         func(e *TypedEnvelope) { e.Profile = map[string]string{"php": "laravel", "laravel": "php"}[profile] },
 			"version":                  func(e *TypedEnvelope) { e.Version = "sdk/2" },
 			"evidence_kind":            func(e *TypedEnvelope) { e.EvidenceKind = "syntax_only" },
@@ -420,15 +444,30 @@ func TestTypedProcess(t *testing.T) {
 				t.Fatal("порядок шагов нарушен:", order)
 			}
 			joined := strings.Join(calls, "\n")
-			if strings.Contains(joined, "composer") || !strings.Contains(joined, "-e XDEBUG_MODE=off") || !strings.Contains(joined, "--autoload-file /tmp/spec-audit-") || !strings.Contains(joined, "--memory-limit="+sdkMemoryLimit) || !strings.Contains(joined, "timeout -s TERM -k 1 1 php") {
-				t.Fatal("команда анализа не соответствует контракту")
+			var analyse string
+			for _, call := range calls {
+				if strings.Contains(call, "vendor/bin/phpstan analyse") {
+					analyse = call
+				}
 			}
-			for _, pair := range laravelIsolationEnv {
-				if strings.Contains(joined, "-e "+pair) != (profile == "laravel") {
+			for _, want := range []string{"-e XDEBUG_MODE=off", "timeout -s TERM -k 1 1 php -d display_errors=stderr vendor/bin/phpstan analyse --error-format=json --no-progress --no-interaction --no-ansi --memory-limit=" + sdkMemoryLimit + " --autoload-file /tmp/spec-audit-", "/phpstan.neon -- Subject.php"} {
+				if !strings.Contains(analyse, want) {
+					t.Fatalf("команда анализа не соответствует контракту: нет %q в %q", want, analyse)
+				}
+			}
+			if strings.Contains(joined, "composer") || strings.Count(joined, "timeout 5 php -r") != 4 {
+				t.Fatal("служебные шаги должны идти через timeout 5 php -r без Composer")
+			}
+			isolation := []string{"DB_CONNECTION=spec_audit_disabled", "DB_URL=", "DATABASE_URL=", "REDIS_URL=", "DB_HOST=127.0.0.1", "DB_PORT=1", "REDIS_HOST=127.0.0.1", "REDIS_PORT=1", "CACHE_STORE=array", "CACHE_DRIVER=array", "QUEUE_CONNECTION=sync", "SESSION_DRIVER=array", "MAIL_MAILER=array", "BROADCAST_CONNECTION=null", "BROADCAST_DRIVER=null", "LOG_CHANNEL=stderr"}
+			if len(isolation) != len(laravelIsolationEnv) {
+				t.Fatal("контракт изоляции изменился без обновления теста")
+			}
+			for _, pair := range isolation {
+				if strings.Contains(analyse, "-e "+pair+" ") != (profile == "laravel") {
 					t.Fatal("изоляция bootstrap применяется только для laravel:", pair)
 				}
 			}
-			modes := map[string]string{"no_phpstan": "PHPStan не установлен", "config_cached": "закешированный config", "setup_fails": "рабочую область", "internal_error": "экспорт SDK не завершён", "empty_stdout": "экспорт SDK не завершён", "slow": "таймаут SDK", "exit_2": "экспорт SDK не завершён", "huge_output": "превышает лимит", "bootstrap_writes": "снимок изменился"}
+			modes := map[string]string{"no_phpstan": "PHPStan не установлен", "config_cached": "закешированный config", "setup_fails": "рабочую область", "internal_error": "экспорт SDK не завершён", "empty_stdout": "экспорт SDK не завершён", "slow": "таймаут SDK", "killed": "таймаут SDK", "exit_2": "экспорт SDK не завершён", "huge_output": "превышает лимит", "huge_stderr": "превышает лимит", "bootstrap_writes": "снимок изменился"}
 			if profile == "laravel" {
 				modes["no_larastan"] = "Larastan не установлен"
 			}
@@ -448,6 +487,10 @@ func TestTypedProcess(t *testing.T) {
 				if strings.Contains(after, "composer") {
 					t.Fatal(mode, "Composer не должен вызываться")
 				}
+			}
+			t.Setenv("SPEC_AUDIT_DOCKER_MODE", "cleanup_fails")
+			if _, err := phpTyped(f.cfg, f.manifest, []string{"Subject.php"}); err != nil {
+				t.Fatal("неудача очистки — WARN, не отказ:", err)
 			}
 			t.Setenv("SPEC_AUDIT_DOCKER_MODE", "")
 			if profile == "php" {
@@ -612,6 +655,20 @@ func TestTypedCLI(t *testing.T) {
 	runFail(t, "status", f.config, run)
 	runFail(t, "tasks", f.config, run)
 	writeFixture(t, artifact, data)
+	runOK(t, "status", f.config, run)
+	statePath := filepath.Join(f.base, "runs", run, "state.json")
+	stateBytes := readFixture(t, statePath)
+	for name, corrupt := range map[string][]byte{
+		"artifact_name": bytes.Replace(stateBytes, []byte(`"artifact": "sdk-typed-`), []byte(`"artifact": "../sdk-typed-`), 1),
+		"hash_format":   bytes.Replace(stateBytes, []byte(`"sha256": "`+record.SHA256+`"`), []byte(`"sha256": "XYZ"`), 1),
+	} {
+		if bytes.Equal(corrupt, stateBytes) {
+			t.Fatal("мутация state не применилась", name)
+		}
+		writeFixture(t, statePath, corrupt)
+		runFail(t, "status", f.config, run)
+	}
+	writeFixture(t, statePath, stateBytes)
 	runOK(t, "status", f.config, run)
 	// Отказ экспортёра не меняет state и не создаёт артефакт.
 	before := readFixture(t, filepath.Join(f.base, "runs", run, "state.json"))

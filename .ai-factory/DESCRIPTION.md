@@ -13,7 +13,7 @@
 - Go 1.27.0, стандартная библиотека, Goldmark для Markdown и `go.yaml.in/yaml/v3` для YAML; точные версии — [go.mod](../go.mod).
 - Локальный CLI для macOS/Linux; файловое состояние, без сервера и базы данных.
 - HTML/CSS/JavaScript встроены в бинарник; отчёту не нужны сеть и сервер.
-- PHP — только проектный SDK в проверенном Docker-контейнере. Сейчас `syntax_only`; PHPStan/Larastan — следующий этап, не готовая интеграция.
+- PHP — только проектный SDK в проверенном Docker-контейнере. `php-facts` — `syntax_only`; `php-typed` — PHPStan/Larastan-факты по [контракту](../docs/php-sdk-contract.md), подсказки для ролей и HTML, не связи.
 - AI Factory — локальное средство разработки. Node нужен его установщику/отдельным helper-командам, но не готовому spec-audit. Необязательный UI dev-check использует отдельно установленный Playwright/Chromium.
 
 ## Архитектура
