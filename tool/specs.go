@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -174,6 +175,24 @@ func initConfig(path string) error {
 	return closeErr
 }
 
+// scopeAdvisoryRequirements — рекомендуемый максимум норм на scope (tool-spec 20.1). Основание: 18 норм на 50 файлов
+// прошли сравнительный run без затруднений, 49 норм на 2509 файлов заняли 27–36 минут и 0,5–0,6 M токенов на роль;
+// 64 остаётся жёстким пределом §6. Эвристика по двум замерам, не измеренная граница качества.
+const scopeAdvisoryRequirements = 24
+
+// scopeAdvisories names every scope above the recommendation; the binary never splits norms itself (§6).
+func scopeAdvisories(m Manifest) []string {
+	advisories := []string{}
+	for _, scope := range m.Config.Scopes {
+		if len(scope.Requirements) > scopeAdvisoryRequirements {
+			advisories = append(advisories, fmt.Sprintf("scope %s: %d норм, %d файлов; §6: слишком большой scope требует осознанного деления (рекомендация ≤ %d норм)",
+				scope.ID, len(scope.Requirements), len(m.Files), scopeAdvisoryRequirements))
+			slog.Warn("scope содержит много норм", "scope", scope.ID, "requirements", len(scope.Requirements), "files", len(m.Files), "advisory", scopeAdvisoryRequirements)
+		}
+	}
+	return advisories
+}
+
 func indexConfig(cfg Config) (any, error) {
 	m, err := snapshot(cfg)
 	if err != nil {
@@ -183,9 +202,13 @@ func indexConfig(cfg Config) (any, error) {
 	if m.Accepted != nil {
 		basis = "accepted_requirements_only"
 	}
-	return map[string]any{"snapshot_id": m.SnapshotID, "profile": m.Profile, "requirements": m.Requirements, "files": m.Files,
+	index := map[string]any{"snapshot_id": m.SnapshotID, "profile": m.Profile, "requirements": m.Requirements, "files": m.Files,
 		"completeness_basis": basis, "semantic_completeness_proven": false, "accepted": m.Accepted,
-		"project_root": filepath.Clean(cfg.ProjectRoot)}, nil
+		"project_root": filepath.Clean(cfg.ProjectRoot)}
+	if advisories := scopeAdvisories(m); len(advisories) > 0 {
+		index["advisories"] = advisories
+	}
+	return index, nil
 }
 
 const defaultConfig = `version: 1

@@ -1108,6 +1108,7 @@ func execute(args []string) (any, error) {
 		if len(m.Requirements) == 0 {
 			return nil, errors.New("нет объявленных требований; это не доказательство отсутствия обязанностей")
 		}
+		scopeAdvisories(m)
 		// Check serialized bounds before publishing a new run directory.
 		body, err := json.MarshalIndent(m, "", "  ")
 		if err != nil || len(body)+1 > maxState {
