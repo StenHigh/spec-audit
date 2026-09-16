@@ -698,3 +698,79 @@ func TestReconcileApplyView(t *testing.T) {
 	}
 	writeFixture(t, rules, prior)
 }
+
+// referenceFixture — accepted-корпус с одним справочным файлом (tool-spec §20, REQ-SA-041).
+func referenceFixture(t *testing.T) (string, string) {
+	t.Helper()
+	config, base := acceptedFixture(t)
+	writeFixture(t, filepath.Join(base, "source/clarification.md"), []byte("# Уточнение\nУсловия исходной нормы сохраняются.\nСрок задержки определяется договором.\n"))
+	writeFixture(t, config, append(readFixture(t, config), []byte("references: {paths: [clarification.md]}\n")...))
+	return config, base
+}
+
+func TestReferenceSources(t *testing.T) {
+	t.Run("config", func(t *testing.T) {
+		config, base := referenceFixture(t)
+		cfg, err := loadConfig(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, err := scanSnapshot(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		flagged := map[string]bool{}
+		for _, file := range m.Files {
+			flagged[file.Path] = file.Reference
+			if file.Reference && file.Kind != "spec" {
+				t.Fatal("справочный файл должен оставаться kind=spec", file)
+			}
+		}
+		if !flagged["clarification.md"] || flagged["rules.md"] || flagged["source.go"] {
+			t.Fatal("признак reference расставлен неверно", flagged)
+		}
+		withReferences, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(withReferences, []byte(`"references":{`)) || !bytes.Contains(withReferences, []byte(`"reference":true`)) {
+			t.Fatal("manifest не показывает группу references")
+		}
+		plain := cfg
+		plain.References = nil
+		pm, err := scanSnapshot(plain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		without, err := json.Marshal(pm)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(without, []byte("reference")) || bytes.Equal(withReferences, without) {
+			t.Fatal("без группы manifest должен остаться прежним и отличаться от manifest с группой")
+		}
+		// REQ-SA-041: только accepted-режим, непустой paths, файл в одной категории, непустая группа.
+		for name, mutate := range map[string]func([]byte) []byte{
+			"declared": func(c []byte) []byte { return bytes.Replace(c, []byte("index_mode: accepted\n"), nil, 1) },
+			"empty_paths": func(c []byte) []byte {
+				return bytes.Replace(c, []byte("references: {paths: [clarification.md]}"), []byte("references: {paths: []}"), 1)
+			},
+			"overlap": func(c []byte) []byte {
+				return bytes.Replace(c, []byte("references: {paths: [clarification.md]}"), []byte("references: {paths: [rules.md]}"), 1)
+			},
+			"no_files": func(c []byte) []byte {
+				return bytes.Replace(c, []byte("references: {paths: [clarification.md]}"), []byte("references: {paths: [clarification.md], include: ['*.txt']}"), 1)
+			},
+		} {
+			broken := filepath.Join(base, name+".yaml")
+			writeFixture(t, broken, mutate(readFixture(t, config)))
+			cfg, err := loadConfig(broken)
+			if err == nil {
+				_, err = scanSnapshot(cfg)
+			}
+			if err == nil {
+				t.Fatalf("%s: конфигурация должна быть отклонена", name)
+			}
+		}
+	})
+}
