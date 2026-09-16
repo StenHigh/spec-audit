@@ -40,6 +40,7 @@ AI Factory нужен только для разработки spec-audit, не 
 | [tool/](tool/) | Единственная поддерживаемая реализация и её регрессии |
 | [PHP/Laravel SDK: §17](docs/tool-spec.md#17-php-и-laravel-sdk) | Статус этапа, требования SA-031…034; детали — в контракте расширения |
 | [Поставка: §18](docs/tool-spec.md#18-поставка-версия-обновление-и-установка-skill) | Подписанный релиз, `update`, `install.sh`, `skill install|update`, автомат состояний; релиз — README «Релиз» |
+| [Уроки чистой сессии: §19](docs/tool-spec.md#19-уроки-чистой-сессии-проверка-ответа-роли-провенанс-версии-ответ-reconcile) | `validate` без записи, журнал версий `tool-versions.json`, ответ `reconcile` после apply, протокол роли |
 | [docs/php-sdk-contract.md](docs/php-sdk-contract.md) | Контракт typed SDK: `php-typed`, формат `sdk/3`, изоляция bootstrap, подсказки в отчёте |
 | [docs/accepted-index.md](docs/accepted-index.md) | Принятие кандидатов, ID, редакции, reconcile |
 | [docs/legacy-extraction.md](docs/legacy-extraction.md) | Формат извлечения из обычного Markdown и ограничения эксперимента |
