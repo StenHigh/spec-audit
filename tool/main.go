@@ -15,6 +15,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -933,8 +934,21 @@ func execute(args []string) (any, error) {
 		}
 		return indexConfig(cfg)
 	}
+	if len(args) > 0 && args[0] == "skill" {
+		return runSkillCommand(args[1:], version)
+	}
+	if len(args) == 1 && args[0] == "version" {
+		return runVersion(), nil
+	}
+	if len(args) == 1 && args[0] == "update" {
+		exe, err := os.Executable()
+		if err != nil {
+			return nil, err
+		}
+		return runUpdate(&http.Client{Timeout: releaseTimeout}, releaseBaseURL, exe, version, releasePublicKeyHex)
+	}
 	if len(args) < 3 {
-		return nil, errors.New("команды: init/index CONFIG; reconcile CONFIG [RAW DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION]; submit/retry/test/php-facts/php-typed CONFIG RUN_ID ...")
+		return nil, errors.New("команды: init/index CONFIG; reconcile CONFIG [RAW DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION]; submit/retry/test/php-facts/php-typed CONFIG RUN_ID ...; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]")
 	}
 	command, runID := args[0], args[2]
 	argc := map[string]int{"prepare": 3, "tasks": 3, "status": 3, "report": 3, "review": -2, "submit": 5, "retry": 4, "test": 4, "php-facts": -1, "php-typed": -1}
