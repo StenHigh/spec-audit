@@ -157,7 +157,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) §17 (REQ-SA-031…034),
   - Logging: тест проверяет отсутствие утечек при DEBUG.
   - REQ: REQ-SA-033, REQ-SA-034, REQ-SA-015
 
-- [ ] Task 10: Пилотная отладка `php-typed` на SMSPlace (разрешение владельца 2026-09-16)
+- [x] Task 10: Пилотная отладка `php-typed` на SMSPlace (разрешение владельца 2026-09-16)
   - Deliverable: CONFIG `.local/daily-smsplace/pricing-factor-sdk.yaml` — копия `pricing-factor.yaml` с тем же внешним `reports_dir: pricing-factor-reports` (принятый индекс `._accepted-index.json` остаётся действующим: `acceptedFresh` зависит только от spec-файлов, `tool/accepted.go:265-281`), `runtime: {kind: docker-php, service: app}`, `code.paths` + `composer.lock`, `code.include: ['*.php', 'composer.lock']`. Отдельный RUN_ID на каждый вариант блока `sdk` (блок входит в snapshot_id): `sdk-debug-php` (`profile: php`), `sdk-debug-laravel` (`profile: laravel, timeout_seconds: 600`). `CGO_ENABLED=0 go build -o bin/spec-audit ./tool`; `prepare` каждого run; `php-typed` на 8/32/64 файлах scope (код + тесты); фиксация времени, памяти, facts/diagnostics, распределения `resolution`, выборочная ручная проверка 5 фактов каждого resolution против исходников → `.local/daily-smsplace/sdk-debug/notes-<date>.json`; дефекты → исправления T5–T8 и новые синтетические case (без бизнес-имён). Сырые envelope и stderr — только в `.local/`.
   - Files: `.local/daily-smsplace/pricing-factor-sdk.yaml`, `.local/daily-smsplace/sdk-debug/notes-<date>.json`, `bin/spec-audit`, `tool/php.go`, `tool/sdk-typed.php`
   - Depends: 9
@@ -167,7 +167,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) §17 (REQ-SA-031…034),
 <!-- Commit checkpoint: tasks 8-10 -->
 
 ### Phase 3: Факты до ролей и навигации, приёмка SA-031…034 на синтетике (§17.2 п.3)
-- [ ] Task 11: Протокол хоста и ролей для подсказок SDK
+- [x] Task 11: Протокол хоста и ролей для подсказок SDK
   - Deliverable: `skills/spec-audit/SKILL.md` п.5: `php-typed` требует явного разрешения хоста; для профиля laravel — отдельного разрешения framework bootstrap и проверки, что fail-fast изоляция соответствует среде проекта; без разрешения — без SDK с явной лимитацией; импорт фактов — до `review` (иначе review станет outdated). Новый п.2a: хост читает `TaskBatch.sdk`, открывает артефакт, фильтрует факты по FILES роли (`jq`) и передаёт роли `SDK_HINTS` (JSON) с пометкой «подсказки анализатора: не цитаты, не assertions, не доказательство relevant/missing; цитируй исходники сам». `references/protocol.txt`: абзац о `SDK_HINTS` (использовать для поиска реализации за интерфейсом и кандидатов тестов; одноимённый метод другого класса — не цель; общий helper — контекст, не подмена; ambiguous/virtual/unresolved — явная неизвестность). Никаких путей пилота.
   - Files: `skills/spec-audit/SKILL.md`, `skills/spec-audit/references/protocol.txt`
   - Depends: 8
@@ -175,7 +175,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) §17 (REQ-SA-031…034),
   - Logging: нет (документ).
   - REQ: REQ-SA-032, REQ-SA-034, REQ-SA-018, REQ-SA-017
 
-- [ ] Task 12: Подсказки SDK в навигации и HTML с явным происхождением
+- [x] Task 12: Подсказки SDK в навигации и HTML с явным происхождением
   - Deliverable: `Report.SDK []SDKRecord json:"sdk,omitempty"` и `Report.SDKFacts []TypedFact json:"-"`, загружаемые в `case "report"` (`readRoot` с `maxResult` + digest + `strictJSON`; несовпадение хэша — отказ чтения run как для raw; верный хэш при неразборчивом содержимом → лимитация «артефакт SDK недоступен», без подсказок). `NavigationHint{Citation, Origin, Current}`, `NavigationFile.SDK []NavigationHint json:"sdk,omitempty"`; в `buildNavigation` после цикла требований — подсказки к файлам manifest (`Origin` = «sdk · <origin> · <resolution> · <name> → <targets текстом; «вне snapshot» для файлов вне manifest>», `Current = fresh`), сортировка по строке; `file.Current`, `Unlinked`, `Links`, `AuditMetrics` не трогаются. `tool/report.html`: в карточке файла блок `<h3>Подсказки SDK</h3>` с `<span class="badge">подсказка SDK</span>`; в `<summary>` файла «· N подсказок SDK»; в `#history` `<details>` «SDK-факты» (profile, версии PHPStan/Larastan, composer_lock/sdk sha, files/facts, limitations «сеть не изолирована инструментом», «mount rw», «двойной bootstrap/worker», «дополнительные bootstrap расширений» «сеть не изолирована», «mount rw»); при `Report.SDK == nil` — строка «SDK-факты не импортированы; связи только из цитат ролей и хоста». Лимитация отчёта: «Подсказки SDK не являются связями и не входят в метрики». Тест `TestTypedNavigation` (каркас `tool/report_test.go:194-231`).
   - Files: `tool/report.go`, `tool/report.html`, `tool/main.go`, `tool/report_test.go`
   - Depends: 8

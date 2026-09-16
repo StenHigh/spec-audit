@@ -214,6 +214,7 @@ type Report struct {
 	SemanticCompletenessProven bool                `json:"semantic_completeness_proven"`
 	HostReview                 *ReviewSummary      `json:"host_review,omitempty"`
 	RawProvenance              []RawProvenance     `json:"raw_provenance"`
+	SDK                        *SDKSummary         `json:"sdk,omitempty"`
 	Navigation                 ReportNavigation    `json:"navigation"`
 }
 
@@ -1092,6 +1093,7 @@ func execute(args []string) (any, error) {
 		if view.State == "current" {
 			report.Conclusion = "Хост согласовал результаты по текущим свидетельствам. Это его обоснованная оценка, не автоматическое соответствие или доказательство полноты ТЗ."
 		}
+		report.SDK = loadSDKSummary(run, state.SDK)
 		buildNavigation(&report, m)
 		var html bytes.Buffer
 		if err := reportTemplate.Execute(&html, report); err != nil {

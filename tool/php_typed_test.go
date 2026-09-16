@@ -674,3 +674,154 @@ func TestTypedNoLeak(t *testing.T) {
 		t.Fatal("ожидаемые события журнала отсутствуют")
 	}
 }
+
+func TestTypedNavigation(t *testing.T) {
+	c := Citation{"TZ/section.md", 1, 3, "requirement"}
+	m := Manifest{Config: Config{ProjectRoot: "/work/project"}, Files: []SourceFile{
+		{Path: c.Path, Kind: "spec"}, {Path: "src/Helper.php", Kind: "code"}, {Path: "src/Service.php", Kind: "code"}, {Path: "tests/ServiceTest.php", Kind: "tests"},
+	}}
+	build := func(freshness string, facts []TypedFact, withSDK bool) Report {
+		r := Report{Status: Status{Freshness: freshness}, HostReview: &ReviewSummary{State: "current", Latest: &ReviewDecision{ReviewID: "host"}}}
+		req := Requirement{ID: "REQ-NAV-001", Source: c}
+		a := Assessment{RequirementID: req.ID, Specification: "clear", Implementation: "supported", Assertion: "weak",
+			Code:  []Citation{{"src/Service.php", 10, 10, "public function save(): void"}},
+			Tests: []TestCitation{{TestID: "ServiceTest::testSave", Citation: Citation{"tests/ServiceTest.php", 20, 20, "$this->assertTrue(true);"}}}}
+		r.Requirements = []RequirementReport{{Requirement: req}}
+		r.HostReview.Latest.Assessments = []Assessment{a}
+		if withSDK {
+			r.SDK = &SDKSummary{Records: []SDKRecord{{Artifact: "sdk-typed-A.json", SHA256: digest([]byte("a")), PHPStanVersion: "2.2.1"}}, Available: true, Profile: "php", Files: 2, Facts: len(facts), Limitations: sdkLimitations, facts: facts}
+		}
+		buildNavigation(&r, m)
+		return r
+	}
+	injected := "Foo</pre><script>alert(1)</script>"
+	facts := []TypedFact{
+		{Citation: Citation{"tests/ServiceTest.php", 19, 19, "$service->save();"}, Syntax: "Expr_MethodCall", Name: "save", Origin: "phpstan", Resolution: "resolved", ReceiverType: "App\\Service", Targets: []TypedTarget{{Class: "App\\Service", Method: "save", File: "src/Service.php", Line: 10}}},
+		{Citation: Citation{"src/Service.php", 10, 10, "public function save(): void"}, Syntax: "Stmt_ClassMethod", Name: injected, Origin: "phpstan", Resolution: "declared", Targets: []TypedTarget{}},
+		{Citation: Citation{"src/Service.php", 12, 12, "$this->helper()->run();"}, Syntax: "Expr_MethodCall", Name: "run", Origin: "larastan", Resolution: "virtual", ReceiverType: "<img src=x onerror=alert(1)>", Targets: []TypedTarget{{Class: "<img src=x onerror=alert(1)>", Method: "run"}}},
+		{Citation: Citation{"src/Service.php", 14, 14, "$vendor->call();"}, Syntax: "Expr_MethodCall", Name: "call", Origin: "phpstan", Resolution: "resolved", Targets: []TypedTarget{{Class: "Vendor\\Lib", Method: "call", File: "vendor/lib/Lib.php", Line: 3, Interface: true}}},
+		{Citation: Citation{"unknown/Other.php", 1, 1, "x"}, Syntax: "Expr_MethodCall", Name: "x", Origin: "phpstan", Resolution: "unresolved", Targets: []TypedTarget{}},
+		{Citation: Citation{"src/Helper.php", 5, 5, "public static function make(): Service"}, Syntax: "Stmt_ClassMethod", Name: "make", Origin: "phpstan", Resolution: "declared", Targets: []TypedTarget{}},
+	}
+	plain := build("fresh", nil, false)
+	withHints := build("fresh", facts, true)
+	if withHints.Navigation.Metrics != plain.Navigation.Metrics || withHints.Navigation.Sections[0].AuditMetrics != plain.Navigation.Sections[0].AuditMetrics {
+		t.Fatal("подсказки SDK не должны менять метрики")
+	}
+	if withHints.Navigation.Metrics.Weak != 1 || withHints.Navigation.Metrics.Ready != 0 {
+		t.Fatal("слабый assertion остаётся weak несмотря на подсказку", withHints.Navigation.Metrics)
+	}
+	byPath := map[string]NavigationFile{}
+	for _, file := range withHints.Navigation.Files {
+		byPath[file.Path] = file
+	}
+	if len(byPath["src/Service.php"].SDK) != 3 || len(byPath["tests/ServiceTest.php"].SDK) != 1 || len(byPath["src/Helper.php"].SDK) != 1 || byPath["src/Helper.php"].Current || len(byPath["TZ/section.md"].SDK) != 0 {
+		t.Fatal("подсказки должны распределяться по файлам manifest", byPath)
+	}
+	for path, file := range byPath {
+		plainFile := NavigationFile{}
+		for _, candidate := range plain.Navigation.Files {
+			if candidate.Path == path {
+				plainFile = candidate
+			}
+		}
+		if file.Current != plainFile.Current || len(file.Evidence) != len(plainFile.Evidence) || len(withHints.Navigation.Groups) != len(plain.Navigation.Groups) {
+			t.Fatal("подсказки не должны менять связи и has_current_links", path)
+		}
+	}
+	for i := range plain.Navigation.Groups {
+		if plain.Navigation.Groups[i].Files != withHints.Navigation.Groups[i].Files || plain.Navigation.Groups[i].Unlinked != withHints.Navigation.Groups[i].Unlinked {
+			t.Fatal("подсказки не должны менять счётчики групп")
+		}
+	}
+	hint := byPath["src/Service.php"].SDK[2]
+	if !strings.Contains(hint.Origin, "vendor/lib/Lib.php:3 (вне snapshot) interface") || !hint.Current {
+		t.Fatal("цель вне snapshot должна быть помечена", hint.Origin)
+	}
+	if got := byPath["src/Service.php"].SDK[1].Origin; !strings.Contains(got, "virtual") || !strings.Contains(got, "@ virtual") {
+		t.Fatal("виртуальная цель без файла", got)
+	}
+	stale := build("stale", facts, true)
+	for _, file := range stale.Navigation.Files {
+		for _, hint := range file.SDK {
+			if hint.Current {
+				t.Fatal("подсказки stale run не могут быть текущими")
+			}
+		}
+	}
+	// HTML: экранирование имён из envelope и явные фразы о происхождении.
+	var page bytes.Buffer
+	if err := reportTemplate.Execute(&page, withHints); err != nil {
+		t.Fatal(err)
+	}
+	html := page.String()
+	if strings.Contains(html, injected) || strings.Contains(html, "<img src=x") || strings.Count(html, "<script>") != 1 || !strings.Contains(html, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Fatal("имена из envelope должны экранироваться")
+	}
+	for _, want := range []string{"подсказка SDK", "3 подсказок SDK", "SDK-факты — php", "Подсказки SDK не являются связями", "нет записанных связей · 1 подсказок SDK"} {
+		if !strings.Contains(html, want) {
+			t.Fatal("в HTML нет", want)
+		}
+	}
+	checkReportAnchors(t, page.Bytes())
+	page.Reset()
+	if err := reportTemplate.Execute(&page, plain); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(page.String(), "SDK-факты не импортированы; связи только из цитат ролей и хоста") || strings.Contains(page.String(), "подсказка SDK") {
+		t.Fatal("отчёт без SDK должен явно сообщать об отсутствии фактов")
+	}
+	// Повреждённый артефакт: отчёт строится с лимитацией и без подсказок.
+	dir := t.TempDir()
+	run, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Close()
+	writeFixture(t, filepath.Join(dir, "sdk-typed-B.json"), []byte("{not json"))
+	summary := loadSDKSummary(run, []SDKRecord{{Artifact: "sdk-typed-B.json", SHA256: digest([]byte("{not json"))}})
+	if summary == nil || summary.Available || len(summary.facts) != 0 || !strings.Contains(strings.Join(summary.Limitations, " "), "недоступен") {
+		t.Fatal("повреждённый артефакт должен давать лимитацию", summary)
+	}
+	if loadSDKSummary(run, nil) != nil {
+		t.Fatal("без записей сводки нет")
+	}
+}
+
+func TestTypedReportEndToEnd(t *testing.T) {
+	f := newTypedFixture(t, "php")
+	f.mockDocker(t, phpstanJSON(t, f.body(t, nil), 0, nil))
+	const run = "typed-report"
+	runOK(t, "prepare", f.config, run)
+	runOK(t, "report", f.config, run)
+	plain := readFixture(t, filepath.Join(f.base, "runs", run, "report.json"))
+	if bytes.Contains(plain, []byte(`"sdk"`)) {
+		t.Fatal("report.json без импорта не должен содержать sdk")
+	}
+	runOK(t, "php-typed", f.config, run, "Subject.php")
+	runOK(t, "report", f.config, run)
+	var report Report
+	if err := json.Unmarshal(readFixture(t, filepath.Join(f.base, "runs", run, "report.json")), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.SDK == nil || !report.SDK.Available || report.SDK.Facts != 2 || report.SDK.Profile != "php" || len(report.SDK.Records) != 1 {
+		t.Fatalf("сводка SDK в отчёте: %+v", report.SDK)
+	}
+	hints := 0
+	for _, file := range report.Navigation.Files {
+		if file.Path == "Subject.php" {
+			hints = len(file.SDK)
+			if file.Current || len(file.Evidence) != 0 {
+				t.Fatal("подсказки не создают связей")
+			}
+		}
+	}
+	if hints != 2 {
+		t.Fatal("две подсказки для Subject.php", hints)
+	}
+	html := readFixture(t, filepath.Join(f.base, "runs", run, "report.html"))
+	if !bytes.Contains(html, []byte("подсказка SDK")) || !bytes.Contains(html, []byte("SDK-факты — php")) || !bytes.Contains(html, []byte("$demo-&gt;answer();")) {
+		t.Fatal("HTML должен показывать подсказки с экранированной цитатой")
+	}
+	checkReportAnchors(t, html)
+}
