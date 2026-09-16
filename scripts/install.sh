@@ -32,7 +32,7 @@ else
 fi
 
 tmp=$(mktemp -d)
-staged="$dest/.spec-audit.staged.$$"
+staged=""
 cleanup() { rm -rf "$tmp" "$staged"; }
 trap cleanup 0 HUP INT TERM
 
@@ -46,7 +46,9 @@ curl --fail --location --silent --show-error "$base/$asset" -o "$tmp/$asset" || 
 actual=$(sha "$tmp/$asset")
 [ "$actual" = "$expected" ] || fail "sha256 скачанного файла не совпадает с манифестом; установка отменена"
 
+[ ! -d "$dest/spec-audit" ] || fail "$dest/spec-audit — каталог; удалите его или задайте SPEC_AUDIT_INSTALL_DIR"
 mkdir -p "$dest"
+staged=$(mktemp "$dest/.spec-audit.staged.XXXXXX") || fail "не удалось создать файл в $dest"
 cp "$tmp/$asset" "$staged"
 chmod 755 "$staged"
 mv -f "$staged" "$dest/spec-audit"

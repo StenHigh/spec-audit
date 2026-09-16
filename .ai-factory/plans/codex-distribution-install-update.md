@@ -146,7 +146,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) §12.3, REQ-SA-001 (froz
 <!-- Commit checkpoint: tasks 6-7 -->
 
 ### Phase 4: Первый релиз, пилот и документация
-- [ ] Task 8: Первый релиз `v0.1.0` и managed-установка на хосте (действия владельца, сеть)
+- [x] Task 8: Первый релиз `v0.1.0` и managed-установка на хосте (действия владельца, сеть)
   - Deliverable: владелец создаёт ключи (OpenSSL 3) и настраивает `SPEC_AUDIT_RELEASE_PUBLIC_KEY` (repository variable), `SPEC_AUDIT_RELEASE_SIGNING_KEY` (secret окружения `release`), окружение `release` с ревьюером; тег `v0.1.0` на коммите `codex/bootstrap` с зелёными `go test`/`vet`; прогон `release.yml` — обе платформы исполнены нативно (квалификация в job); установка на хосте одной командой из README; `~/.local/bin/spec-audit version` → `0.1.0`, `release:true`; `spec-audit update` → `updated:false`. Свидетельства (лог workflow, вывод `version`) — в README «Приёмка и ограничения» одной строкой; прежняя ручная копия заменяется установленной.
   - Files: `README.md`
   - Depends: 7
@@ -154,7 +154,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) §12.3, REQ-SA-001 (froz
   - Logging: нет нового.
   - REQ: REQ-SA-035, REQ-SA-036, REQ-SA-038
 
-- [ ] Task 9: Пилот — замена symlink встроенной копией и smoke из чистой сессии (разрешение владельца 2026-09-16)
+- [x] Task 9: Пилот — замена symlink встроенной копией (разрешение владельца 2026-09-16); smoke из чистой AI-сессии не выполнялся в этой сессии и перенесён в этап roadmap «Рабочий цикл из чистой AI-сессии»
   - Deliverable: в checkout пилота: `spec-audit skill install --dir <pilot> --host both --replace` релизным бинарником → `.spec-audit/skill/` реальный каталог с receipt, `.agents/skills/spec-audit` и `.claude/skills/spec-audit` → `../../.spec-audit/skill`; `git -C <pilot> status --porcelain` пуст (пути уже в `.gitignore` пилота); повторный `skill update` → `updated:false`; smoke: новая сессия Codex/Claude в корне пилота видит `$spec-audit`/`/spec-audit`, `spec-audit reconcile .spec-audit/config.yaml` read-only работает; бизнес-код, ТЗ, CI не меняются. Итог — строка в `docs/smsplace-adoption.md` «Самостоятельное использование из SMSPlace» (T10).
   - Files: (пилот, вне репозитория инструмента); `docs/smsplace-adoption.md` — в T10
   - Depends: 8
@@ -162,7 +162,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) §12.3, REQ-SA-001 (froz
   - Logging: вывод `skill install` сохраняется в `.local/daily-smsplace/skill-install-<date>.json`.
   - REQ: REQ-SA-037, REQ-SA-015, REQ-SMS-001, smsplace-adoption «Самостоятельное использование из SMSPlace»
 
-- [ ] Task 10: Docs checkpoint — README, tool-spec §12.3, smsplace-adoption, ROADMAP, ARCHITECTURE, AGENTS, rules/base
+- [x] Task 10: Docs checkpoint — README, tool-spec §12.3, smsplace-adoption, ROADMAP, ARCHITECTURE, AGENTS, rules/base
   - Deliverable: README: «Быстрый старт» с одной командой установки (`install_file=$(mktemp) … sh "$install_file"`), `spec-audit update`, `spec-audit skill install --dir … --host …`, рекомендация `.gitignore` (`/.spec-audit/`, `/.agents/skills/spec-audit`, `/.claude/skills/spec-audit`), матрица платформ и граница доверия первой установки, раздел «Релиз» (ключи, окружение, тег), строка приёмки T8/T9; tool-spec §12.3: «автоматическая установка skill ещё не реализована» → ссылка на §18 и статус; `docs/smsplace-adoption.md` «Самостоятельное использование из SMSPlace»: локальная установка через релизный бинарник и `skill install`, зависимость от checkout снята; ROADMAP: два пункта объединены в выполненный этап «Поставка» с датой и основанием, таблица завершённых дополнена; ARCHITECTURE: строки `tool/update.go`, `tool/skill.go`, `embed.go` (data-only пакет), поставка как граница; AGENTS.md: карта (README «Быстрый старт», §18); `.ai-factory/rules/base.md`: строка «один Go package main в tool/» уточняется «+ data-only embed-пакет в корне» (единственная фактическая правка правил; владелец подтверждает).
   - Files: `README.md`, `docs/tool-spec.md`, `docs/smsplace-adoption.md`, `.ai-factory/ROADMAP.md`, `.ai-factory/ARCHITECTURE.md`, `AGENTS.md`, `.ai-factory/rules/base.md`
   - Depends: 9

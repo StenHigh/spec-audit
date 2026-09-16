@@ -36,8 +36,8 @@ jobs:
           test "$(uname -s | tr '[:upper:]' '[:lower:]')" = "${{ matrix.os }}"
           case "$(uname -m)" in x86_64) arch=amd64 ;; *) arch=$(uname -m) ;; esac
           test "$arch" = "${{ matrix.arch }}"
-      - name: Public key variable is configured
-        run: test "${#PUB}" -eq 64
+      - name: Public key variable is 64 hex characters
+        run: test "${#PUB}" -eq 64 && test -z "$(printf %s "$PUB" | tr -d 0-9a-f)"
       - name: Tests and vet
         run: |
           go version
@@ -61,10 +61,12 @@ jobs:
           tmp=$(mktemp -d)
           "$bin" skill install --dir "$tmp" --host both | jq -e '.updated == true'
           "$bin" skill update --dir "$tmp" --host both | jq -e '.updated == false'
-          # update против прежнего latest не должен трогать собранный бинарник: отказ или updated:false.
-          before=$(shasum -a 256 "$bin" | cut -d' ' -f1)
-          if "$bin" update > update.json; then jq -e '.updated == false' update.json; fi
-          test "$(shasum -a 256 "$bin" | cut -d' ' -f1)" = "$before"
+          # update идёт по подписанному пути только у файла с именем spec-audit: копия против прежнего latest
+          # не должна измениться (отказ или updated:false).
+          cp "$bin" "$tmp/spec-audit"
+          before=$(shasum -a 256 "$tmp/spec-audit" | cut -d' ' -f1)
+          if "$tmp/spec-audit" update > update.json; then jq -e '.updated == false' update.json; fi
+          test "$(shasum -a 256 "$tmp/spec-audit" | cut -d' ' -f1)" = "$before"
           # dev-сборка отказывает в update до обращения к сети.
           go build -o out/spec-audit-dev ./tool
           if out/spec-audit-dev update; then echo "dev build must refuse update"; exit 1; fi
@@ -92,9 +94,17 @@ jobs:
       - name: Manifest and Ed25519 signature
         env:
           SIGNING_KEY: ${{ secrets.SPEC_AUDIT_RELEASE_SIGNING_KEY }}
+          PUB: ${{ vars.SPEC_AUDIT_RELEASE_PUBLIC_KEY }}
         run: |
           test -n "$SIGNING_KEY"
           openssl version
+          key=$(mktemp)
+          trap 'rm -f "$key"' EXIT
+          chmod 600 "$key"
+          printf '%s\n' "$SIGNING_KEY" > "$key"
+          # Публичный ключ, встроенный в бинарники, должен быть половиной ключа подписи.
+          derived=$(openssl pkey -in "$key" -pubout -outform DER | tail -c 32 | od -An -tx1 | tr -d ' \n')
+          test "$derived" = "$PUB"
           version="${GITHUB_REF_NAME#v}"
           cd dist
           test -f spec-audit-linux-amd64 && test -f spec-audit-darwin-arm64
@@ -106,11 +116,7 @@ jobs:
               {os: "darwin", arch: "arm64", file: "spec-audit-darwin-arm64", sha256: $d},
               {os: "linux", arch: "amd64", file: "spec-audit-linux-amd64", sha256: $l}
             ]}' > release-manifest.json
-          key=$(mktemp)
-          chmod 600 "$key"
-          printf '%s\n' "$SIGNING_KEY" > "$key"
           openssl pkeyutl -sign -rawin -inkey "$key" -in release-manifest.json -out release-manifest.sig
-          rm -f "$key"
           test "$(wc -c < release-manifest.sig)" -eq 64
           cp ../scripts/install.sh .
           shasum -a 256 ./*

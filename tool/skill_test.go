@@ -359,6 +359,31 @@ func TestSkill(t *testing.T) {
 			}
 		}},
 		{name: "update_needs_install_absent", sub: "update", host: "both", fail: true},
+		{name: "update_replace_absent", sub: "update", host: "both", replace: true, fail: true},
+		{name: "update_foreign_no_receipt", prepare: func(t *testing.T, dir string) {
+			write(t, filepath.Join(skillPath(dir), "SKILL.md"), []byte("someone else"))
+		}, sub: "update", host: "both", replace: true, fail: true},
+		{name: "install_replace_drift", prepare: func(t *testing.T, dir string) {
+			install(t, dir, "both")
+			write(t, filepath.Join(skillPath(dir), "SKILL.md"), []byte("edited locally"))
+		}, sub: "install", host: "both", replace: true, updated: true, links: map[string]string{codex: "kept", claude: "kept"}, check: func(t *testing.T, dir string) {
+			checkInstalled(t, dir, codex, claude)
+		}},
+		{name: "receipt_unknown_field_is_foreign", prepare: func(t *testing.T, dir string) {
+			install(t, dir, "both")
+			raw, _ := os.ReadFile(filepath.Join(skillPath(dir), skillReceiptName))
+			write(t, filepath.Join(skillPath(dir), skillReceiptName), bytes.Replace(raw, []byte(`"schema_version"`), []byte(`"extra":1,"schema_version"`), 1))
+		}, sub: "update", host: "both", replace: true, fail: true},
+		{name: "host_parent_is_file", prepare: func(t *testing.T, dir string) {
+			write(t, filepath.Join(dir, ".agents", "skills"), []byte("not a dir"))
+		}, sub: "install", host: "codex", fail: true},
+		{name: "managed_path_symlink_refused", prepare: func(t *testing.T, dir string) {
+			install(t, dir, "both")
+			if err := os.Remove(filepath.Join(skillPath(dir), "SKILL.md")); err != nil {
+				t.Fatal(err)
+			}
+			link(t, "references/protocol.txt", filepath.Join(skillPath(dir), "SKILL.md"))
+		}, sub: "update", host: "both", replace: true, fail: true},
 		{name: "update_needs_install_symlink", prepare: func(t *testing.T, dir string) {
 			write(t, filepath.Join(dir, "checkout", "SKILL.md"), []byte("manual"))
 			link(t, "../checkout", skillPath(dir))
