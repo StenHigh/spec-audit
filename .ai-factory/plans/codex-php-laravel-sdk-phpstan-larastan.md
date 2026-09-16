@@ -208,7 +208,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) §17 (REQ-SA-031…034),
   - Logging: нет нового; тест проверяет отсутствие данных исходников/env в slog при `LOG_LEVEL=debug`.
   - REQ: REQ-SA-031, REQ-SA-032, REQ-SA-033, REQ-SA-034, §17.2 п.3
 
-- [ ] Task 16: Docs checkpoint: статус §17, README, AGENTS.md, ARCHITECTURE, ROADMAP
+- [x] Task 16: Docs checkpoint: статус §17, README, AGENTS.md, ARCHITECTURE, ROADMAP
   - Deliverable: `docs/tool-spec.md` — только статусный абзац §17 («реализовано и принято на синтетических примерах <дата>; контракт — docs/php-sdk-contract.md; пилот использован для отладки по решению владельца 2026-09-16; сравнение п.4 не выполнено/выполнено»); §1–10 и §17.1–17.2 не редактируются. `README.md`: «Состояние и следующие шаги» (typed SDK: команда `php-typed`, блок `sdk`, fail-fast изоляция, ограничения — подсказки ≠ связи, basis ограничен перечисленными файлами, записи вне выбранных деревьев не обнаруживаются, сеть не изолирована), «Приёмка и ограничения» (таблица case → статус, что не запускалось), env внешних тестов и инструкция примеров, строка об изменённом порядке §17.2 по решению владельца. `AGENTS.md`: строка карты для `docs/php-sdk-contract.md`. `ARCHITECTURE.md`: строка таблицы `tool/php.go, tool/sdk.php, tool/sdk-typed.php`, подсказки в `report.go`; раздел «Ближайшее расширение» → «Реализовано ограниченно». `ROADMAP.md`: этап отмечен по п.1–3 с датой и основанием, п.4 — отдельный пункт с gate «отдельное разрешение владельца». `docs/smsplace-adoption.md`, `docs/accepted-index.md`, `docs/legacy-extraction.md` не редактируются.
   - Files: `docs/tool-spec.md`, `README.md`, `AGENTS.md`, `.ai-factory/ARCHITECTURE.md`, `.ai-factory/ROADMAP.md`
   - Depends: 15, 11

@@ -39,6 +39,7 @@ AI Factory нужен только для разработки spec-audit, не 
 | [docs/tool-spec.md](docs/tool-spec.md) | Нормы универсального инструмента и контракты CLI |
 | [tool/](tool/) | Единственная поддерживаемая реализация и её регрессии |
 | [PHP/Laravel SDK: следующий этап](docs/tool-spec.md#17-php-и-laravel-sdk) | PHPStan/Larastan, связи кода/тестов, границы bootstrap и приёмка |
+| [docs/php-sdk-contract.md](docs/php-sdk-contract.md) | Контракт typed SDK: `php-typed`, формат `sdk/3`, изоляция bootstrap, подсказки в отчёте |
 | [docs/accepted-index.md](docs/accepted-index.md) | Принятие кандидатов, ID, редакции, reconcile |
 | [docs/legacy-extraction.md](docs/legacy-extraction.md) | Формат извлечения из обычного Markdown и ограничения эксперимента |
 | [skills/spec-audit/SKILL.md](skills/spec-audit/SKILL.md) | Поставляемый audit-лаунчер, не инструкция по разработке инструмента; протокол роли лежит рядом в references/ |
