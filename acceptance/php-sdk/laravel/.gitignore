@@ -1,0 +1,10 @@
+vendor/
+.phpunit.cache/
+/bootstrap/cache/*
+!/bootstrap/cache/.gitkeep
+!/bootstrap/cache/packages.php
+!/bootstrap/cache/services.php
+/storage/logs/*
+/storage/framework/cache/*
+/storage/framework/views/*
+!.gitkeep

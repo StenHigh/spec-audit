@@ -1,0 +1,15 @@
+# CONFIG синтетического примера. reports_dir вне дерева примера и вне Git.
+version: 1
+project_root: .
+specs:
+  paths: [spec.md]
+code:
+  paths: [src, composer.lock]
+  include: ['*.php', 'composer.lock']
+tests:
+  paths: [tests]
+  include: ['*.php']
+reports_dir: ../../../.local/php-sdk/plain-reports
+runtime: {kind: docker-php, service: app}
+sdk: {profile: php}
+scopes: []

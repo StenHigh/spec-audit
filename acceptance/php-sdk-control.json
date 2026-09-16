@@ -1,0 +1,865 @@
+{
+  "version": 1,
+  "purpose": "Frozen before PHP/Laravel SDK code. Semantic expectations for REQ-SA-031...034 derived from docs/tool-spec.md §17 and docs/php-sdk-contract.md, not from exporter output. Independent synthetic fixtures (acceptance/php-sdk/plain, acceptance/php-sdk/laravel) are the only acceptance basis; a pilot project is a debugging environment, never an expectation source. Runtime negatives of the Docker mock (slow, huge_output, exit_2, empty_stdout, setup_fails) live in Go tables, not here.",
+  "boundaries": [
+    "Facts are hints: no case may treat a resolved target as proof of requirement compliance or assertion relevance.",
+    "Expectations are not rewritten to match analyzer behaviour; a mismatch becomes a documented limitation.",
+    "No project names, paths or IDs of any pilot; fixture namespaces are Demo\\ (plain) and App\\ (synthetic Laravel).",
+    "Exit code 1 of phpstan analyse with the specAudit.envelope message is success; exit 0 means the exporter did not run.",
+    "State bytes of a run must be unchanged after any rejected php-typed; no artifact is written on rejection."
+  ],
+  "fixtures": {
+    "plain": {
+      "profile": "php",
+      "root": "acceptance/php-sdk/plain",
+      "namespace": "Demo\\",
+      "tests_namespace": "Tests\\"
+    },
+    "laravel": {
+      "profile": "laravel",
+      "root": "acceptance/php-sdk/laravel",
+      "namespace": "App\\"
+    }
+  },
+  "cases": [
+    {
+      "id": "same_name_methods",
+      "requirement": "REQ-SA-031",
+      "kind": "positive",
+      "fixture": "plain",
+      "scenario": "Demo\\FileStore::save and Demo\\DbStore::save share a name. A call $fileStore->save() where $fileStore is typed Demo\\FileStore.",
+      "expect": {
+        "syntax": "Expr_MethodCall",
+        "name": "save",
+        "resolution": "resolved",
+        "origin": "phpstan",
+        "targets": [
+          {
+            "class": "Demo\\FileStore",
+            "method": "save",
+            "file": "src/FileStore.php",
+            "line_positive": true,
+            "interface": false,
+            "native": false
+          }
+        ],
+        "not_targets": [
+          {
+            "class": "Demo\\DbStore",
+            "method": "save"
+          }
+        ]
+      }
+    },
+    {
+      "id": "inheritance_parent_target",
+      "requirement": "REQ-SA-031",
+      "kind": "positive",
+      "fixture": "plain",
+      "scenario": "Demo\\UserRepository extends Demo\\BaseRepository; find() is declared only in the parent. Call $userRepository->find(1).",
+      "expect": {
+        "resolution": "resolved",
+        "targets": [
+          {
+            "class": "Demo\\BaseRepository",
+            "method": "find",
+            "file": "src/BaseRepository.php",
+            "line_positive": true
+          }
+        ],
+        "not_targets": [
+          {
+            "class": "Demo\\UserRepository",
+            "method": "find"
+          }
+        ]
+      }
+    },
+    {
+      "id": "interface_without_impl",
+      "requirement": "REQ-SA-031",
+      "kind": "positive",
+      "fixture": "plain",
+      "scenario": "Demo\\Contracts\\Notifier is an interface with no implementation in the fixture. Call $notifier->notify() with $notifier typed as the interface.",
+      "expect": {
+        "resolution": "resolved",
+        "targets": [
+          {
+            "class": "Demo\\Contracts\\Notifier",
+            "method": "notify",
+            "file": "src/Contracts/Notifier.php",
+            "interface": true
+          }
+        ],
+        "forbidden": "any target whose class is not the interface (no invented implementation)"
+      }
+    },
+    {
+      "id": "dynamic_name",
+      "requirement": "REQ-SA-031",
+      "kind": "positive",
+      "fixture": "plain",
+      "scenario": "Call $store->$method() with a variable method name.",
+      "expect": {
+        "resolution": "dynamic",
+        "name": "{dynamic}",
+        "targets_count": 0
+      }
+    },
+    {
+      "id": "external_vendor_call",
+      "requirement": "REQ-SA-031",
+      "kind": "positive",
+      "fixture": "plain",
+      "scenario": "Test calls $this->assertSame(...) declared in PHPUnit under vendor/.",
+      "expect": {
+        "resolution": "resolved",
+        "targets": [
+          {
+            "method": "assertSame",
+            "file_prefix": "vendor/",
+            "line_positive": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "native_builtin_call",
+      "requirement": "REQ-SA-031",
+      "kind": "positive",
+      "fixture": "plain",
+      "scenario": "Call $date->format('Y') where $date is DateTimeImmutable.",
+      "expect": {
+        "resolution": "resolved",
+        "targets": [
+          {
+            "class": "DateTimeImmutable",
+            "method": "format",
+            "file": "",
+            "line": 0,
+            "native": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "virtual_at_method",
+      "requirement": "REQ-SA-031",
+      "kind": "positive",
+      "fixture": "plain",
+      "scenario": "Demo\\Money declares @method static self zero() in its docblock without a real method. Call Demo\\Money::zero().",
+      "expect": {
+        "syntax": "Expr_StaticCall",
+        "resolution": "virtual",
+        "targets_min": 1,
+        "all_targets": {
+          "file": "",
+          "line": 0,
+          "native": false
+        }
+      }
+    },
+    {
+      "id": "nullsafe_call",
+      "requirement": "REQ-SA-031",
+      "kind": "positive",
+      "fixture": "plain",
+      "scenario": "Call $user?->getName() where $user is Demo\\User|null.",
+      "expect": {
+        "syntax": "Expr_NullsafeMethodCall",
+        "resolution": "resolved",
+        "targets": [
+          {
+            "class": "Demo\\User",
+            "method": "getName",
+            "file": "src/User.php",
+            "line_positive": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "declaration_with_attribute",
+      "requirement": "REQ-SA-031",
+      "kind": "positive",
+      "fixture": "plain",
+      "scenario": "A test method preceded by #[Test] attribute on the previous line.",
+      "expect": {
+        "syntax": "Stmt_ClassMethod",
+        "resolution": "declared",
+        "quote_is_signature_line": true,
+        "quote_not_attribute_line": true
+      }
+    },
+    {
+      "id": "ambiguous_union_receiver",
+      "requirement": "REQ-SA-031",
+      "kind": "positive",
+      "fixture": "plain",
+      "scenario": "Call $store->save() where $store is Demo\\FileStore|Demo\\DbStore and both declare save().",
+      "expect": {
+        "resolution": "ambiguous",
+        "targets_min": 2,
+        "targets_include": [
+          {
+            "class": "Demo\\FileStore",
+            "method": "save"
+          },
+          {
+            "class": "Demo\\DbStore",
+            "method": "save"
+          }
+        ]
+      }
+    },
+    {
+      "id": "eloquent_scope_virtual",
+      "requirement": "REQ-SA-031",
+      "kind": "positive",
+      "fixture": "laravel",
+      "scenario": "App\\Models\\Order declares scopeActive(); code calls Order::active()->get().",
+      "expect": {
+        "name": "active",
+        "resolution": "virtual",
+        "origin": "larastan",
+        "all_targets": {
+          "file": "",
+          "line": 0,
+          "native": false
+        }
+      }
+    },
+    {
+      "id": "facade_static",
+      "requirement": "REQ-SA-031",
+      "kind": "positive",
+      "fixture": "laravel",
+      "scenario": "Code calls Cache::remember(...) through the Illuminate facade (facade class carries @method docblocks).",
+      "expect": {
+        "name": "remember",
+        "resolution_in": [
+          "virtual",
+          "resolved"
+        ],
+        "origin_in": [
+          "phpstan",
+          "larastan"
+        ],
+        "forbidden": "resolved target pointing to a file under app/; a virtual target must have file '' and line 0",
+        "limitation": "facades with @method docblocks resolve as virtual/phpstan (annotation), not as the underlying class method; spike 2026-09-16 confirmed on a real Laravel project; documented, not corrected later by editing this file"
+      }
+    },
+    {
+      "id": "container_binding_app_make",
+      "requirement": "REQ-SA-031",
+      "kind": "positive",
+      "fixture": "laravel",
+      "scenario": "app(App\\Contracts\\QuoteContract::class)->quote() where the interface is bound to App\\Services\\QuoteService in a provider.",
+      "expect": {
+        "name": "quote",
+        "resolution": "resolved",
+        "targets": [
+          {
+            "class": "App\\Contracts\\QuoteContract",
+            "method": "quote",
+            "file": "app/Contracts/QuoteContract.php",
+            "interface": true
+          }
+        ],
+        "not_targets": [
+          {
+            "class": "App\\Services\\QuoteService"
+          }
+        ],
+        "note": "the runtime binding is not claimed as the single implementation"
+      }
+    },
+    {
+      "id": "macro_virtual",
+      "requirement": "REQ-SA-031",
+      "kind": "positive",
+      "fixture": "laravel",
+      "scenario": "A provider registers Str::macro('slugify', ...); code calls Str::slugify('x').",
+      "expect": {
+        "name": "slugify",
+        "resolution": "virtual",
+        "origin": "larastan",
+        "all_targets": {
+          "file": "",
+          "line": 0,
+          "native": false
+        }
+      }
+    },
+    {
+      "id": "relation_hasmany_builder",
+      "requirement": "REQ-SA-031",
+      "kind": "positive",
+      "fixture": "laravel",
+      "scenario": "App\\Models\\Customer::orders() returns HasMany<Order>; code calls $customer->orders()->where(...).",
+      "expect": {
+        "name": "where",
+        "resolution_in": [
+          "resolved",
+          "virtual",
+          "ambiguous"
+        ],
+        "origin_in": [
+          "larastan",
+          "phpstan"
+        ],
+        "forbidden": "resolved target pointing to a file under app/ (where is not declared in the application)"
+      }
+    },
+    {
+      "id": "weak_test_with_matching_call",
+      "requirement": "REQ-SA-032",
+      "kind": "report",
+      "fixture": "plain",
+      "scenario": "tests/FileStoreTest.php calls $store->save() and asserts only assertTrue(true). Host review marks the assertion weak. SDK hint links the test file to Demo\\FileStore::save.",
+      "expect": {
+        "assertion_status": "weak",
+        "metrics_unchanged_with_hints": true,
+        "hint_visible_with_badge": true,
+        "hint_not_in_links": true
+      }
+    },
+    {
+      "id": "foreign_same_name_not_target",
+      "requirement": "REQ-SA-032",
+      "kind": "report",
+      "fixture": "plain",
+      "scenario": "tests/DbStoreTest.php calls $dbStore->save(); the requirement concerns Demo\\FileStore::save.",
+      "expect": {
+        "hint_targets_exclude": [
+          {
+            "class": "Demo\\FileStore",
+            "method": "save"
+          }
+        ],
+        "no_automatic_link_to_requirement": true
+      }
+    },
+    {
+      "id": "shared_helper_context",
+      "requirement": "REQ-SA-032",
+      "kind": "report",
+      "fixture": "plain",
+      "scenario": "tests/Support/Helper::makeStore() builds Demo\\FileStore and is called from several tests.",
+      "expect": {
+        "hint_present_for": "tests/Support/Helper.php",
+        "hint_does_not_replace_test_citation": true
+      }
+    },
+    {
+      "id": "no_sdk_explicit_limitation",
+      "requirement": "REQ-SA-032",
+      "kind": "report",
+      "fixture": "plain",
+      "scenario": "Report for a run without any php-typed record.",
+      "expect": {
+        "report_states_sdk_not_imported": true,
+        "links_and_metrics_as_before": true
+      }
+    },
+    {
+      "id": "quote",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "facts[0].citation.quote altered by one character",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true,
+        "artifact_absent": true,
+        "error_excludes_envelope_bytes": true
+      }
+    },
+    {
+      "id": "line_end_overflow",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "facts[0].citation.line_end = line_start + 8",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "path_traversal",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "facts[0].citation.path = '../outside.php'",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "lock",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "runtime.composer_lock_sha256 differs from the manifest composer.lock digest",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "sdk_hash",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "runtime.sdk_sha256 differs from the binary constant",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "analysed_missing",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "files omits one requested path (as if the project neon excluded it)",
+      "expect": {
+        "outcome": "reject",
+        "reason": "SDK did not analyse part of the selected files",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "files_extra",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "files contains a path that was not requested",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "basis_outside_snapshot",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "basis contains 'config/extra.php' which is neither under vendor/ nor in the manifest",
+      "expect": {
+        "outcome": "reject",
+        "reason": "analysis basis outside snapshot",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "basis_sha_mismatch",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "basis entry present in manifest but with a different sha256",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "basis_traversal",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "basis entry path '../etc/passwd' or absolute '/etc/passwd'",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "basis_vendor_ok",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "basis contains 'vendor/larastan/larastan/bootstrap.php' not present in manifest",
+      "expect": {
+        "outcome": "accept",
+        "note": "vendor/ is covered by composer.lock"
+      }
+    },
+    {
+      "id": "sink_missing",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "PHPStan JSON is valid, exit 1, but no message has identifier specAudit.envelope",
+      "expect": {
+        "outcome": "reject",
+        "reason": "SDK export did not complete",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "errors_nonempty",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "top-level errors[] is non-empty although the sink message exists",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "foreign_snapshot",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "files[].sha256 corresponds to a different revision of the same file than the manifest",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "sdk2_body_as_sdk3",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "a valid sdk/2 envelope (evidence_kind syntax_only, facts with start/stop) is delivered through the sink message",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "virtual_with_file",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "resolution virtual with a target having file != '' and line > 0",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "resolved_two_targets",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "resolution resolved with two targets",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "dynamic_with_targets",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "resolution dynamic with a non-empty targets list",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "line_without_file",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "target with file '' and line 17, or file 'src/A.php' and line 0",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "bootstrap_files_for_php_profile",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "profile php with bootstrap_files ['vendor/larastan/larastan/bootstrap.php']",
+      "expect": {
+        "outcome": "reject",
+        "reason": "configuration loads bootstrap outside the profile",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "bootstrap_files_outside_vendor",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "profile laravel with bootstrap_files containing 'bootstrap/custom.php' (not under vendor/)",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "bootstrap_files_missing_larastan",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "profile laravel with bootstrap_files [] (Larastan bootstrap absent)",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "extra_field",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "envelope contains an unknown top-level key 'notes'",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "missing_field",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "envelope lacks 'bootstrap_files'",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "quote_utf8",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "facts[0].citation.quote contains an invalid UTF-8 byte",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "profile_mismatch",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "envelope profile 'laravel' while CONFIG sdk.profile is 'php'",
+      "expect": {
+        "outcome": "reject",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "phpstan_1x",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "composer.lock declares phpstan/phpstan 1.12.0",
+      "expect": {
+        "outcome": "reject",
+        "reason": "incompatible analyzer version",
+        "docker_not_called": true
+      }
+    },
+    {
+      "id": "phpstan_missing_in_lock",
+      "requirement": "REQ-SA-033",
+      "kind": "mutation",
+      "mutation": "composer.lock has no phpstan/phpstan package although vendor/bin/phpstan exists",
+      "expect": {
+        "outcome": "reject",
+        "reason": "incompatible analyzer version"
+      }
+    },
+    {
+      "id": "sdk2_run_not_enriched",
+      "requirement": "REQ-SA-033",
+      "kind": "history",
+      "scenario": "A run that used php-facts (sdk/2) is read by the new binary.",
+      "expect": {
+        "state_has_no_sdk_records": true,
+        "php_facts_response_unchanged": {
+          "evidence_kind": "syntax_only"
+        }
+      }
+    },
+    {
+      "id": "review_outdated_after_import",
+      "requirement": "REQ-SA-033",
+      "kind": "history",
+      "scenario": "Host review is current; php-typed then imports facts.",
+      "expect": {
+        "host_review_state": "outdated",
+        "old_basis_review_rejected": true,
+        "role_submit_allowed": true
+      }
+    },
+    {
+      "id": "wrong_mount",
+      "requirement": "REQ-SA-034",
+      "kind": "negative",
+      "condition": "the single running container mounts a different host directory to /var/www/html",
+      "expect": {
+        "outcome": "reject",
+        "no_install": true,
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "no_phpstan",
+      "requirement": "REQ-SA-034",
+      "kind": "negative",
+      "condition": "vendor/bin/phpstan is absent",
+      "expect": {
+        "outcome": "reject",
+        "reason": "PHPStan not installed in the container",
+        "composer_not_called": true,
+        "no_install": true
+      }
+    },
+    {
+      "id": "no_larastan_laravel_profile",
+      "requirement": "REQ-SA-034",
+      "kind": "negative",
+      "condition": "profile laravel, vendor/larastan/larastan/extension.neon is absent",
+      "expect": {
+        "outcome": "reject",
+        "reason": "Larastan not installed for profile laravel",
+        "composer_not_called": true
+      }
+    },
+    {
+      "id": "no_larastan_php_profile_ok",
+      "requirement": "REQ-SA-034",
+      "kind": "negative",
+      "condition": "profile php, Larastan absent",
+      "expect": {
+        "outcome": "accept",
+        "bootstrap_files": [],
+        "note": "php profile never requires Larastan"
+      }
+    },
+    {
+      "id": "php_profile_hidden_bootstrap",
+      "requirement": "REQ-SA-034",
+      "kind": "negative",
+      "condition": "profile php on a project whose extension-installer auto-loads Larastan; exporter reports bootstrap_files non-empty",
+      "expect": {
+        "outcome": "reject",
+        "reason": "configuration loads bootstrap outside the profile",
+        "state_unchanged": true
+      }
+    },
+    {
+      "id": "config_cached",
+      "requirement": "REQ-SA-034",
+      "kind": "negative",
+      "condition": "profile laravel, bootstrap/cache/config.php exists",
+      "expect": {
+        "outcome": "reject",
+        "reason": "cached config blocks isolation",
+        "analyse_not_started": true
+      }
+    },
+    {
+      "id": "bootstrap_writes",
+      "requirement": "REQ-SA-034",
+      "kind": "negative",
+      "condition": "bootstrap writes bootstrap/cache/packages.php while bootstrap/ is in code.paths",
+      "expect": {
+        "outcome": "reject",
+        "reason": "snapshot changed during SDK",
+        "state_unchanged": true,
+        "artifact_absent": true
+      }
+    },
+    {
+      "id": "bootstrap_db_attempt",
+      "requirement": "REQ-SA-034",
+      "kind": "negative",
+      "condition": "a provider executes DB::select during boot under laravelIsolationEnv",
+      "expect": {
+        "outcome": "reject",
+        "reason": "SDK export did not complete",
+        "no_real_database_reached": true
+      }
+    },
+    {
+      "id": "bootstrap_http_attempt",
+      "requirement": "REQ-SA-034",
+      "kind": "negative",
+      "condition": "a provider performs Http::get during boot; the fixture container runs with network_mode none",
+      "expect": {
+        "outcome": "reject",
+        "note": "network isolation is the operator's precondition; the tool only reports the failure"
+      }
+    },
+    {
+      "id": "no_hidden_install",
+      "requirement": "REQ-SA-034",
+      "kind": "negative",
+      "condition": "any php-typed invocation, successful or rejected",
+      "expect": {
+        "composer_not_called": true,
+        "project_files_unchanged": true,
+        "no_writes_outside_workspace": true
+      }
+    },
+    {
+      "id": "workspace_cleanup",
+      "requirement": "REQ-SA-034",
+      "kind": "negative",
+      "condition": "analyse fails (internal error, timeout, exit 2)",
+      "expect": {
+        "cleanup_invoked": true,
+        "order": [
+          "preflight",
+          "setup",
+          "setup",
+          "analyse",
+          "cleanup"
+        ]
+      }
+    },
+    {
+      "id": "stale_run_before_docker",
+      "requirement": "REQ-SA-034",
+      "kind": "negative",
+      "condition": "snapshot is stale before php-typed",
+      "expect": {
+        "outcome": "reject",
+        "docker_not_called": true
+      }
+    },
+    {
+      "id": "missing_lock_in_manifest",
+      "requirement": "REQ-SA-034",
+      "kind": "negative",
+      "condition": "composer.lock is not part of the manifest",
+      "expect": {
+        "outcome": "reject",
+        "reason": "composer.lock not in snapshot",
+        "docker_not_called": true
+      }
+    },
+    {
+      "id": "laravel_missing_bootstrap_in_manifest",
+      "requirement": "REQ-SA-034",
+      "kind": "negative",
+      "condition": "profile laravel, bootstrap/app.php is not part of the manifest",
+      "expect": {
+        "outcome": "reject",
+        "reason": "bootstrap/app.php not in snapshot",
+        "docker_not_called": true
+      }
+    },
+    {
+      "id": "isolation_env_present",
+      "requirement": "REQ-SA-034",
+      "kind": "negative",
+      "condition": "profile laravel, any analyse invocation",
+      "expect": {
+        "exec_env_contains": [
+          "XDEBUG_MODE=off",
+          "DB_CONNECTION=spec_audit_disabled",
+          "DB_URL=",
+          "DATABASE_URL=",
+          "REDIS_URL=",
+          "DB_SOCKET=",
+          "DB_HOST=127.0.0.1",
+          "DB_PORT=1",
+          "REDIS_HOST=127.0.0.1",
+          "REDIS_PORT=1",
+          "CACHE_STORE=array",
+          "CACHE_DRIVER=array",
+          "QUEUE_CONNECTION=sync",
+          "SESSION_DRIVER=array",
+          "MAIL_MAILER=array",
+          "BROADCAST_CONNECTION=null",
+          "BROADCAST_DRIVER=null",
+          "LOG_CHANNEL=stderr",
+          "APP_CONFIG_CACHE=/tmp/spec-audit-none/config.php"
+        ]
+      },
+      "note": "2026-09-16 review: добавлены DB_SOCKET= (unix-сокет обходил host/port) и APP_CONFIG_CACHE (кастомный путь кеша обходил preflight); усиление изоляции, не подгонка под экспортёр"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+    "name": "spec-audit/php-sdk-laravel-control",
+    "description": "Synthetic Laravel control application for SA-031…034: independent of any business project.",
+    "type": "project",
+    "license": "MIT",
+    "require": {
+        "php": "^8.2",
+        "laravel/framework": "^12.0 || ^13.0"
+    },
+    "require-dev": {
+        "larastan/larastan": "^3.10",
+        "phpstan/phpstan": "^2.2",
+        "phpunit/phpunit": "^12"
+    },
+    "autoload": {
+        "psr-4": {
+            "App\\": "app/",
+            "Database\\Factories\\": "database/factories/",
+            "Database\\Seeders\\": "database/seeders/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {"Tests\\": "tests/"}
+    },
+    "scripts": {
+        "post-autoload-dump": [
+            "Illuminate\\Foundation\\ComposerScripts::postAutoloadDump",
+            "@php artisan package:discover --ansi"
+        ]
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": false
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}

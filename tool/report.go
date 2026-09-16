@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"html/template"
 	"log/slog"
+	"os"
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -59,6 +61,27 @@ type NavigationFile struct {
 	ID       string               `json:"id"`
 	Current  bool                 `json:"has_current_links"`
 	Evidence []NavigationEvidence `json:"evidence"`
+	SDK      []NavigationHint     `json:"sdk,omitempty"`
+}
+
+// NavigationHint — подсказка SDK в карточке файла; не связь, не влияет на Links и метрики.
+type NavigationHint struct {
+	Citation Citation `json:"citation"`
+	Origin   string   `json:"origin"`
+	Current  bool     `json:"current"`
+}
+
+// SDKSummary показывает человеку записи импорта и факты последней записи (docs/php-sdk-contract.md).
+type SDKSummary struct {
+	Records            []SDKRecord `json:"records"`
+	Profile            string      `json:"profile"`
+	ComposerLockSHA256 string      `json:"composer_lock_sha256"`
+	SDKSHA256          string      `json:"sdk_sha256"`
+	Files              int         `json:"files"`
+	Facts              int         `json:"facts"`
+	Available          bool        `json:"available"`
+	Limitations        []string    `json:"limitations"`
+	facts              []TypedFact
 }
 
 type NavigationGroup struct {
@@ -350,6 +373,91 @@ func buildNavigation(report *Report, m Manifest) {
 			}
 		}
 	}
+	if report.SDK != nil {
+		hints, stale := 0, 0
+		for _, fact := range report.SDK.facts {
+			index, ok := files[fact.Citation.Path]
+			if !ok {
+				continue
+			}
+			hint := NavigationHint{Citation: fact.Citation, Origin: hintOrigin(fact, files), Current: fresh}
+			if !fresh {
+				stale++
+			}
+			nav.Files[index].SDK = append(nav.Files[index].SDK, hint)
+			hints++
+		}
+		for i := range nav.Files {
+			file := &nav.Files[i]
+			sort.Slice(file.SDK, func(a, b int) bool {
+				x, y := file.SDK[a], file.SDK[b]
+				if x.Citation.LineStart != y.Citation.LineStart {
+					return x.Citation.LineStart < y.Citation.LineStart
+				}
+				return x.Origin < y.Origin
+			})
+		}
+		slog.Debug("карта отчёта: подсказки SDK", "records", len(report.SDK.Records), "hints", hints, "stale", stale)
+	}
 	report.Navigation = nav
 	slog.Debug("карта отчёта построена", "files", len(nav.Files), "fragments", len(evidence))
+}
+
+// hintOrigin описывает происхождение факта текстом; цели вне manifest помечаются явно.
+func hintOrigin(fact TypedFact, files map[string]int) string {
+	var targets []string
+	for _, target := range fact.Targets {
+		where := "virtual"
+		switch {
+		case target.Native:
+			where = "native"
+		case target.File != "":
+			where = target.File + ":" + strconv.Itoa(target.Line)
+			if _, ok := files[target.File]; !ok {
+				where += " (вне snapshot)"
+			}
+		}
+		flag := ""
+		if target.Interface {
+			flag = " interface"
+		}
+		targets = append(targets, target.Class+"::"+target.Method+" @ "+where+flag)
+	}
+	origin := "sdk · " + fact.Origin + " · " + fact.Resolution + " · " + fact.Name
+	if len(targets) > 0 {
+		origin += " → " + strings.Join(targets, "; ")
+	}
+	return origin
+}
+
+// sdkLimitations — константные границы SDK-подсказок по контракту (docs/php-sdk-contract.md).
+var sdkLimitations = []string{
+	"Подсказки SDK не являются связями и не входят в метрики; связь требования с кодом и тестами подтверждают роли и хост.",
+	"Сетевой доступ bootstrap инструментом не изолирован; mount проекта доступен на запись — запись вне выбранных источников не обнаруживается.",
+	"PHPStan выполняет анализ в отдельном worker-процессе и повторяет bootstrap в главном процессе; при таймауте останавливается главный процесс, осиротевший worker не отслеживается.",
+	"Рабочая область /tmp/spec-audit-<rand> в контейнере удаляется best-effort: неудача очистки фиксируется предупреждением в журнале.",
+	"Имена переменных fail-fast изоляции соответствуют skeleton Laravel 11+ и legacy-именам; проектные config/*.php могут читать иные ключи.",
+}
+
+// loadSDKSummary читает последний артефакт SDK; хэш уже сверен при загрузке run.
+func loadSDKSummary(run *os.Root, records []SDKRecord) *SDKSummary {
+	if len(records) == 0 {
+		return nil
+	}
+	summary := &SDKSummary{Records: records, Limitations: append([]string{}, sdkLimitations...)}
+	last := records[len(records)-1]
+	raw, err := readRoot(run, last.Artifact, maxResult)
+	var envelope TypedEnvelope
+	if err != nil || strictJSON(raw, &envelope) != nil {
+		slog.Warn("артефакт SDK повреждён", "record_index", len(records)-1)
+		summary.Limitations = append(summary.Limitations, "Артефакт SDK недоступен: подсказки не показаны.")
+		return summary
+	}
+	summary.Available = true
+	summary.Profile, summary.ComposerLockSHA256, summary.SDKSHA256 = envelope.Profile, envelope.Runtime.ComposerLockSHA256, envelope.Runtime.SDKSHA256
+	summary.Files, summary.Facts, summary.facts = len(envelope.Files), len(envelope.Facts), envelope.Facts
+	if len(envelope.BootstrapFiles) > 1 {
+		summary.Limitations = append(summary.Limitations, "Конфигурация подключает дополнительные bootstrap расширений из vendor/.")
+	}
+	return summary
 }

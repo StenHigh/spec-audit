@@ -15,8 +15,8 @@
 | [tool/accepted.go](../tool/accepted.go), [tool/legacy.go](../tool/legacy.go) | Принятие кандидатов, ID/редакции, reconcile и проверка извлечения |
 | [tool/review.go](../tool/review.go) | Согласование хоста, привязка к текущим результатам и сохранение истории |
 | [tool/runtime.go](../tool/runtime.go) | Контролируемый запуск процессов, timeout, результаты тестов и receipts |
-| [tool/php.go](../tool/php.go), [tool/sdk.php](../tool/sdk.php) | Docker-boundary, PHP syntax-only факты и проверка их происхождения |
-| [tool/report.go](../tool/report.go), [tool/report.html](../tool/report.html) | JSON/HTML, связи нормы–код–assertion, текущий статус, навигация и настройки |
+| [tool/php.go](../tool/php.go), [tool/sdk.php](../tool/sdk.php), [tool/sdk-typed.php](../tool/sdk-typed.php) | Docker-boundary; `php-facts` (syntax-only) и `php-typed` (PHPStan/Larastan-экспортёр, neon-обёртка, проверка envelope `sdk/3` и основания анализа) |
+| [tool/report.go](../tool/report.go), [tool/report.html](../tool/report.html) | JSON/HTML, связи нормы–код–assertion, подсказки SDK с происхождением, текущий статус, навигация и настройки |
 | `tool/*_test.go`, [acceptance/](../acceptance/) | Регрессии, синтетические контроли и неизменяемые эталоны |
 | [skills/spec-audit/](../skills/spec-audit/) | Поставляемый audit-launcher и протокол независимой роли |
 
@@ -33,11 +33,11 @@
 - PHP допускается только через проверенный runtime; SDK использует зависимости проекта, а не требует PHP/Node на хосте. Условия исполнения — в [RULES.md](RULES.md).
 - Внутри одного Go-пакета нет компиляторного запрета зависимостей между файлами. Сохраняй ответственность существующих helpers; не объявляй отсутствующие границы уже обеспеченными.
 
-## Ближайшее расширение: PHP/Laravel SDK
+## Реализовано ограниченно: PHP/Laravel SDK
 
-Сейчас `php-facts` сохраняет отдельный `syntax_only` JSON и не обогащает Task/HTML автоматически. [PHPStan/Larastan SDK (§17)](../docs/tool-spec.md#17-php-и-laravel-sdk) ещё предстоит реализовать: типы и символы PHPStan, ограниченный Laravel-профиль Larastan, явные resolved/unknown и происхождение фактов, затем потребители заданий и навигации.
+`php-facts` по-прежнему сохраняет отдельный `syntax_only` JSON. `php-typed` ([контракт](../docs/php-sdk-contract.md)) запускает PHPStan (с Larastan для профиля `laravel`) в проверенном контейнере: экспортёр и neon-обёртка записываются в уникальный контейнерный `/tmp`, классы грузятся через `--autoload-file`, результат приходит одним сообщением PHPStan и проверяется против manifest (цитаты по строкам, инварианты resolution↔targets, основание анализа в границах snapshot или `vendor/`). Сырой envelope хранится артефактом; запись в `State.SDK` делает прежний review outdated; `TaskBatch.sdk` отдаёт записи хосту, `report` показывает подсказки отдельно от связей и метрик.
 
-Перед кодом фиксируются формат фактов, CONFIG/Task-контракт и независимые PHP/Laravel-примеры. Bootstrap Larastan может исполнять приложение: разрешение, изоляция и учёт влияющих файлов обязательны. PHPStan-проба в `prototypes/core/` не является готовым SDK. Подробная приёмка принадлежит спецификации, порядок — [ROADMAP.md](ROADMAP.md).
+Профиль `laravel` исполняет bootstrap приложения под fail-fast окружением (`laravelIsolationEnv`); сеть контейнера инструмент не изолирует. Приёмка — синтетические примеры в `acceptance/php-sdk/`; фикстуры `tool/testdata/typed-*.json` пинятся к экспортёру. Сравнение с SDK и без него на пилоте (§17.2 п.4) выполнено один раз с нейтральным результатом — доказанного улучшения нет. PHPStan-проба в `prototypes/core/` остаётся историей.
 
 ## Изменения кода
 

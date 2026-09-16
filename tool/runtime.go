@@ -164,6 +164,27 @@ func validateRuntime(rt *Runtime) error {
 	return nil
 }
 
+// validateSDK нормализует блок sdk по контракту docs/php-sdk-contract.md.
+func validateSDK(cfg *Config) error {
+	sdk := cfg.SDK
+	if sdk == nil {
+		return nil
+	}
+	if cfg.Runtime.Kind != "docker-php" {
+		return errors.New("sdk допустим только при runtime.kind docker-php")
+	}
+	if !oneOf(sdk.Profile, "php", "laravel") {
+		return errors.New("sdk.profile: php/laravel")
+	}
+	if sdk.TimeoutSeconds == 0 {
+		sdk.TimeoutSeconds = sdkDefaultTimeout
+	}
+	if sdk.TimeoutSeconds < 1 || sdk.TimeoutSeconds > sdkMaxTimeout {
+		return fmt.Errorf("sdk.timeout_seconds: 1–%d", sdkMaxTimeout)
+	}
+	return nil
+}
+
 func executeTests(cfg Config, m Manifest, id string) (Receipt, error) {
 	receipt := Receipt{ID: id, SnapshotID: m.SnapshotID, StartedAt: time.Now().UTC().Format(time.RFC3339Nano), Tests: []ExecutedTest{},
 		Limitations: []string{"Процесс исполняет доверенный код проекта; выбранный snapshot не фиксирует всё состояние внешних сервисов и зависимостей.", "passed не доказывает релевантность assertion или соответствие продукта."}}

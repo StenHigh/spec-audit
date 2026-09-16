@@ -1,0 +1,17 @@
+# Синтетический PHP-проект для приёмки typed SDK (docs/php-sdk-contract.md).
+# app: контейнер анализа без сети; install: одноразовая установка зависимостей с сетью.
+services:
+  app:
+    image: composer:2
+    working_dir: /var/www/html
+    volumes:
+      - ./:/var/www/html
+    command: ["sleep", "infinity"]
+    network_mode: none
+  install:
+    image: composer:2
+    working_dir: /var/www/html
+    volumes:
+      - ./:/var/www/html
+    command: ["composer", "install", "--no-interaction", "--prefer-dist", "--no-progress"]
+    profiles: ["install"]

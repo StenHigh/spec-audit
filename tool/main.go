@@ -69,6 +69,13 @@ type Config struct {
 	ReportsDir  string  `yaml:"reports_dir" json:"reports_dir"`
 	Runtime     Runtime `yaml:"runtime" json:"runtime"`
 	Scopes      []Scope `yaml:"scopes" json:"scopes"`
+	// SDK включает типизированный PHP SDK (docs/php-sdk-contract.md); nil сохраняет прежний snapshot_id.
+	SDK *SDKConfig `yaml:"sdk,omitempty" json:"sdk,omitempty"`
+}
+
+type SDKConfig struct {
+	Profile        string `yaml:"profile" json:"profile"`
+	TimeoutSeconds int    `yaml:"timeout_seconds" json:"timeout_seconds"`
 }
 
 type SourceFile struct {
@@ -140,8 +147,9 @@ type Entry struct {
 }
 
 type State struct {
-	Entries    []Entry   `json:"entries"`
-	Executions []Receipt `json:"executions"`
+	Entries    []Entry     `json:"entries"`
+	Executions []Receipt   `json:"executions"`
+	SDK        []SDKRecord `json:"sdk,omitempty"`
 }
 
 type TaskBatch struct {
@@ -151,6 +159,7 @@ type TaskBatch struct {
 	Runtime     Runtime      `json:"runtime"`
 	Tasks       []Task       `json:"tasks"`
 	Files       []SourceFile `json:"files"`
+	SDK         []SDKRecord  `json:"sdk,omitempty"`
 }
 
 type Status struct {
@@ -205,6 +214,7 @@ type Report struct {
 	SemanticCompletenessProven bool                `json:"semantic_completeness_proven"`
 	HostReview                 *ReviewSummary      `json:"host_review,omitempty"`
 	RawProvenance              []RawProvenance     `json:"raw_provenance"`
+	SDK                        *SDKSummary         `json:"sdk,omitempty"`
 	Navigation                 ReportNavigation    `json:"navigation"`
 }
 
@@ -369,6 +379,9 @@ func loadConfig(path string, history ...bool) (Config, error) {
 		}
 	}
 	if err := validateRuntime(&cfg.Runtime); err != nil {
+		return cfg, err
+	}
+	if err := validateSDK(&cfg); err != nil {
 		return cfg, err
 	}
 	ids := map[string]bool{}
@@ -921,10 +934,10 @@ func execute(args []string) (any, error) {
 		return indexConfig(cfg)
 	}
 	if len(args) < 3 {
-		return nil, errors.New("команды: init/index CONFIG; reconcile CONFIG [RAW DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION]; submit/retry/test/php-facts CONFIG RUN_ID ...")
+		return nil, errors.New("команды: init/index CONFIG; reconcile CONFIG [RAW DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION]; submit/retry/test/php-facts/php-typed CONFIG RUN_ID ...")
 	}
 	command, runID := args[0], args[2]
-	argc := map[string]int{"prepare": 3, "tasks": 3, "status": 3, "report": 3, "review": -2, "submit": 5, "retry": 4, "test": 4, "php-facts": -1}
+	argc := map[string]int{"prepare": 3, "tasks": 3, "status": 3, "report": 3, "review": -2, "submit": 5, "retry": 4, "test": 4, "php-facts": -1, "php-typed": -1}
 	if count, ok := argc[command]; !ok || (count >= 0 && len(args) != count) || (count == -1 && len(args) < 4) || (count == -2 && len(args) != 3 && len(args) != 4) || !slugRE.MatchString(runID) {
 		return nil, errors.New("неизвестная команда, неверные аргументы или недопустимый RUN_ID")
 	}
@@ -1047,11 +1060,14 @@ func execute(args []string) (any, error) {
 				}
 			}
 		}
+		if err := verifySDKRecords(run, savedState.SDK); err != nil {
+			return nil, err
+		}
 		state = savedState
 	}
 	switch command {
 	case "prepare", "tasks":
-		return TaskBatch{runID, m.SnapshotID, cfg.ProjectRoot, cfg.Runtime, pending(state), m.Files}, nil
+		return TaskBatch{RunID: runID, SnapshotID: m.SnapshotID, ProjectRoot: cfg.ProjectRoot, Runtime: cfg.Runtime, Tasks: pending(state), Files: m.Files, SDK: sdkRecordsFor(cfg.ReportsDir, runID, state.SDK)}, nil
 	case "status":
 		view, err := reviewContext(run, runID, m, state, fresh)
 		if err != nil {
@@ -1077,6 +1093,7 @@ func execute(args []string) (any, error) {
 		if view.State == "current" {
 			report.Conclusion = "Хост согласовал результаты по текущим свидетельствам. Это его обоснованная оценка, не автоматическое соответствие или доказательство полноты ТЗ."
 		}
+		report.SDK = loadSDKSummary(run, state.SDK)
 		buildNavigation(&report, m)
 		var html bytes.Buffer
 		if err := reportTemplate.Execute(&html, report); err != nil {
@@ -1128,6 +1145,24 @@ func execute(args []string) (any, error) {
 			return nil, err
 		}
 		return map[string]any{"snapshot_id": m.SnapshotID, "artifact": filepath.Join(cfg.ReportsDir, runID, artifact), "evidence_kind": "syntax_only"}, nil
+	case "php-typed":
+		if cfg.SDK == nil {
+			return nil, errors.New("php-typed требует блок sdk")
+		}
+		typed, err := phpTyped(cfg, m, args[3:])
+		if err != nil {
+			return nil, err
+		}
+		artifact := "sdk-typed-" + rand.Text() + ".json"
+		if err := atomicWrite(run, artifact, typed.raw, 0400); err != nil {
+			return nil, err
+		}
+		state.SDK = append(state.SDK, SDKRecord{Artifact: artifact, SHA256: digest(typed.raw), PHPStanVersion: typed.phpstan, LarastanVersion: typed.larastan, RecordedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+		if err := saveState(run, state); err != nil {
+			return nil, err
+		}
+		slog.Info("php-typed: факты записаны", "run_id", runID, "artifact", artifact, "facts", len(typed.envelope.Facts), "diagnostics", typed.diagnostics)
+		return map[string]any{"snapshot_id": m.SnapshotID, "artifact": filepath.Join(cfg.ReportsDir, runID, artifact), "evidence_kind": typedEvidence, "facts": len(typed.envelope.Facts), "diagnostics": typed.diagnostics}, nil
 	}
 	index := -1
 	for i := range state.Entries {
