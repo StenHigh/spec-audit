@@ -28,13 +28,26 @@ spec-audit skill install --dir /absolute/path/project --host both   # codex | cl
 spec-audit skill update  --dir /absolute/path/project --host both
 ```
 
-Появятся реальный каталог `.spec-audit/skill/` с receipt `.spec-audit-skill.json` и относительные ссылки `.agents/skills/spec-audit` и/или `.claude/skills/spec-audit`. Symlink на месте skill (прежняя ручная установка) заменяет только `skill install --replace`; `skill update` в этом состоянии отказывает всегда. Без `--replace` обе команды отказывают при чужой host-ссылке или локально изменённом управляемом файле; чужой каталог без receipt и реальный путь на месте ссылки не заменяются никогда, лишние файлы не удаляются, `.gitignore` и Git не трогаются. Отказ по состоянию не пишет ничего; ошибка ввода-вывода посреди записи сообщается, а повторный `skill install` завершает копию. Рекомендуемые строки `.gitignore` проекта:
+Появятся реальный каталог `.spec-audit/skill/` с receipt `.spec-audit-skill.json` и относительные ссылки `.agents/skills/spec-audit` и/или `.claude/skills/spec-audit`. Symlink на месте skill (прежняя ручная установка) заменяет только `skill install --replace`; `skill update` в этом состоянии отказывает всегда. Без `--replace` обе команды отказывают при чужой host-ссылке или локально изменённом управляемом файле; чужой каталог без receipt и реальный путь на месте ссылки не заменяются никогда, лишние файлы не удаляются, `.gitignore` и Git не трогаются. Отказ по состоянию не пишет ничего; ошибка ввода-вывода посреди записи сообщается, а повторный `skill install` завершает копию. Что делать с этими путями в Git, решает проект. Вариант «ничего в Git» — строки `.gitignore`:
 
 ```gitignore
 /.spec-audit/
 /.agents/skills/spec-audit
 /.claude/skills/spec-audit
 ```
+
+Но в изолированных worktree-сессиях агентов (Claude Code desktop создаёт их для сессий) игнорируемые файлы отсутствуют и `/spec-audit` не распознаётся. Если сессии открываются так, трекайте skill, ссылки и конфиг, оставив результаты локальными:
+
+```gitignore
+/.spec-audit/*
+!/.spec-audit/skill/
+!/.spec-audit/config.yaml
+!/.spec-audit/scopes/
+/.spec-audit/scopes/*/*
+!/.spec-audit/scopes/*/config.yaml
+```
+
+При tracked-варианте после `spec-audit skill update` изменения skill коммитятся отдельно.
 
 Удаление вручную: `rm -rf .spec-audit/skill .agents/skills/spec-audit .claude/skills/spec-audit` в проекте и `rm ~/.local/bin/spec-audit`; команды `uninstall` нет. Контракт — [§18 спецификации](docs/tool-spec.md#18-поставка-версия-обновление-и-установка-skill).
 
