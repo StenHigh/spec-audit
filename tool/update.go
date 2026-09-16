@@ -26,7 +26,9 @@ var (
 )
 
 const (
-	releaseTimeout      = 120 * time.Second
+	// One total deadline per request, including the body: the ~15 MiB asset must fit on a slow link
+	// (v0.1.0/v0.1.1 used 120 s and could not finish the download at ~80 KiB/s).
+	releaseTimeout      = 15 * time.Minute
 	releaseSchema       = "spec-audit-release/1"
 	releaseManifestName = "release-manifest.json"
 	releaseSigName      = "release-manifest.sig"
