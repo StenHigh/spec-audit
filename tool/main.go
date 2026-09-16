@@ -216,6 +216,7 @@ type Report struct {
 	HostReview                 *ReviewSummary      `json:"host_review,omitempty"`
 	RawProvenance              []RawProvenance     `json:"raw_provenance"`
 	SDK                        *SDKSummary         `json:"sdk,omitempty"`
+	ToolVersions               []ToolVersionRecord `json:"tool_versions,omitempty"`
 	Navigation                 ReportNavigation    `json:"navigation"`
 }
 
@@ -716,66 +717,77 @@ func validateResult(result Result, task Task, m Manifest, checkSources bool) err
 	seen := map[string]bool{}
 	for _, assessment := range result.Assessments {
 		req, ok := assigned[assessment.RequirementID]
-		if !ok || seen[req.ID] || strings.TrimSpace(assessment.Statement) == "" {
+		if !ok {
 			return errors.New("assessment требует назначенный уникальный requirement_id и statement")
 		}
+		if seen[req.ID] || strings.TrimSpace(assessment.Statement) == "" {
+			return fmt.Errorf("%s: assessment требует назначенный уникальный requirement_id и statement", req.ID)
+		}
 		seen[req.ID] = true
-		if !oneOf(assessment.Specification, "clear", "ambiguous") || !oneOf(assessment.Implementation, "supported", "contradicted", "unknown") || !oneOf(assessment.Assertion, "relevant", "weak", "contradicts", "missing", "unknown") {
-			return errors.New("недопустимое состояние specification/implementation/assertion")
+		if err := checkAssessment(assessment, req, m, root, checkSources); err != nil {
+			return fmt.Errorf("%s: %w", req.ID, err)
 		}
-		if req.Accepted != nil && req.Accepted.Clarity == "ambiguous" && assessment.Specification != "ambiguous" {
-			return errors.New("принятая неоднозначность требует новой редакции, не оценки clear")
+	}
+	return nil
+}
+
+// Per-requirement checks; the caller prefixes the requirement ID so a role can locate the failing assessment.
+func checkAssessment(assessment Assessment, req Requirement, m Manifest, root *os.Root, checkSources bool) error {
+	if !oneOf(assessment.Specification, "clear", "ambiguous") || !oneOf(assessment.Implementation, "supported", "contradicted", "unknown") || !oneOf(assessment.Assertion, "relevant", "weak", "contradicts", "missing", "unknown") {
+		return errors.New("недопустимое состояние specification/implementation/assertion")
+	}
+	if req.Accepted != nil && req.Accepted.Clarity == "ambiguous" && assessment.Specification != "ambiguous" {
+		return errors.New("принятая неоднозначность требует новой редакции, не оценки clear")
+	}
+	if len(assessment.Spec) == 0 || (assessment.Implementation != "unknown" && len(assessment.Code) == 0) {
+		return errors.New("нужна spec; supported/contradicted требуют code")
+	}
+	if oneOf(assessment.Assertion, "relevant", "weak", "contradicts") && len(assessment.Tests) == 0 {
+		return errors.New("оценка assertion требует тестовый источник")
+	}
+	for _, limitation := range assessment.Limitations {
+		if strings.TrimSpace(limitation) == "" {
+			return errors.New("пустое limitation")
 		}
-		if len(assessment.Spec) == 0 || (assessment.Implementation != "unknown" && len(assessment.Code) == 0) {
-			return errors.New("нужна spec; supported/contradicted требуют code")
+	}
+	tests := []Citation{}
+	for _, test := range assessment.Tests {
+		if strings.TrimSpace(test.TestID) == "" || len(test.TestID) > 1024 {
+			return errors.New("нужен непустой test_id до 1024 байт")
 		}
-		if oneOf(assessment.Assertion, "relevant", "weak", "contradicts") && len(assessment.Tests) == 0 {
-			return errors.New("оценка assertion требует тестовый источник")
+		tests = append(tests, test.Citation)
+	}
+	for _, group := range []struct {
+		kind      string
+		citations []Citation
+	}{{"spec", assessment.Spec}, {"code", assessment.Code}, {"tests", tests}} {
+		if len(group.citations) > 128 {
+			return errors.New("слишком много цитат в assessment")
 		}
-		for _, limitation := range assessment.Limitations {
-			if strings.TrimSpace(limitation) == "" {
-				return errors.New("пустое limitation")
+		for _, citation := range group.citations {
+			file, ok := findSource(m, citation.Path)
+			if !localPath(citation.Path) || !ok || file.Kind != group.kind {
+				return fmt.Errorf("цитата вне группы %s", group.kind)
 			}
-		}
-		tests := []Citation{}
-		for _, test := range assessment.Tests {
-			if strings.TrimSpace(test.TestID) == "" || len(test.TestID) > 1024 {
-				return errors.New("нужен непустой test_id до 1024 байт")
+			if citation.LineStart < 1 || citation.LineEnd < citation.LineStart {
+				return errors.New("неверный диапазон цитаты")
 			}
-			tests = append(tests, test.Citation)
-		}
-		for _, group := range []struct {
-			kind      string
-			citations []Citation
-		}{{"spec", assessment.Spec}, {"code", assessment.Code}, {"tests", tests}} {
-			if len(group.citations) > 128 {
-				return errors.New("слишком много цитат в assessment")
+			if group.kind == "spec" && !req.containsSource(citation) {
+				return errors.New("цитата вне блока назначенного требования")
 			}
-			for _, citation := range group.citations {
-				file, ok := findSource(m, citation.Path)
-				if !localPath(citation.Path) || !ok || file.Kind != group.kind {
-					return fmt.Errorf("цитата вне группы %s", group.kind)
-				}
-				if citation.LineStart < 1 || citation.LineEnd < citation.LineStart {
-					return errors.New("неверный диапазон цитаты")
-				}
-				if group.kind == "spec" && !req.containsSource(citation) {
-					return errors.New("цитата вне блока назначенного требования")
-				}
-				if !checkSources {
-					continue
-				}
-				data, err := readRoot(root, citation.Path, maxFile)
-				if err != nil {
-					return err
-				}
-				if digest(data) != file.SHA256 {
-					return errors.New("снимок источников изменился")
-				}
-				quote, err := lineQuote(data, citation.LineStart, citation.LineEnd)
-				if err != nil || quote != citation.Quote {
-					return fmt.Errorf("цитата не совпадает с полными строками %s:%d-%d", citation.Path, citation.LineStart, citation.LineEnd)
-				}
+			if !checkSources {
+				continue
+			}
+			data, err := readRoot(root, citation.Path, maxFile)
+			if err != nil {
+				return err
+			}
+			if digest(data) != file.SHA256 {
+				return errors.New("снимок источников изменился")
+			}
+			quote, err := lineQuote(data, citation.LineStart, citation.LineEnd)
+			if err != nil || quote != citation.Quote {
+				return fmt.Errorf("цитата не совпадает с полными строками %s:%d-%d", citation.Path, citation.LineStart, citation.LineEnd)
 			}
 		}
 	}
@@ -838,14 +850,87 @@ func writeJSON(root *os.Root, path string, value any, mode os.FileMode) error {
 	return atomicWrite(root, path, append(data, '\n'), mode)
 }
 
-func saveState(root *os.Root, state State) error {
+// Append-only provenance of which binary version published each state/review change (tool-spec §19, REQ-SA-040).
+type ToolVersionRecord struct {
+	Command     string `json:"command"`
+	ToolVersion string `json:"tool_version"`
+	RecordedAt  string `json:"recorded_at"`
+}
+
+type toolVersionJournal struct {
+	Version int                 `json:"version"`
+	Records []ToolVersionRecord `json:"records"`
+}
+
+const toolVersionsFile = "tool-versions.json"
+
+// Missing file means an older run; a damaged file is an error, never treated as absence.
+func readToolVersions(run *os.Root) (toolVersionJournal, error) {
+	journal := toolVersionJournal{1, []ToolVersionRecord{}}
+	data, err := readRoot(run, toolVersionsFile, maxState)
+	if os.IsNotExist(err) {
+		return journal, nil
+	}
+	if err != nil {
+		return journal, err
+	}
+	if err := strictJSON(data, &journal); err != nil {
+		return journal, fmt.Errorf("журнал версий: %w", err)
+	}
+	if err := requiredJSON(data, reflect.TypeOf(toolVersionJournal{})); err != nil {
+		return journal, fmt.Errorf("журнал версий: %w", err)
+	}
+	if journal.Version != 1 {
+		return journal, errors.New("неверная версия журнала версий")
+	}
+	return journal, nil
+}
+
+// Runs before the authoritative write: a damaged or oversized journal refuses the command while the run is untouched.
+func prepareToolVersion(run *os.Root, command, toolVersion string) ([]byte, error) {
+	journal, err := readToolVersions(run)
+	if err != nil {
+		return nil, err
+	}
+	if n := len(journal.Records); n > 0 && journal.Records[n-1].ToolVersion != toolVersion {
+		slog.Warn("run продолжен другой версией бинарника", "previous", journal.Records[n-1].ToolVersion, "current", toolVersion)
+	}
+	journal.Records = append(journal.Records, ToolVersionRecord{command, toolVersion, time.Now().UTC().Format(time.RFC3339)})
+	slog.Debug("run: версия подготовлена", "command", command, "tool_version", toolVersion)
+	data, err := json.MarshalIndent(journal, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	if len(data)+1 > maxState {
+		return nil, errors.New("журнал версий превышает лимит 32 MiB")
+	}
+	return append(data, '\n'), nil
+}
+
+// Runs after the commit point: the state is already published, so a failure here is a warning, not a refusal.
+func publishToolVersion(run *os.Root, data []byte) {
+	if data == nil {
+		return
+	}
+	if err := atomicWrite(run, toolVersionsFile, data, 0600); err != nil {
+		slog.Warn("журнал версий не записан", "error", err.Error())
+		return
+	}
+	slog.Debug("run: журнал версий опубликован", "bytes", len(data))
+}
+
+func saveState(root *os.Root, state State, journal []byte) error {
 	if err := checkStateSize(state); err != nil {
 		return err
 	}
 	if err := invalidateReports(root); err != nil {
 		return err
 	}
-	return writeJSON(root, "state.json", state, 0600)
+	if err := writeJSON(root, "state.json", state, 0600); err != nil {
+		return err
+	}
+	publishToolVersion(root, journal)
+	return nil
 }
 
 func invalidateReports(root *os.Root) error {
@@ -948,10 +1033,10 @@ func execute(args []string) (any, error) {
 		return runUpdate(&http.Client{Timeout: releaseTimeout}, releaseBaseURL, exe, version, releasePublicKeyHex)
 	}
 	if len(args) < 3 {
-		return nil, errors.New("команды: init/index CONFIG; reconcile CONFIG [RAW DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION]; submit/retry/test/php-facts/php-typed CONFIG RUN_ID ...; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]")
+		return nil, errors.New("команды: init/index CONFIG; reconcile CONFIG [RAW DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION]; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]")
 	}
 	command, runID := args[0], args[2]
-	argc := map[string]int{"prepare": 3, "tasks": 3, "status": 3, "report": 3, "review": -2, "submit": 5, "retry": 4, "test": 4, "php-facts": -1, "php-typed": -1}
+	argc := map[string]int{"prepare": 3, "tasks": 3, "status": 3, "report": 3, "review": -2, "submit": 5, "validate": 5, "retry": 4, "test": 4, "php-facts": -1, "php-typed": -1}
 	if count, ok := argc[command]; !ok || (count >= 0 && len(args) != count) || (count == -1 && len(args) < 4) || (count == -2 && len(args) != 3 && len(args) != 4) || !slugRE.MatchString(runID) {
 		return nil, errors.New("неизвестная команда, неверные аргументы или недопустимый RUN_ID")
 	}
@@ -1015,6 +1100,17 @@ func execute(args []string) (any, error) {
 		return nil, err
 	}
 	defer run.Close()
+	// Publishing commands prepare their provenance record now (a damaged journal refuses before any write);
+	// read-only commands and validate only check it, so corruption is never hidden as absence.
+	var journal []byte
+	var toolVersions toolVersionJournal
+	if readOnly || oneOf(command, "validate", "tasks", "php-facts") {
+		if toolVersions, err = readToolVersions(run); err != nil {
+			return nil, err
+		}
+	} else if journal, err = prepareToolVersion(run, command, version); err != nil {
+		return nil, err
+	}
 	var state State
 	if command == "prepare" {
 		state = newState(m)
@@ -1024,7 +1120,7 @@ func execute(args []string) (any, error) {
 		if err := writeJSON(run, "manifest.json", m, 0400); err != nil {
 			return nil, err
 		}
-		if err := saveState(run, state); err != nil {
+		if err := saveState(run, state, journal); err != nil {
 			return nil, err
 		}
 	} else {
@@ -1092,7 +1188,7 @@ func execute(args []string) (any, error) {
 		return status, nil
 	case "review":
 		if len(args) == 4 {
-			return submitReview(run, runID, m, state, args[3])
+			return submitReview(run, runID, m, state, args[3], journal)
 		}
 		return reviewContext(run, runID, m, state, fresh)
 	case "report":
@@ -1108,6 +1204,9 @@ func execute(args []string) (any, error) {
 			report.Conclusion = "Хост согласовал результаты по текущим свидетельствам. Это его обоснованная оценка, не автоматическое соответствие или доказательство полноты ТЗ."
 		}
 		report.SDK = loadSDKSummary(run, state.SDK)
+		if len(toolVersions.Records) > 0 {
+			report.ToolVersions = toolVersions.Records
+		}
 		buildNavigation(&report, m)
 		var html bytes.Buffer
 		if err := reportTemplate.Execute(&html, report); err != nil {
@@ -1145,7 +1244,7 @@ func execute(args []string) (any, error) {
 			return nil, err
 		}
 		state.Executions = append(state.Executions, receipt)
-		if err := saveState(run, state); err != nil {
+		if err := saveState(run, state, journal); err != nil {
 			return nil, err
 		}
 		return receipt, nil
@@ -1172,7 +1271,7 @@ func execute(args []string) (any, error) {
 			return nil, err
 		}
 		state.SDK = append(state.SDK, SDKRecord{Artifact: artifact, SHA256: digest(typed.raw), PHPStanVersion: typed.phpstan, LarastanVersion: typed.larastan, RecordedAt: time.Now().UTC().Format(time.RFC3339Nano)})
-		if err := saveState(run, state); err != nil {
+		if err := saveState(run, state, journal); err != nil {
 			return nil, err
 		}
 		slog.Info("php-typed: факты записаны", "run_id", runID, "artifact", artifact, "facts", len(typed.envelope.Facts), "diagnostics", typed.diagnostics)
@@ -1192,7 +1291,7 @@ func execute(args []string) (any, error) {
 		entry.Task.Attempt++
 		entry.Result = nil
 		entry.RawSHA256 = ""
-		if err := saveState(run, state); err != nil {
+		if err := saveState(run, state, journal); err != nil {
 			return nil, err
 		}
 		return entry.Task, nil
@@ -1214,6 +1313,11 @@ func execute(args []string) (any, error) {
 	canonical, err := json.MarshalIndent(result, "", "  ")
 	if err != nil || len(canonical)+1 > maxResult {
 		return nil, errors.New("нормализованный результат превышает лимит 4 MiB")
+	}
+	if command == "validate" {
+		// Same checks as submit up to this point; nothing below this line runs, so the run stays byte-identical.
+		slog.Info("validate: ответ проверен", "task_id", result.TaskID, "attempt", result.Attempt, "already_submitted", entry.Result != nil)
+		return map[string]any{"valid": true, "task_id": result.TaskID, "attempt": result.Attempt, "already_submitted": entry.Result != nil}, nil
 	}
 	if entry.Result != nil {
 		if !reflect.DeepEqual(*entry.Result, result) {
@@ -1246,7 +1350,7 @@ func execute(args []string) (any, error) {
 	if err := atomicWrite(run, resultPath, data, 0400); err != nil {
 		return nil, err
 	}
-	if err := saveState(run, state); err != nil {
+	if err := saveState(run, state, journal); err != nil {
 		return nil, err
 	}
 	return map[string]any{"accepted": true, "duplicate": false, "task_id": result.TaskID, "attempt": result.Attempt}, nil

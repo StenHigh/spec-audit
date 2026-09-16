@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"reflect"
 	"strings"
@@ -56,6 +57,17 @@ type AcceptedRecord struct {
 	Requirement Requirement `json:"requirement"`
 	Status      string      `json:"status"`
 	Reason      string      `json:"reason"`
+	// Mirrors requirement.accepted.* for hosts (tool-spec §19.1); Requirement itself stays untouched because it is hashed into snapshot_id.
+	Revision int    `json:"revision"`
+	Clarity  string `json:"clarity"`
+}
+
+func acceptedRecord(req Requirement, status, reason string) AcceptedRecord {
+	record := AcceptedRecord{Requirement: req, Status: status, Reason: reason}
+	if req.Accepted != nil {
+		record.Revision, record.Clarity = req.Accepted.Revision, req.Accepted.Clarity
+	}
+	return record
 }
 
 type AcceptedAssignment struct {
@@ -169,12 +181,12 @@ func applyAccepted(state acceptedState, raw legacyRaw, decision AcceptedDecision
 				if operation.Action == "revise" {
 					req.Accepted.Revision++
 				}
-				state.Records[position] = AcceptedRecord{req, "active", operation.Reason}
+				state.Records[position] = acceptedRecord(req, "active", operation.Reason)
 			} else {
 				req.ID = fmt.Sprintf("REQ-AI-%03d", state.nextID)
 				state.nextID++
 				req.Accepted.Parents = append([]string{}, operation.Previous...)
-				state.Records = append(state.Records, AcceptedRecord{req, "active", operation.Reason})
+				state.Records = append(state.Records, acceptedRecord(req, "active", operation.Reason))
 			}
 			history.Assignments = append(history.Assignments, AcceptedAssignment{candidate.ID, req.ID})
 		}
@@ -289,24 +301,7 @@ func reconcile(cfg Config, paths []string) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		freshness := "unavailable"
-		m, scanErr := scanSnapshot(cfg)
-		set := []legacySource{}
-		if scanErr == nil {
-			freshness = "stale"
-			if len(ledger.Commits) == 0 {
-				freshness = "uninitialized"
-			} else if acceptedFresh(state, m.Files) {
-				freshness = "fresh"
-			}
-			for _, file := range m.Files {
-				if file.Kind == "spec" {
-					set = append(set, legacySource{file.Path, file.SHA256})
-				}
-			}
-		}
-		return map[string]any{"base_index": state.Head, "source_set": set, "freshness": freshness,
-			"records": state.Records, "history": state.History, "journal": ledger, "semantic_completeness_proven": false}, nil
+		return acceptedView(cfg, ledger, state), nil
 	}
 	rawBytes, err := readPath(paths[0], maxResult)
 	if err != nil {
@@ -381,5 +376,30 @@ func reconcile(cfg Config, paths []string) (any, error) {
 	if err := atomicWrite(reports, acceptedFile, append(data, '\n'), 0600); err != nil {
 		return nil, err
 	}
-	return map[string]any{"accepted": true, "duplicate": false, "base_index": state.Head, "records": state.Records}, nil
+	// Same view as the read-only call; freshness is measured again under the held lock, not assumed.
+	view := acceptedView(cfg, ledger, state)
+	view["accepted"], view["duplicate"] = true, false
+	slog.Debug("reconcile: view после apply", "freshness", view["freshness"], "records", len(state.Records))
+	return view, nil
+}
+
+func acceptedView(cfg Config, ledger acceptedLedger, state acceptedState) map[string]any {
+	freshness := "unavailable"
+	m, scanErr := scanSnapshot(cfg)
+	set := []legacySource{}
+	if scanErr == nil {
+		freshness = "stale"
+		if len(ledger.Commits) == 0 {
+			freshness = "uninitialized"
+		} else if acceptedFresh(state, m.Files) {
+			freshness = "fresh"
+		}
+		for _, file := range m.Files {
+			if file.Kind == "spec" {
+				set = append(set, legacySource{file.Path, file.SHA256})
+			}
+		}
+	}
+	return map[string]any{"base_index": state.Head, "source_set": set, "freshness": freshness,
+		"records": state.Records, "history": state.History, "journal": ledger, "semantic_completeness_proven": false}
 }
