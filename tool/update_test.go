@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 )
 
@@ -60,6 +61,15 @@ func newTestRelease(t *testing.T, version string, bin []byte, mutate func(m *Rel
 	return r
 }
 
+func (r testRelease) manifest(t *testing.T) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(r.dir, releaseManifestName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
 func (r testRelease) write(t *testing.T, name string, data []byte) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(r.dir, name), data, 0644); err != nil {
@@ -72,7 +82,8 @@ func TestVersion(t *testing.T) {
 	if got["version"] != "dev" || got["release"] != false || got["os"] != runtime.GOOS || got["arch"] != runtime.GOARCH {
 		t.Fatalf("%v", got)
 	}
-	if releaseBuild("1.2.3", "") || releaseBuild("dev", "ab") || !releaseBuild("1.2.3", "ab") {
+	key := strings.Repeat("ab", ed25519.PublicKeySize)
+	if releaseBuild("1.2.3", "") || releaseBuild("dev", key) || releaseBuild("1.2.3", "ab") || releaseBuild("1.2.3", strings.Repeat("zz", ed25519.PublicKeySize)) || !releaseBuild("1.2.3", key) {
 		t.Fatal("releaseBuild")
 	}
 }
@@ -97,16 +108,18 @@ func TestUpdate(t *testing.T) {
 	old, next := []byte("old-binary"), []byte("new-binary-bytes")
 	big := bytes.Repeat([]byte("x"), maxFile+1)
 	cases := []struct {
-		name     string
-		current  string
-		exeName  string
-		noKey    bool
-		release  func(t *testing.T) testRelease
-		mutate   func(t *testing.T, r testRelease)
-		fetches  int32
-		updated  bool
-		fail     bool
-		wantBody []byte
+		name       string
+		current    string
+		exeName    string
+		noKey      bool
+		umask      int
+		viaSymlink bool
+		release    func(t *testing.T) testRelease
+		mutate     func(t *testing.T, r testRelease)
+		fetches    int32
+		updated    bool
+		fail       bool
+		wantBody   []byte
 	}{
 		{name: "dev_build", current: "dev", release: func(t *testing.T) testRelease { return newTestRelease(t, "0.1.1", next, nil) }, fail: true},
 		{name: "no_key", current: "0.1.0", noKey: true, release: func(t *testing.T) testRelease { return newTestRelease(t, "0.1.1", next, nil) }, fail: true},
@@ -127,9 +140,22 @@ func TestUpdate(t *testing.T) {
 			return newTestRelease(t, "0.1.1", next, func(m *ReleaseManifest) { m.Assets[0].File = "spec-audit" })
 		}, fetches: 2, fail: true},
 		{name: "bad_manifest_duplicate_key", current: "0.1.0", release: func(t *testing.T) testRelease { return newTestRelease(t, "0.1.1", next, nil) }, mutate: func(t *testing.T, r testRelease) {
-			raw := []byte(`{"schema_version":"spec-audit-release/1","version":"0.1.1","version":"0.1.2","assets":[]}`)
+			// Otherwise valid: only the repeated key can cause the refusal.
+			raw := bytes.Replace(r.manifest(t), []byte(`"version":"0.1.1"`), []byte(`"version":"0.1.1","version":"0.1.1"`), 1)
 			r.write(t, releaseManifestName, raw)
 			r.write(t, releaseSigName, ed25519.Sign(r.priv, raw))
+		}, fetches: 2, fail: true},
+		{name: "bad_manifest_extra_field", current: "0.1.0", release: func(t *testing.T) testRelease { return newTestRelease(t, "0.1.1", next, nil) }, mutate: func(t *testing.T, r testRelease) {
+			raw := bytes.Replace(r.manifest(t), []byte(`"version":"0.1.1"`), []byte(`"version":"0.1.1","notes":"x"`), 1)
+			r.write(t, releaseManifestName, raw)
+			r.write(t, releaseSigName, ed25519.Sign(r.priv, raw))
+		}, fetches: 2, fail: true},
+		{name: "bad_manifest_duplicate_platform", current: "0.1.0", release: func(t *testing.T) testRelease {
+			return newTestRelease(t, "0.1.1", next, func(m *ReleaseManifest) { m.Assets = append(m.Assets, m.Assets[0]) })
+		}, fetches: 2, fail: true},
+		{name: "long_signature", current: "0.1.0", release: func(t *testing.T) testRelease { return newTestRelease(t, "0.1.1", next, nil) }, mutate: func(t *testing.T, r testRelease) {
+			sig, _ := os.ReadFile(filepath.Join(r.dir, releaseSigName))
+			r.write(t, releaseSigName, append(sig, 0))
 		}, fetches: 2, fail: true},
 		{name: "already_latest", current: "0.1.1", release: func(t *testing.T) testRelease { return newTestRelease(t, "0.1.1", next, nil) }, fetches: 2},
 		{name: "downgrade", current: "0.2.0", release: func(t *testing.T) testRelease { return newTestRelease(t, "0.1.9", next, nil) }, fetches: 2},
@@ -151,6 +177,8 @@ func TestUpdate(t *testing.T) {
 			}
 		}, fetches: 3, fail: true},
 		{name: "ok", current: "0.1.0", release: func(t *testing.T) testRelease { return newTestRelease(t, "0.1.1", next, nil) }, fetches: 3, updated: true, wantBody: next},
+		{name: "ok_umask", current: "0.1.0", umask: 0077, release: func(t *testing.T) testRelease { return newTestRelease(t, "0.1.1", next, nil) }, fetches: 3, updated: true, wantBody: next},
+		{name: "ok_symlinked_exe", current: "0.1.0", viaSymlink: true, release: func(t *testing.T) testRelease { return newTestRelease(t, "0.1.1", next, nil) }, fetches: 3, updated: true, wantBody: next},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -171,15 +199,26 @@ func TestUpdate(t *testing.T) {
 			if err := os.WriteFile(exe, old, 0755); err != nil {
 				t.Fatal(err)
 			}
+			target := exe
+			if tc.viaSymlink {
+				target = filepath.Join(t.TempDir(), "spec-audit-link")
+				if err := os.Symlink(exe, target); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.umask != 0 {
+				previous := syscall.Umask(tc.umask)
+				defer syscall.Umask(previous)
+			}
 			pubHex := r.pubHex
 			if tc.noKey {
 				pubHex = ""
 			}
-			got, err := runUpdate(client, srv.URL, exe, tc.current, pubHex)
+			got, err := runUpdate(client, srv.URL, target, tc.current, pubHex)
 			if (err != nil) != tc.fail {
 				t.Fatalf("err=%v got=%v", err, got)
 			}
-			if err != nil && (strings.Contains(err.Error(), srv.URL) || strings.Contains(err.Error(), "127.0.0.1") || strings.Contains(err.Error(), "tampered")) {
+			if err != nil && (strings.Contains(err.Error(), srv.URL) || strings.Contains(err.Error(), "127.0.0.1") || strings.Contains(err.Error(), "tampered") || strings.Contains(err.Error(), releaseSchema) || strings.Contains(err.Error(), "0.1.1")) {
 				t.Fatalf("ошибка раскрывает URL или байты ответа: %v", err)
 			}
 			if transport.calls.Load() != tc.fetches {
@@ -324,6 +363,24 @@ func TestInstallScript(t *testing.T) {
 			t.Fatal("бинарник установлен без sha256 в манифесте")
 		}
 	})
+	t.Run("dest_is_dir", func(t *testing.T) {
+		release := newTestRelease(t, "0.1.0", bin, nil)
+		home := t.TempDir()
+		dest := filepath.Join(home, "bin")
+		if err := os.MkdirAll(filepath.Join(dest, binaryName), 0755); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("sh", script)
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "SPEC_AUDIT_RELEASE_BASE=file://" + release.dir, "SPEC_AUDIT_INSTALL_DIR=" + dest}
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err == nil || !strings.Contains(stderr.String(), "каталог") {
+			t.Fatalf("ожидался отказ: %v %s", err, stderr.String())
+		}
+		if entries, _ := os.ReadDir(filepath.Join(dest, binaryName)); len(entries) != 0 {
+			t.Fatalf("файл перемещён внутрь каталога: %v", entries)
+		}
+	})
 	t.Run("unsupported", func(t *testing.T) {
 		wrappers := t.TempDir()
 		uname := "#!/bin/sh\ncase \"$1\" in -s) echo FreeBSD ;; -m) echo riscv64 ;; esac\n"
@@ -418,8 +475,8 @@ func TestNativeDistribution(t *testing.T) {
 			t.Fatalf("%v: успех не молчит: %s", args, &stderr)
 		}
 		if !success {
-			if !json.Valid(stderr.Bytes()) || strings.Contains(stderr.String(), srv.URL) || strings.Contains(stderr.String(), "127.0.0.1") {
-				t.Fatalf("%v: диагностика не JSON или раскрывает URL: %s", args, &stderr)
+			if !json.Valid(stderr.Bytes()) || strings.Contains(stderr.String(), srv.URL) || strings.Contains(stderr.String(), "127.0.0.1") || strings.Contains(stderr.String(), "Usage") || strings.Contains(stderr.String(), "flag provided") {
+				t.Fatalf("%v: диагностика не JSON, содержит usage или раскрывает URL: %s", args, &stderr)
 			}
 			return nil
 		}
@@ -433,6 +490,8 @@ func TestNativeDistribution(t *testing.T) {
 		t.Fatalf("version после установки: %v", v)
 	}
 	proj := t.TempDir()
+	run("error", false, "skill", "install", "--dir", proj)
+	run("error", false, "skill", "install", "--dir", proj, "--host", "both", "--bogus")
 	if got := run("error", true, "skill", "install", "--dir", proj, "--host", "both"); got["updated"] != true || got["version"] != "0.1.0" {
 		t.Fatalf("skill install: %v", got)
 	}

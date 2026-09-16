@@ -152,7 +152,7 @@ func runSkill(sub, dir, host string, replace bool, current string) (map[string]a
 	case state.kind == "symlink" && sub == "install":
 		return nil, errors.New("на месте .spec-audit/skill находится символическая ссылка; повторите с --replace, чтобы заменить её реальной копией")
 	case state.kind == "foreign":
-		return nil, errors.New("каталог .spec-audit/skill создан не этим инструментом (нет receipt); он не заменяется")
+		return nil, errors.New("каталог .spec-audit/skill создан не этим инструментом (нет receipt или receipt не по контракту); он не заменяется")
 	case state.kind != "ours":
 		return nil, errors.New(skillNeedInstall)
 	case len(state.drift) > 0 && !replace:
@@ -219,20 +219,9 @@ func readSkillState(dirRoot *os.Root, files map[string][]byte) (skillState, erro
 	return state, nil
 }
 
+// Managed paths are regular files: a symlink or FIFO in their place is a refusal, not a read.
 func readRootFile(root *os.Root, name string) ([]byte, error) {
-	f, err := root.Open(name)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("нужен обычный файл: %s", name)
-	}
-	return readLimited(f, maxConfig)
+	return readRoot(root, name, maxConfig)
 }
 
 // Decide every link action before writing; a foreign real path is never replaced.
@@ -242,6 +231,14 @@ func planSkillLinks(dirRoot *os.Root, rels []string, replace bool) (map[string]s
 		info, err := dirRoot.Lstat(rel)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
+			// Existing ancestors must be directories, or MkdirAll would fail after the skill files are written.
+			for parent := path.Dir(rel); parent != "."; parent = path.Dir(parent) {
+				if info, err := dirRoot.Stat(parent); err == nil && !info.IsDir() {
+					return nil, fmt.Errorf("%s существует и не является каталогом; ссылка %s не создаётся", parent, rel)
+				} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+					return nil, err
+				}
+			}
 			links[rel] = "created"
 		case err != nil:
 			return nil, err

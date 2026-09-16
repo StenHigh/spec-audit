@@ -52,7 +52,8 @@ type ReleaseManifest struct {
 }
 
 func releaseBuild(current, pubHex string) bool {
-	return releaseVersionRE.MatchString(current) && pubHex != ""
+	pub, err := hex.DecodeString(pubHex)
+	return releaseVersionRE.MatchString(current) && err == nil && len(pub) == ed25519.PublicKeySize
 }
 
 func runVersion() map[string]any {
@@ -94,7 +95,7 @@ func versionParts(value string) ([3]int, error) {
 	for i, part := range strings.SplitN(value, ".", 3) {
 		n, err := strconv.Atoi(part)
 		if err != nil {
-			return out, err
+			return out, errors.New("компонент версии вне диапазона")
 		}
 		out[i] = n
 	}
@@ -198,6 +199,10 @@ func runUpdate(client *http.Client, baseURL, exe, current, pubHex string) (map[s
 	}
 	defer dir.Close()
 	if err := atomicWrite(dir, binaryName, bin, 0755); err != nil {
+		return nil, err
+	}
+	// The create mode is masked by umask; the contract promises exactly 0755.
+	if err := dir.Chmod(binaryName, 0755); err != nil {
 		return nil, err
 	}
 	slog.Info("update: бинарник заменён", "from", current, "to", m.Version, "bytes", len(bin))
