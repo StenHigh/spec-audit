@@ -128,7 +128,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) §12.3, REQ-SA-001 (froz
 <!-- Commit checkpoint: tasks 3-5 -->
 
 ### Phase 3: Релиз и сквозная проверка
-- [ ] Task 6: `.github/workflows/release.yml` — нативные сборки с квалификацией и подписанный релиз shell-шагами
+- [x] Task 6: `.github/workflows/release.yml` — нативные сборки с квалификацией и подписанный релиз shell-шагами
   - Deliverable: триггер `push.tags: ['v[0-9]+.[0-9]+.[0-9]+']`, `permissions: contents: read`, `env: GOTOOLCHAIN=local`; jobs `build-linux-amd64` (ubuntu-latest) и `build-darwin-arm64` (`macos-latest`, шаг `test "$(uname -m)" = arm64`): `test -n "${{ vars.SPEC_AUDIT_RELEASE_PUBLIC_KEY }}"`, `go test ./tool -short`, `go vet ./...`, `CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-X main.version=${GITHUB_REF_NAME#v} -X main.releasePublicKeyHex=$PUB" -o out/spec-audit-<os>-<arch> ./tool`; квалификация: `version` → `release:true`; `index "$PWD/acceptance/config.yaml"`; `skill install --dir $tmp --host both` затем `skill update …` → `updated:false`; `if env -i PATH=/usr/bin:/bin out/spec-audit-… update; then exit 1; fi`; `upload-artifact` с уникальным именем. Job `release` (`needs`, `environment: release`, `permissions: contents: write`): `download-artifact` в `dist/`, `test -n "$SIGNING_KEY"`, `shasum -a 256`, `jq -c -n` → `release-manifest.json` (`schema_version`, `version=${GITHUB_REF_NAME#v}`, два ассета), `openssl pkeyutl -sign -rawin -inkey key.pem -in release-manifest.json -out release-manifest.sig` (ключ из секрета во временный файл 0600, удаляется), `cp scripts/install.sh dist/`, `gh release create "$GITHUB_REF_NAME" --verify-tag --title … --notes … dist/*`. README-раздел «Релиз»: генерация ключей OpenSSL 3 (Homebrew), настройка variable/secret/окружения `release` с ревьюером, порядок выпуска (тег на прошедшем `go test`/`vet` коммите).
   - Files: `.github/workflows/release.yml`, `README.md`
   - Depends: 3, 4, 5
@@ -136,7 +136,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) §12.3, REQ-SA-001 (froz
   - Logging: шаги workflow печатают версии инструментов и sha; секрет не выводится (`::add-mask::` не требуется — ключ только в файле).
   - REQ: REQ-SA-035, REQ-SA-038
 
-- [ ] Task 7: E2E без сети реальным процессом: `install.sh` → `skill install` → `init`/`index` → `update` → `skill update`
+- [x] Task 7: E2E без сети реальным процессом: `install.sh` → `skill install` → `init`/`index` → `update` → `skill update`
   - Deliverable: `TestNativeDistribution` (skip в `-short`): собрать бинарники A (`-X main.version=0.1.0 -X main.releasePublicKeyHex=<test pub> -X main.releaseBaseURL=file:///…`) — нет, `update` использует `http.Client`; поэтому `releaseBaseURL` = `httptest.NewServer` (FileServer над каталогом релиза) — и B (`0.1.1`); релизный каталог: `spec-audit-<os>-<arch>` = B, манифест, `.sig` (`ed25519.Sign` тестовым ключом); `install.sh` с `SPEC_AUDIT_RELEASE_BASE=file://` ставит A в `$tmp/bin`; `A version` → `0.1.0`; `A skill install --dir $proj --host both`; `A init $proj/audit.yaml`; `A index …` (fixture-проект); `A update` → `updated:true`; `bin/spec-audit version` → `0.1.1`; `B skill update --dir $proj --host both` → `updated:false` (набор идентичен) или `updated:true` при изменённом наборе; повторный `update` → `updated:false`. Всё в `t.TempDir()`, без сети/Docker.
   - Files: `tool/update_test.go`
   - Depends: 5, 6

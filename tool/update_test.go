@@ -343,3 +343,129 @@ func TestInstallScript(t *testing.T) {
 		}
 	})
 }
+
+// Сквозная поставка реальными процессами без сети и Docker: install.sh (file://) → version → skill install →
+// init/index → update до следующей версии через локальный сервер релиза → skill update → повторный update.
+func TestNativeDistribution(t *testing.T) {
+	if testing.Short() {
+		t.Skip("нативная сборка и процессы")
+	}
+	for _, tool := range []string{"sh", "curl"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("нет %s", tool)
+		}
+	}
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubHex := hex.EncodeToString(pub)
+	next := t.TempDir()
+	srv := httptest.NewServer(http.FileServer(http.Dir(next)))
+	defer srv.Close()
+	asset := binaryName + "-" + runtime.GOOS + "-" + runtime.GOARCH
+	build := func(dir, version string) []byte {
+		t.Helper()
+		out := filepath.Join(dir, asset)
+		flags := "-X main.version=" + version + " -X main.releasePublicKeyHex=" + pubHex + " -X main.releaseBaseURL=" + srv.URL
+		cmd := exec.Command("go", "build", "-trimpath", "-ldflags", flags, "-o", out, ".")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("сборка %s: %v: %s", version, err, output)
+		}
+		data, err := os.ReadFile(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	publish := func(dir, version string, bin []byte) {
+		t.Helper()
+		raw, _ := json.Marshal(ReleaseManifest{SchemaVersion: releaseSchema, Version: version, Assets: []ReleaseAsset{
+			{OS: runtime.GOOS, Arch: runtime.GOARCH, File: asset, SHA256: digest(bin)},
+		}})
+		for name, data := range map[string][]byte{releaseManifestName: raw, releaseSigName: ed25519.Sign(priv, raw)} {
+			if err := os.WriteFile(filepath.Join(dir, name), data, 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	first := t.TempDir()
+	binA := build(first, "0.1.0")
+	publish(first, "0.1.0", binA)
+	binB := build(next, "0.1.1")
+	publish(next, "0.1.1", binB)
+
+	home := t.TempDir()
+	dest := filepath.Join(home, "bin")
+	installer, _ := filepath.Abs(filepath.Join("..", "scripts", "install.sh"))
+	sh := exec.Command("sh", installer)
+	sh.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "SPEC_AUDIT_RELEASE_BASE=file://" + first, "SPEC_AUDIT_INSTALL_DIR=" + dest}
+	if output, err := sh.CombinedOutput(); err != nil {
+		t.Fatalf("install.sh: %v: %s", err, output)
+	}
+	installed := filepath.Join(dest, binaryName)
+	run := func(level string, success bool, args ...string) map[string]any {
+		t.Helper()
+		cmd := exec.Command(installed, args...)
+		cmd.Env = []string{"PATH=", "HOME=" + home, "LOG_LEVEL=" + level}
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		err := cmd.Run()
+		if (err == nil) != success {
+			t.Fatalf("%v: %v: %s", args, err, &stderr)
+		}
+		if level == "error" && success && stderr.Len() != 0 {
+			t.Fatalf("%v: успех не молчит: %s", args, &stderr)
+		}
+		if !success {
+			if !json.Valid(stderr.Bytes()) || strings.Contains(stderr.String(), srv.URL) || strings.Contains(stderr.String(), "127.0.0.1") {
+				t.Fatalf("%v: диагностика не JSON или раскрывает URL: %s", args, &stderr)
+			}
+			return nil
+		}
+		var value map[string]any
+		if err := json.Unmarshal(stdout.Bytes(), &value); err != nil {
+			t.Fatalf("%v: stdout не JSON-объект: %s", args, &stdout)
+		}
+		return value
+	}
+	if v := run("error", true, "version"); v["version"] != "0.1.0" || v["release"] != true {
+		t.Fatalf("version после установки: %v", v)
+	}
+	proj := t.TempDir()
+	if got := run("error", true, "skill", "install", "--dir", proj, "--host", "both"); got["updated"] != true || got["version"] != "0.1.0" {
+		t.Fatalf("skill install: %v", got)
+	}
+	if target, err := os.Readlink(filepath.Join(proj, ".claude", "skills", "spec-audit")); err != nil || target != skillLinkTarget {
+		t.Fatalf("host-ссылка: %q %v", target, err)
+	}
+	if got := run("error", true, "init", filepath.Join(proj, "audit.yaml")); got["created"] != true {
+		t.Fatalf("init: %v", got)
+	}
+	config, _ := fixture(t)
+	if got := run("error", true, "index", config); got == nil {
+		t.Fatal("index")
+	}
+	if got := run("error", true, "update"); got["updated"] != true || got["from"] != "0.1.0" || got["to"] != "0.1.1" {
+		t.Fatalf("update: %v", got)
+	}
+	if data, err := os.ReadFile(installed); err != nil || !bytes.Equal(data, binB) {
+		t.Fatal("установленный бинарник не равен ассету релиза")
+	}
+	if v := run("error", true, "version"); v["version"] != "0.1.1" || v["release"] != true {
+		t.Fatalf("version после update: %v", v)
+	}
+	if got := run("error", true, "skill", "update", "--dir", proj, "--host", "both"); got["updated"] != false || got["version"] != "0.1.1" {
+		t.Fatalf("skill update: %v", got)
+	}
+	if got := run("error", true, "update"); got["updated"] != false || got["from"] != "0.1.1" {
+		t.Fatalf("повторный update: %v", got)
+	}
+	if err := os.Remove(filepath.Join(next, releaseSigName)); err != nil {
+		t.Fatal(err)
+	}
+	run("error", false, "update")
+	if data, err := os.ReadFile(installed); err != nil || !bytes.Equal(data, binB) {
+		t.Fatal("отказ update изменил бинарник")
+	}
+}
