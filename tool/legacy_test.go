@@ -312,7 +312,7 @@ func TestExternalExtractionReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, sources, err := acceptedSources(cfg)
+	_, sources, _, err := acceptedSources(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

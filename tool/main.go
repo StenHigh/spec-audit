@@ -65,11 +65,13 @@ type Config struct {
 	Version     int     `yaml:"version" json:"version"`
 	ProjectRoot string  `yaml:"project_root" json:"project_root"`
 	Specs       Sources `yaml:"specs" json:"specs"`
-	Code        Sources `yaml:"code" json:"code"`
-	Tests       Sources `yaml:"tests" json:"tests"`
-	ReportsDir  string  `yaml:"reports_dir" json:"reports_dir"`
-	Runtime     Runtime `yaml:"runtime" json:"runtime"`
-	Scopes      []Scope `yaml:"scopes" json:"scopes"`
+	// References — справочные файлы ТЗ accepted-режима (§20): цитируются, не порождают кандидатов; nil сохраняет прежний snapshot_id.
+	References *Sources `yaml:"references,omitempty" json:"references,omitempty"`
+	Code       Sources  `yaml:"code" json:"code"`
+	Tests      Sources  `yaml:"tests" json:"tests"`
+	ReportsDir string   `yaml:"reports_dir" json:"reports_dir"`
+	Runtime    Runtime  `yaml:"runtime" json:"runtime"`
+	Scopes     []Scope  `yaml:"scopes" json:"scopes"`
 	// SDK включает типизированный PHP SDK (docs/php-sdk-contract.md); nil сохраняет прежний snapshot_id.
 	SDK *SDKConfig `yaml:"sdk,omitempty" json:"sdk,omitempty"`
 }
@@ -80,10 +82,11 @@ type SDKConfig struct {
 }
 
 type SourceFile struct {
-	Path   string `json:"path"`
-	Kind   string `json:"kind"`
-	SHA256 string `json:"sha256"`
-	Bytes  int    `json:"bytes"`
+	Path      string `json:"path"`
+	Kind      string `json:"kind"`
+	SHA256    string `json:"sha256"`
+	Bytes     int    `json:"bytes"`
+	Reference bool   `json:"reference,omitempty"`
 }
 
 type Manifest struct {
@@ -355,7 +358,17 @@ func loadConfig(path string, history ...bool) (Config, error) {
 	if len(cfg.Specs.Paths) == 0 || len(cfg.Code.Paths) == 0 {
 		return cfg, errors.New("specs/code.paths должны быть непустыми")
 	}
-	for _, group := range []*Sources{&cfg.Specs, &cfg.Code, &cfg.Tests} {
+	groups := []*Sources{&cfg.Specs, &cfg.Code, &cfg.Tests}
+	if cfg.References != nil {
+		if cfg.IndexMode != "accepted" {
+			return cfg, errors.New("references поддерживаются только при index_mode: accepted")
+		}
+		if len(cfg.References.Paths) == 0 {
+			return cfg, errors.New("references: нужен непустой paths")
+		}
+		groups = append(groups, cfg.References)
+	}
+	for _, group := range groups {
 		sort.Strings(group.Paths)
 		sort.Strings(group.Include)
 		sort.Strings(group.Exclude)
@@ -493,10 +506,19 @@ func scanSnapshot(cfg Config) (Manifest, error) {
 	defer root.Close()
 	total := 0
 	seen := map[string]string{}
-	for _, group := range []struct {
-		kind    string
-		sources Sources
-	}{{"spec", cfg.Specs}, {"code", cfg.Code}, {"tests", cfg.Tests}} {
+	type sourceGroup struct {
+		label, kind string
+		sources     Sources
+		reference   bool
+	}
+	groups := []sourceGroup{{"spec", "spec", cfg.Specs, false}}
+	if cfg.References != nil {
+		// Справочные файлы остаются kind=spec: те же source_set, freshness и правила цитат; отличается только признак (§20).
+		groups = append(groups, sourceGroup{"reference", "spec", *cfg.References, true})
+	}
+	groups = append(groups, sourceGroup{"code", "code", cfg.Code, false}, sourceGroup{"tests", "tests", cfg.Tests, false})
+	references := 0
+	for _, group := range groups {
 		before := len(m.Files)
 		for _, directory := range group.sources.Paths {
 			if err := noSymlinks(root, directory); err != nil {
@@ -523,12 +545,12 @@ func scanSnapshot(cfg Config) (Manifest, error) {
 					return nil
 				}
 				if prior, ok := seen[path]; ok {
-					if prior == group.kind {
+					if prior == group.label {
 						return nil
 					}
 					return errors.New("файл попал в несколько категорий")
 				}
-				seen[path] = group.kind
+				seen[path] = group.label
 				data, err := readRoot(root, path, maxFile)
 				if err != nil {
 					return err
@@ -537,7 +559,10 @@ func scanSnapshot(cfg Config) (Manifest, error) {
 				if total > 512<<20 || len(m.Files) >= 25000 {
 					return errors.New("снимок превышает 512 MiB или 25000 файлов")
 				}
-				m.Files = append(m.Files, SourceFile{path, group.kind, digest(data), len(data)})
+				m.Files = append(m.Files, SourceFile{path, group.kind, digest(data), len(data), group.reference})
+				if group.reference {
+					references++
+				}
 				if group.kind == "spec" && cfg.IndexMode == "" {
 					reqs, err := parseRequirements(path, data)
 					if err != nil {
@@ -555,8 +580,11 @@ func scanSnapshot(cfg Config) (Manifest, error) {
 			}
 		}
 		if len(m.Files) == before && group.kind != "tests" {
-			return m, fmt.Errorf("пустая группа источников: %s", group.kind)
+			return m, fmt.Errorf("пустая группа источников: %s", group.label)
 		}
+	}
+	if references > 0 {
+		slog.Debug("snapshot: справочные файлы", "count", references)
 	}
 	sort.Slice(m.Files, func(i, j int) bool { return m.Files[i].Path < m.Files[j].Path })
 	return m, nil
@@ -1080,6 +1108,7 @@ func execute(args []string) (any, error) {
 		if len(m.Requirements) == 0 {
 			return nil, errors.New("нет объявленных требований; это не доказательство отсутствия обязанностей")
 		}
+		scopeAdvisories(m)
 		// Check serialized bounds before publishing a new run directory.
 		body, err := json.MarshalIndent(m, "", "  ")
 		if err != nil || len(body)+1 > maxState {
