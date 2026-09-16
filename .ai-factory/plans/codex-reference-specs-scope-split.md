@@ -117,7 +117,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (§6: г
 <!-- Commit checkpoint: tasks 5-6 -->
 
 ### Phase 4: Поставка
-- [ ] Task 7: релиз `v0.1.5`, обновление хоста, пилота и синтетического проекта
+- [x] Task 7: релиз `v0.1.5`, обновление хоста, пилота и синтетического проекта
   - Deliverable: merge ветки в `codex/bootstrap` (по запросу владельца), тег `v0.1.5`, `release.yml` (approve deployment `release` через `gh api … pending_deployments`), `spec-audit update` на хосте → 0.1.5; `skill update --host both` в `spec-audit-synthetic` и в пилоте (только tracked-копия skill; scope-конфиг и ledger пилота не трогаются), коммиты tracked-копий — по запросу. README «Приёмка и ограничения»: строка о релизе 0.1.5 и что не проверено (реальный `references`-прогон на пилоте — отдельное решение).
   - Files: `README.md`; (пилот и синтетический проект — вне репозитория инструмента)
   - Depends: 6
