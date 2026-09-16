@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -166,6 +167,12 @@ func init() {
 	}
 	mode := os.Getenv("SPEC_AUDIT_DOCKER_MODE")
 	const id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	if log := os.Getenv("SPEC_AUDIT_MOCK_LOG"); log != "" {
+		if f, err := os.OpenFile(log, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600); err == nil {
+			_, _ = f.WriteString(strings.Join(args, " ") + "\n")
+			_ = f.Close()
+		}
+	}
 	switch args[0] {
 	case "compose":
 		if strings.Join(args, " ") != "compose ps --status running -q app" {
@@ -188,7 +195,56 @@ func init() {
 		if !strings.Contains(joined, id) || !strings.Contains(joined, "timeout") || !strings.Contains(joined, "--workdir /var/www/html") {
 			os.Exit(4)
 		}
-		if strings.Contains(joined, "eval(substr") {
+		if strings.Contains(joined, "spec-audit:preflight") {
+			switch {
+			case mode == "no_phpstan":
+				os.Exit(10)
+			case mode == "no_larastan" && strings.HasSuffix(joined, "-- laravel"):
+				os.Exit(11)
+			case mode == "config_cached":
+				os.Exit(13)
+			}
+			fmt.Print("ok")
+		} else if strings.Contains(joined, "spec-audit:setup") {
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			if mode == "setup_fails" {
+				os.Exit(20)
+			}
+		} else if strings.Contains(joined, "spec-audit:cleanup") {
+			if mode == "cleanup_fails" {
+				os.Exit(1)
+			}
+		} else if strings.Contains(joined, "vendor/bin/phpstan") {
+			// The typed exporter never runs here: stdout comes from a recorded fixture.
+			switch mode {
+			case "internal_error":
+				fmt.Print(`{"totals":{"errors":1,"file_errors":0},"files":{},"errors":["Internal error: fixture"]}`)
+				os.Exit(1)
+			case "empty_stdout":
+				os.Exit(1)
+			case "slow":
+				os.Exit(124)
+			case "exit_2":
+				fmt.Print("Invalid configuration")
+				os.Exit(2)
+			case "huge_output":
+				chunk := strings.Repeat("x", 1<<16)
+				for i := 0; i < 80; i++ {
+					fmt.Print(chunk)
+				}
+				os.Exit(1)
+			case "bootstrap_writes":
+				_ = os.MkdirAll(filepath.Join(os.Getenv("SPEC_AUDIT_MOCK_ROOT"), "bootstrap/cache"), 0700)
+				_ = os.WriteFile(filepath.Join(os.Getenv("SPEC_AUDIT_MOCK_ROOT"), "bootstrap/cache/packages.php"), []byte("<?php return ['rewritten' => true];\n"), 0600)
+			}
+			data, _ := os.ReadFile(os.Getenv("SPEC_AUDIT_MOCK_PHPSTAN"))
+			fmt.Print(string(data))
+			if code := os.Getenv("SPEC_AUDIT_PHPSTAN_EXIT"); code != "" {
+				n, _ := strconv.Atoi(code)
+				os.Exit(n)
+			}
+			os.Exit(1)
+		} else if strings.Contains(joined, "eval(substr") {
 			_, _ = io.Copy(io.Discard, os.Stdin)
 			data, _ := os.ReadFile(os.Getenv("SPEC_AUDIT_MOCK_ENVELOPE"))
 			fmt.Print(string(data))
