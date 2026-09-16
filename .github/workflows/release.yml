@@ -1,0 +1,124 @@
+# Подписанный релиз по тегу vX.Y.Z (tool-spec §18): каждая платформа собирается и квалифицируется
+# нативно на runner той же платформы; публикует один job в окружении `release`.
+name: release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  build:
+    name: build-${{ matrix.os }}-${{ matrix.arch }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: linux, arch: amd64, runner: ubuntu-latest }
+          - { os: darwin, arch: arm64, runner: macos-latest }
+    runs-on: ${{ matrix.runner }}
+    env:
+      PUB: ${{ vars.SPEC_AUDIT_RELEASE_PUBLIC_KEY }}
+      ASSET: spec-audit-${{ matrix.os }}-${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Native runner matches the matrix platform
+        run: |
+          uname -a
+          test "$(uname -s | tr '[:upper:]' '[:lower:]')" = "${{ matrix.os }}"
+          case "$(uname -m)" in x86_64) arch=amd64 ;; *) arch=$(uname -m) ;; esac
+          test "$arch" = "${{ matrix.arch }}"
+      - name: Public key variable is configured
+        run: test "${#PUB}" -eq 64
+      - name: Tests and vet
+        run: |
+          go version
+          go vet ./...
+          go test ./tool -short -count=1
+      - name: Build release binary
+        run: |
+          mkdir -p out
+          CGO_ENABLED=0 go build -trimpath -buildvcs=false \
+            -ldflags "-X main.version=${GITHUB_REF_NAME#v} -X main.releasePublicKeyHex=$PUB" \
+            -o "out/$ASSET" ./tool
+          shasum -a 256 "out/$ASSET"
+      - name: Qualify natively
+        run: |
+          bin="$PWD/out/$ASSET"
+          version="${GITHUB_REF_NAME#v}"
+          "$bin" version | tee version.json
+          jq -e --arg v "$version" --arg os "${{ matrix.os }}" --arg arch "${{ matrix.arch }}" \
+            '.release == true and .version == $v and .os == $os and .arch == $arch' version.json
+          "$bin" index "$PWD/acceptance/config.yaml" > /dev/null
+          tmp=$(mktemp -d)
+          "$bin" skill install --dir "$tmp" --host both | jq -e '.updated == true'
+          "$bin" skill update --dir "$tmp" --host both | jq -e '.updated == false'
+          # update против прежнего latest не должен трогать собранный бинарник: отказ или updated:false.
+          before=$(shasum -a 256 "$bin" | cut -d' ' -f1)
+          if "$bin" update > update.json; then jq -e '.updated == false' update.json; fi
+          test "$(shasum -a 256 "$bin" | cut -d' ' -f1)" = "$before"
+          # dev-сборка отказывает в update до обращения к сети.
+          go build -o out/spec-audit-dev ./tool
+          if out/spec-audit-dev update; then echo "dev build must refuse update"; exit 1; fi
+          rm -f out/spec-audit-dev
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET }}
+          path: out/${{ env.ASSET }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: spec-audit-*
+          path: dist
+          merge-multiple: true
+      - name: Manifest and Ed25519 signature
+        env:
+          SIGNING_KEY: ${{ secrets.SPEC_AUDIT_RELEASE_SIGNING_KEY }}
+        run: |
+          test -n "$SIGNING_KEY"
+          openssl version
+          version="${GITHUB_REF_NAME#v}"
+          cd dist
+          test -f spec-audit-linux-amd64 && test -f spec-audit-darwin-arm64
+          linux=$(shasum -a 256 spec-audit-linux-amd64 | cut -d' ' -f1)
+          darwin=$(shasum -a 256 spec-audit-darwin-arm64 | cut -d' ' -f1)
+          jq -c -n --arg v "$version" --arg l "$linux" --arg d "$darwin" '{
+            schema_version: "spec-audit-release/1", version: $v,
+            assets: [
+              {os: "darwin", arch: "arm64", file: "spec-audit-darwin-arm64", sha256: $d},
+              {os: "linux", arch: "amd64", file: "spec-audit-linux-amd64", sha256: $l}
+            ]}' > release-manifest.json
+          key=$(mktemp)
+          chmod 600 "$key"
+          printf '%s\n' "$SIGNING_KEY" > "$key"
+          openssl pkeyutl -sign -rawin -inkey "$key" -in release-manifest.json -out release-manifest.sig
+          rm -f "$key"
+          test "$(wc -c < release-manifest.sig)" -eq 64
+          cp ../scripts/install.sh .
+          shasum -a 256 ./*
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "spec-audit $GITHUB_REF_NAME" \
+            --notes "Установка: README «Быстрый старт» (install.sh проверяет sha256 из release-manifest.json). Манифест подписан Ed25519; дальнейшие обновления — spec-audit update." \
+            dist/*

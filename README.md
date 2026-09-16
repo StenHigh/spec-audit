@@ -91,6 +91,22 @@ go test ./tool -run '^TestExternalTyped' -count=1 -v
 
 `TestExternalContextPacket` принимает `SPEC_AUDIT_CONTEXT_TASK` — один полный Task из prepare, проверяет lossless round-trip и сообщает только размеры. Необязательные `SPEC_AUDIT_CONTEXT_CONFIG` и `SPEC_AUDIT_CONTEXT_PACKET` (простое имя файла) сохраняют compact-пакет в reports_dir, только если такого файла ещё нет. Без входа контроль пропускается; обычный Result/submit не меняется. Эти Go-драйверы нужны для эксперимента, не для запуска готового бинарника.
 
+## Релиз
+
+Релиз публикует [`.github/workflows/release.yml`](.github/workflows/release.yml) по тегу `vX.Y.Z` (контракт — [§18 спецификации](docs/tool-spec.md#18-поставка-версия-обновление-и-установка-skill)). Матрица — только `darwin/arm64` и `linux/amd64`: каждая платформа собирается и квалифицируется нативно на runner той же платформы (`version` → `release:true`, `index` синтетического CONFIG, `skill install`/`update`, неизменность бинарника после `update`, отказ dev-сборки); cross-build без исполнения ассетом не становится. Публикует один job в окружении `release`: считает sha256, собирает `release-manifest.json`, подписывает его Ed25519 и создаёт GitHub Release с `install.sh`, манифестом, `release-manifest.sig` и двумя бинарниками.
+
+Однократная настройка владельцем (нужен OpenSSL 3; системный LibreSSL macOS не подписывает `-rawin` — `brew install openssl@3`):
+
+```bash
+openssl genpkey -algorithm ed25519 -out spec-audit-release.pem
+openssl pkey -in spec-audit-release.pem -pubout -outform DER | tail -c 32 | xxd -p -c 64
+```
+
+- Вывод второй команды (64 hex) — repository variable `SPEC_AUDIT_RELEASE_PUBLIC_KEY`; он встраивается в бинарник при сборке через `-ldflags -X main.releasePublicKeyHex`.
+- Содержимое `spec-audit-release.pem` — secret `SPEC_AUDIT_RELEASE_SIGNING_KEY` **окружения** `release` с обязательным ревьюером; build-job ключа не видит. Локальную копию ключа храните вне репозитория.
+
+Порядок выпуска: `go test ./tool && go vet ./...` зелёные на коммите → `git tag v0.1.0 && git push origin v0.1.0` → одобрить job `release` → на хосте `spec-audit update` (или первая установка через `install.sh`) должен показать новую версию. Dev-сборка (`go build`) остаётся `version: dev`, `release: false` и отказывает в `update` без сети — обновляется только релизный бинарник с именем `spec-audit`.
+
 ## Первый запуск
 
 ```bash
