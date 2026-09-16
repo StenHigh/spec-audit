@@ -248,30 +248,72 @@ func readAccepted(reportsDir string) (acceptedLedger, acceptedState, error) {
 }
 
 // Reuse the same source scanner; do not parse declared REQ blocks or load the index recursively.
-func acceptedSources(cfg Config) ([]legacySource, map[string][]byte, error) {
+// acceptedSources returns the extraction source_set (normative and reference spec files alike),
+// their contents and the set of reference-only paths (tool-spec §20).
+func acceptedSources(cfg Config) ([]legacySource, map[string][]byte, map[string]bool, error) {
 	cfg.Scopes = nil
 	m, err := scanSnapshot(cfg)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	root, err := os.OpenRoot(cfg.ProjectRoot)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	defer root.Close()
-	set, contents := []legacySource{}, map[string][]byte{}
+	set, contents, reference := []legacySource{}, map[string][]byte{}, map[string]bool{}
 	for _, file := range m.Files {
 		if file.Kind != "spec" {
 			continue
 		}
 		data, err := readRoot(root, file.Path, maxFile)
 		if err != nil || digest(data) != file.SHA256 {
-			return nil, nil, errors.New("источник изменился во время чтения")
+			return nil, nil, nil, errors.New("источник изменился во время чтения")
 		}
 		set = append(set, legacySource{file.Path, file.SHA256})
 		contents[file.Path] = data
+		if file.Reference {
+			reference[file.Path] = true
+		}
 	}
-	return set, contents, nil
+	return set, contents, reference, nil
+}
+
+// normativeAnchor rejects turning a candidate into a norm when every citation comes from a reference-only file (REQ-SA-041).
+// reject/defer/retire stay unchecked; an unknown candidate ID is left to applyAccepted so its error text is unchanged.
+func normativeAnchor(raw legacyRaw, decision AcceptedDecision, reference map[string]bool) error {
+	if len(reference) == 0 {
+		return nil
+	}
+	candidates := map[string]legacyCandidate{}
+	for _, candidate := range raw.Candidates {
+		candidates[candidate.ID] = candidate
+	}
+	checked := 0
+	for _, operation := range decision.Operations {
+		if !oneOf(operation.Action, "accept", "rebind", "revise", "split", "merge") {
+			continue
+		}
+		for _, target := range operation.Targets {
+			candidate, ok := candidates[target.Candidate]
+			if !ok {
+				continue
+			}
+			checked++
+			anchored := false
+			for _, cite := range candidate.Citations {
+				if !reference[cite.Path] {
+					anchored = true
+					break
+				}
+			}
+			if !anchored {
+				return fmt.Errorf("кандидат %s цитирует только справочные источники (references); нужна цитата из нормативного файла", target.Candidate)
+			}
+		}
+	}
+	slog.Debug("reconcile: guard нормативной цитаты", "candidates", checked, "reference_files", len(reference))
+	return nil
 }
 
 func acceptedFresh(state acceptedState, files []SourceFile) bool {
@@ -349,13 +391,19 @@ func reconcile(cfg Config, paths []string) (any, error) {
 	if len(ledger.Commits) >= 128 {
 		return nil, errors.New("лимит 128 пакетов; история не усекается")
 	}
-	_, sources, err := acceptedSources(cfg)
+	_, sources, reference, err := acceptedSources(cfg)
 	if err != nil {
 		return nil, err
 	}
 	raw, err := legacyValidate(rawBytes, sources)
 	if err != nil {
 		return nil, err
+	}
+	if err := normativeAnchor(raw, decision, reference); err != nil {
+		return nil, err
+	}
+	if len(reference) > 0 {
+		slog.Info("reconcile: справочные источники", "reference_files", len(reference))
 	}
 	state, err = applyAccepted(state, raw, decision, rawBytes, decisionBytes)
 	if err != nil {
@@ -366,7 +414,7 @@ func reconcile(cfg Config, paths []string) (any, error) {
 	if err != nil || len(data)+1 > maxState {
 		return nil, errors.New("журнал превышает 32 MiB; индекс не опубликован")
 	}
-	_, sources, err = acceptedSources(cfg)
+	_, sources, _, err = acceptedSources(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -383,10 +431,17 @@ func reconcile(cfg Config, paths []string) (any, error) {
 	return view, nil
 }
 
+// acceptedSource is the view form of a source_set entry; the raw format (legacySource) stays unchanged.
+type acceptedSource struct {
+	Path      string `json:"path"`
+	SHA256    string `json:"sha256"`
+	Reference bool   `json:"reference,omitempty"`
+}
+
 func acceptedView(cfg Config, ledger acceptedLedger, state acceptedState) map[string]any {
 	freshness := "unavailable"
 	m, scanErr := scanSnapshot(cfg)
-	set := []legacySource{}
+	set := []acceptedSource{}
 	if scanErr == nil {
 		freshness = "stale"
 		if len(ledger.Commits) == 0 {
@@ -396,7 +451,7 @@ func acceptedView(cfg Config, ledger acceptedLedger, state acceptedState) map[st
 		}
 		for _, file := range m.Files {
 			if file.Kind == "spec" {
-				set = append(set, legacySource{file.Path, file.SHA256})
+				set = append(set, acceptedSource{file.Path, file.SHA256, file.Reference})
 			}
 		}
 	}

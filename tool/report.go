@@ -114,8 +114,9 @@ type EditorDefaults struct {
 }
 
 type AuditSection struct {
-	Path   string `json:"path"`
-	FileID string `json:"file_id"`
+	Path      string `json:"path"`
+	FileID    string `json:"file_id"`
+	Reference bool   `json:"reference,omitempty"`
 	AuditMetrics
 }
 
@@ -219,8 +220,13 @@ func assessmentExecutions(assessment Assessment, receipts []Receipt) []TestExecu
 
 func buildNavigation(report *Report, m Manifest) {
 	slog.Debug("начало карты отчёта", "files", len(m.Files), "requirements", len(report.Requirements))
+	groups := []NavigationGroup{{Kind: "spec", Selection: m.Config.Specs}}
+	if m.Config.References != nil {
+		groups = append(groups, NavigationGroup{Kind: "reference", Selection: *m.Config.References})
+	}
+	groups = append(groups, NavigationGroup{Kind: "code", Selection: m.Config.Code}, NavigationGroup{Kind: "tests", Selection: m.Config.Tests})
 	nav := ReportNavigation{
-		Groups: []NavigationGroup{{Kind: "spec", Selection: m.Config.Specs}, {Kind: "code", Selection: m.Config.Code}, {Kind: "tests", Selection: m.Config.Tests}},
+		Groups: groups,
 		Files:  []NavigationFile{}, Scopes: m.Config.Scopes,
 		Sections: []AuditSection{},
 		Editor:   EditorDefaults{CodeRoot: m.Config.ProjectRoot},
@@ -240,12 +246,16 @@ func buildNavigation(report *Report, m Manifest) {
 	sections := map[string]int{}
 	specDir := ""
 	evidence := map[string]int{}
+	referenceSections := 0
 	for _, file := range m.Files {
 		files[file.Path] = len(nav.Files)
 		nav.Files = append(nav.Files, NavigationFile{SourceFile: file, ID: "f-" + digest([]byte(file.Path)), Evidence: []NavigationEvidence{}})
 		if file.Kind == "spec" {
 			sections[file.Path] = len(nav.Sections)
-			nav.Sections = append(nav.Sections, AuditSection{Path: file.Path, FileID: nav.Files[len(nav.Files)-1].ID})
+			nav.Sections = append(nav.Sections, AuditSection{Path: file.Path, FileID: nav.Files[len(nav.Files)-1].ID, Reference: file.Reference})
+			if file.Reference {
+				referenceSections++
+			}
 			if specDir == "" {
 				specDir = path.Dir(file.Path)
 			}
@@ -364,14 +374,21 @@ func buildNavigation(report *Report, m Manifest) {
 			}
 			return x.ID < y.ID
 		})
+		groupKind := file.Kind
+		if file.Reference {
+			groupKind = "reference"
+		}
 		for j := range nav.Groups {
-			if nav.Groups[j].Kind == file.Kind {
+			if nav.Groups[j].Kind == groupKind {
 				nav.Groups[j].Files++
 				if !file.Current {
 					nav.Groups[j].Unlinked++
 				}
 			}
 		}
+	}
+	if referenceSections > 0 {
+		slog.Debug("карта отчёта: справочные секции", "count", referenceSections)
 	}
 	if report.SDK != nil {
 		hints, stale := 0, 0

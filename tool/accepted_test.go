@@ -50,7 +50,7 @@ func acceptedInputs(t *testing.T, config, id string, candidates []legacyCandidat
 	if err != nil {
 		t.Fatal(err)
 	}
-	set, _, err := acceptedSources(cfg)
+	set, _, _, err := acceptedSources(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +412,7 @@ func TestAcceptedStorageGuards(t *testing.T) {
 	}
 	// Input bounds are checked independently of the source provenance and before publication.
 	cfg, _ := loadConfig(config)
-	set, _, err := acceptedSources(cfg)
+	set, _, _, err := acceptedSources(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -556,7 +556,7 @@ func TestAcceptedAppendBounds(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		set, _, err := acceptedSources(cfg)
+		set, _, _, err := acceptedSources(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -772,5 +772,180 @@ func TestReferenceSources(t *testing.T) {
 				t.Fatalf("%s: конфигурация должна быть отклонена", name)
 			}
 		}
+	})
+	t.Run("reconcile", func(t *testing.T) {
+		config, base := referenceFixture(t)
+		ledger := filepath.Join(base, "runs", acceptedFile)
+		view := runOK(t, "reconcile", config).(map[string]any)
+		flags := map[string]bool{}
+		for _, source := range view["source_set"].([]acceptedSource) {
+			flags[source.Path] = source.Reference
+		}
+		if len(flags) != 2 || !flags["clarification.md"] || flags["rules.md"] {
+			t.Fatal("читающий reconcile должен показать признак reference", flags)
+		}
+		mixed := candidateAt(t, base, "rules.md", "C001", "Уведомить при задержке", 4, 4)
+		mixed.Citations = append(mixed.Citations, candidateAt(t, base, "clarification.md", "C001", "", 3, 3).Citations[0])
+		only := candidateAt(t, base, "clarification.md", "C002", "Срок по договору", 3, 3)
+		// Кандидат только со справочными цитатами не становится нормой; журнал остаётся прежним.
+		raw, decision := acceptedInputs(t, config, "ref-only", []legacyCandidate{mixed, only},
+			acceptOperation("accept", []string{}, "C001"), acceptOperation("accept", []string{}, "C002"))
+		if _, err := execute([]string{"reconcile", config, raw, decision}); err == nil || !strings.Contains(err.Error(), "C002") {
+			t.Fatal("ожидался отказ с ID кандидата", err)
+		}
+		if _, err := os.Stat(ledger); !os.IsNotExist(err) {
+			t.Fatal("отклонённый пакет не должен создавать журнал")
+		}
+		// Тот же кандидат как reject/defer допустим; смешанный принимается со всеми цитатами.
+		raw, decision = acceptedInputs(t, config, "mixed", []legacyCandidate{mixed, only},
+			acceptOperation("accept", []string{}, "C001"), acceptOperation("defer", []string{}, "C002"))
+		applied := runOK(t, "reconcile", config, raw, decision).(map[string]any)
+		if applied["accepted"] != true || applied["freshness"] != "fresh" {
+			t.Fatal("apply должен вернуть полный view", applied)
+		}
+		state := acceptedRead(t, config)
+		if len(state.Records) != 1 || len(state.Records[0].Requirement.Accepted.Citations) != 2 || state.Records[0].Requirement.Accepted.Citations[1].Path != "clarification.md" {
+			t.Fatal("справочная цитата потеряна при приёмке", state.Records)
+		}
+		before := readFixture(t, ledger)
+		// split с target только из справочного файла отклоняется; raw без справочного файла в source_set — прежний отказ.
+		raw, decision = acceptedInputs(t, config, "split", []legacyCandidate{mixed, only},
+			acceptOperation("split", []string{"REQ-AI-001"}, "C001", "C002"))
+		if _, err := execute([]string{"reconcile", config, raw, decision}); err == nil || !strings.Contains(err.Error(), "C002") {
+			t.Fatal("split со справочным target должен быть отклонён guard", err)
+		}
+		cfg, err := loadConfig(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		set, _, _, err := acceptedSources(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		partial := []legacySource{}
+		for _, source := range set {
+			if source.Path != "clarification.md" {
+				partial = append(partial, source)
+			}
+		}
+		rawBytes := legacyMarshal(t, legacyRaw{1, partial, []legacyCandidate{candidateAt(t, base, "rules.md", "C001", "Лимит", 2, 2)}, []string{}})
+		decisionBytes := legacyMarshal(t, AcceptedDecision{1, "partial", state.Head, digest(rawBytes), []AcceptedOperation{acceptOperation("rebind", []string{"REQ-AI-001"}, "C001")}})
+		writeFixture(t, filepath.Join(base, "partial-raw.json"), rawBytes)
+		writeFixture(t, filepath.Join(base, "partial-decision.json"), decisionBytes)
+		runFail(t, "reconcile", config, filepath.Join(base, "partial-raw.json"), filepath.Join(base, "partial-decision.json"))
+		if !bytes.Equal(before, readFixture(t, ledger)) {
+			t.Fatal("отклонённые пакеты изменили журнал")
+		}
+	})
+	// Принятая норма с нормативной и справочной цитатами; роль цитирует справочный диапазон.
+	acceptMixed := func(t *testing.T, config, base string) {
+		t.Helper()
+		mixed := candidateAt(t, base, "rules.md", "C001", "Уведомить при задержке", 4, 4)
+		mixed.Citations = append(mixed.Citations, candidateAt(t, base, "clarification.md", "C001", "", 3, 3).Citations[0])
+		raw, decision := acceptedInputs(t, config, "mixed", []legacyCandidate{mixed}, acceptOperation("accept", []string{}, "C001"))
+		runOK(t, "reconcile", config, raw, decision)
+	}
+	roleResult := func(t *testing.T, task Task, spec Citation) string {
+		t.Helper()
+		result := Result{TaskID: task.TaskID, Attempt: task.Attempt, SnapshotID: task.SnapshotID, Role: task.Role, Scope: task.Scope,
+			Summary: "Проверка справочной цитаты", Limitations: []string{}, Assessments: []Assessment{{
+				RequirementID: task.Requirements[0].ID, Specification: "clear", Implementation: "unknown", Assertion: "unknown",
+				Statement: "Реализация не найдена", Spec: []Citation{spec}, Code: []Citation{}, Tests: []TestCitation{}, Limitations: []string{}}}}
+		path := filepath.Join(t.TempDir(), task.TaskID+".json")
+		writeFixture(t, path, legacyMarshal(t, result))
+		return path
+	}
+	t.Run("roles", func(t *testing.T) {
+		config, base := referenceFixture(t)
+		acceptMixed(t, config, base)
+		batch := runOK(t, "prepare", config, "ref-run").(TaskBatch)
+		task := batch.Tasks[0]
+		citations := task.Requirements[0].Accepted.Citations
+		if len(batch.Tasks) != 2 || len(citations) != 2 || citations[1].Path != "clarification.md" {
+			t.Fatal("задание должно нести справочную цитату", task.Requirements)
+		}
+		flagged := map[string]bool{}
+		for _, file := range batch.Files {
+			flagged[file.Path] = file.Reference
+		}
+		if !flagged["clarification.md"] || flagged["rules.md"] {
+			t.Fatal("TaskBatch.files должен нести признак reference", flagged)
+		}
+		inside := roleResult(t, task, citations[1])
+		runOK(t, "validate", config, "ref-run", task.TaskID, inside)
+		runOK(t, "submit", config, "ref-run", task.TaskID, inside)
+		outside := roleResult(t, batch.Tasks[1], candidateAt(t, base, "clarification.md", "C009", "", 2, 2).Citations[0])
+		if _, err := execute([]string{"validate", config, "ref-run", batch.Tasks[1].TaskID, outside}); err == nil || !strings.Contains(err.Error(), "вне блока") {
+			t.Fatal("цитата справочного файла вне принятого диапазона должна быть отклонена", err)
+		}
+	})
+	t.Run("report", func(t *testing.T) {
+		config, base := referenceFixture(t)
+		acceptMixed(t, config, base)
+		batch := runOK(t, "prepare", config, "ref-run").(TaskBatch)
+		runOK(t, "submit", config, "ref-run", batch.Tasks[0].TaskID, roleResult(t, batch.Tasks[0], batch.Tasks[0].Requirements[0].Accepted.Citations[1]))
+		runOK(t, "report", config, "ref-run")
+		var report Report
+		if err := json.Unmarshal(readFixture(t, filepath.Join(base, "runs/ref-run/report.json")), &report); err != nil {
+			t.Fatal(err)
+		}
+		sections := map[string]AuditSection{}
+		for _, section := range report.Navigation.Sections {
+			sections[section.Path] = section
+		}
+		if !sections["clarification.md"].Reference || sections["clarification.md"].Total != 0 || sections["rules.md"].Reference || sections["rules.md"].Total != 1 {
+			t.Fatal("секции ТЗ должны отличать справочный файл", report.Navigation.Sections)
+		}
+		groups := map[string]NavigationGroup{}
+		for _, group := range report.Navigation.Groups {
+			groups[group.Kind] = group
+		}
+		if groups["reference"].Files != 1 || groups["spec"].Files != 1 || groups["reference"].Selection.Paths[0] != "clarification.md" {
+			t.Fatal("группа reference должна считать только справочные файлы", report.Navigation.Groups)
+		}
+		html := string(readFixture(t, filepath.Join(base, "runs/ref-run/report.html")))
+		if !strings.Contains(html, "справочный источник — кандидаты не извлекались") || !strings.Contains(html, `data-reference="yes"`) {
+			t.Fatal("HTML не помечает справочный источник")
+		}
+		// In-memory: карта без run различает группы по признаку, а не по kind.
+		m := Manifest{Config: Config{ProjectRoot: "/work", References: &Sources{Paths: []string{"TZ/defs.md"}}}, Files: []SourceFile{
+			{Path: "TZ/defs.md", Kind: "spec", Reference: true}, {Path: "TZ/spec.md", Kind: "spec"}, {Path: "src/code.go", Kind: "code"},
+		}}
+		r := Report{Status: Status{Freshness: "fresh"}}
+		buildNavigation(&r, m)
+		if len(r.Navigation.Groups) != 4 || r.Navigation.Groups[1].Kind != "reference" || r.Navigation.Groups[1].Files != 1 || r.Navigation.Groups[0].Files != 1 || !r.Navigation.Sections[0].Reference || r.Navigation.Sections[1].Reference {
+			t.Fatal("buildNavigation: группа и секция reference", r.Navigation.Groups, r.Navigation.Sections)
+		}
+	})
+	t.Run("stale", func(t *testing.T) {
+		config, base := referenceFixture(t)
+		acceptMixed(t, config, base)
+		runOK(t, "prepare", config, "ref-run")
+		// (а) правка справочного файла делает индекс stale наравне с нормативным.
+		writeFixture(t, filepath.Join(base, "source/clarification.md"), []byte("# Уточнение\nУсловия исходной нормы сохраняются.\nСрок задержки — один рабочий день.\n"))
+		runFail(t, "index", config)
+		runFail(t, "prepare", config, "ref-run-2")
+		if view := runOK(t, "reconcile", config).(map[string]any); view["freshness"] != "stale" {
+			t.Fatal("правка справочного файла должна давать stale", view["freshness"])
+		}
+		if status := runOK(t, "status", config, "ref-run").(Status); status.Freshness != "stale" {
+			t.Fatal("прежний run остаётся историей со stale", status)
+		}
+		// (б) путь пилота: индекс принят без references, группа добавлена позже.
+		config, base = acceptedFixture(t)
+		writeFixture(t, filepath.Join(base, "source/clarification.md"), []byte("# Уточнение\nУсловия исходной нормы сохраняются.\n"))
+		raw, decision := acceptedInputs(t, config, "plain", []legacyCandidate{candidateAt(t, base, "rules.md", "C001", "Лимит 8 МиБ", 2, 2)}, acceptOperation("accept", []string{}, "C001"))
+		runOK(t, "reconcile", config, raw, decision)
+		runOK(t, "index", config)
+		writeFixture(t, config, append(readFixture(t, config), []byte("references: {paths: [clarification.md]}\n")...))
+		view := runOK(t, "reconcile", config).(map[string]any)
+		flags := map[string]bool{}
+		for _, source := range view["source_set"].([]acceptedSource) {
+			flags[source.Path] = source.Reference
+		}
+		if view["freshness"] != "stale" || len(flags) != 2 || !flags["clarification.md"] {
+			t.Fatal("добавление references после приёмки должно давать stale и показывать новый source_set", view["freshness"], flags)
+		}
+		runFail(t, "index", config)
 	})
 }
