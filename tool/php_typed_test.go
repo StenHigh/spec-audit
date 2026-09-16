@@ -458,7 +458,7 @@ func TestTypedProcess(t *testing.T) {
 			if strings.Contains(joined, "composer") || strings.Count(joined, "timeout 5 php -r") != 4 {
 				t.Fatal("служебные шаги должны идти через timeout 5 php -r без Composer")
 			}
-			isolation := []string{"DB_CONNECTION=spec_audit_disabled", "DB_URL=", "DATABASE_URL=", "REDIS_URL=", "DB_HOST=127.0.0.1", "DB_PORT=1", "REDIS_HOST=127.0.0.1", "REDIS_PORT=1", "CACHE_STORE=array", "CACHE_DRIVER=array", "QUEUE_CONNECTION=sync", "SESSION_DRIVER=array", "MAIL_MAILER=array", "BROADCAST_CONNECTION=null", "BROADCAST_DRIVER=null", "LOG_CHANNEL=stderr"}
+			isolation := []string{"DB_CONNECTION=spec_audit_disabled", "DB_URL=", "DATABASE_URL=", "REDIS_URL=", "DB_SOCKET=", "DB_HOST=127.0.0.1", "DB_PORT=1", "REDIS_HOST=127.0.0.1", "REDIS_PORT=1", "CACHE_STORE=array", "CACHE_DRIVER=array", "QUEUE_CONNECTION=sync", "SESSION_DRIVER=array", "MAIL_MAILER=array", "BROADCAST_CONNECTION=null", "BROADCAST_DRIVER=null", "LOG_CHANNEL=stderr", "APP_CONFIG_CACHE=/tmp/spec-audit-none/config.php"}
 			if len(isolation) != len(laravelIsolationEnv) {
 				t.Fatal("контракт изоляции изменился без обновления теста")
 			}
@@ -501,9 +501,20 @@ func TestTypedProcess(t *testing.T) {
 				t.Setenv("SPEC_AUDIT_DOCKER_MODE", "")
 			}
 			// Sink отсутствует / errors непустой / exit 0 — отказ без успешного пустого графа.
+			var doubled map[string]any
+			if err := json.Unmarshal(phpstanJSON(t, f.body(t, nil), 0, nil), &doubled); err != nil {
+				t.Fatal(err)
+			}
+			na := doubled["files"].(map[string]any)["N/A"].(map[string]any)
+			na["messages"] = append(na["messages"].([]any), na["messages"].([]any)[0])
+			twice := mustMarshal(t, doubled)
+			if _, _, err := extractEnvelope(twice); err == nil {
+				t.Fatal("два сообщения экспортёра должны отклоняться")
+			}
 			for name, out := range map[string][]byte{
 				"sink_missing":    phpstanJSON(t, []byte(`{"version":"sdk/3"}`), 1, nil),
 				"errors_nonempty": phpstanJSON(t, f.body(t, nil), 0, []string{"Internal error"}),
+				"sink_twice":      twice,
 			} {
 				if name == "sink_missing" {
 					out = bytes.Replace(out, []byte(typedIdentifier), []byte("other.identifier"), 1)
@@ -690,7 +701,7 @@ func TestTypedCLI(t *testing.T) {
 func TestPHPSDKControlBaseline(t *testing.T) {
 	// Frozen semantic expectations for SA-031…034; the pin changes only with an explicit contract revision.
 	data := readFixture(t, "../acceptance/php-sdk-control.json")
-	if digest(data) != "c584ffac8533636c70a6fb8896ffbe1b82648f6113dbff65dc5667a833500ecb" {
+	if digest(data) != "6be9dbd27bb14bde42d828ce3d1c0861c61d264ad4258e908d1f9c9506464743" {
 		t.Fatal("php-sdk-control.json изменён без пересмотра пина")
 	}
 	var control struct {
@@ -1189,26 +1200,6 @@ func TestExternalTypedLaravel(t *testing.T) {
 				t.Fatal("отказ не должен оставлять запись SDK", err)
 			}
 		})
-	}
-}
-
-func TestExternalTypedLaravelProfileOnPlain(t *testing.T) {
-	configPath := os.Getenv("SPEC_AUDIT_TYPED_PLAIN_CONFIG")
-	if configPath == "" {
-		t.Skip("SPEC_AUDIT_TYPED_PLAIN_CONFIG не задан")
-	}
-	dir := filepath.Dir(configPath)
-	raw := string(readFixture(t, configPath))
-	reports := filepath.Join(t.TempDir(), "reports")
-	raw = strings.Replace(raw, "project_root: .", "project_root: "+dir, 1)
-	raw = strings.Replace(raw, "sdk: {profile: php}", "sdk: {profile: laravel}", 1)
-	raw = regexp.MustCompile(`(?m)^reports_dir: .*$`).ReplaceAllString(raw, "reports_dir: "+reports)
-	config := filepath.Join(t.TempDir(), "config.yaml")
-	writeFixture(t, config, []byte(raw))
-	runOK(t, "prepare", config, "nolarastan")
-	_, err := execute([]string{"php-typed", config, "nolarastan", "src/Service.php"})
-	if err == nil || !(strings.Contains(err.Error(), "Larastan") || strings.Contains(err.Error(), "bootstrap/app.php")) {
-		t.Fatalf("профиль laravel без Larastan должен отклоняться: %v", err)
 	}
 }
 

@@ -393,10 +393,12 @@ type typedResult struct {
 
 // laravelIsolationEnv отводит bootstrap Laravel от рабочих сервисов: любое обращение к ним падает сразу.
 var laravelIsolationEnv = []string{
-	"DB_CONNECTION=spec_audit_disabled", "DB_URL=", "DATABASE_URL=", "REDIS_URL=",
+	"DB_CONNECTION=spec_audit_disabled", "DB_URL=", "DATABASE_URL=", "REDIS_URL=", "DB_SOCKET=",
 	"DB_HOST=127.0.0.1", "DB_PORT=1", "REDIS_HOST=127.0.0.1", "REDIS_PORT=1",
 	"CACHE_STORE=array", "CACHE_DRIVER=array", "QUEUE_CONNECTION=sync", "SESSION_DRIVER=array",
 	"MAIL_MAILER=array", "BROADCAST_CONNECTION=null", "BROADCAST_DRIVER=null", "LOG_CHANNEL=stderr",
+	// Несуществующий путь кеша заставляет Laravel читать config/*.php с переменными выше даже при APP_CONFIG_CACHE контейнера.
+	"APP_CONFIG_CACHE=/tmp/spec-audit-none/config.php",
 }
 
 const (
@@ -644,6 +646,14 @@ func verifyTyped(body []byte, m Manifest, cfg Config, paths []string, lock []byt
 	if err != nil {
 		return envelope, err
 	}
+	// Строки каждого источника готовятся один раз: verifyFact сверяет тысячи цитат без повторного разбора файла.
+	lines := map[string][]string{}
+	for path, source := range sources {
+		if !utf8.Valid(source) {
+			return envelope, errors.New("цитируемый источник должен быть UTF-8")
+		}
+		lines[path] = strings.Split(strings.TrimSuffix(string(source), "\n"), "\n")
+	}
 	hasLarastan := false
 	for _, path := range envelope.BootstrapFiles {
 		if !localPath(path) || !strings.HasPrefix(path, "vendor/") {
@@ -655,7 +665,7 @@ func verifyTyped(body []byte, m Manifest, cfg Config, paths []string, lock []byt
 		return envelope, errors.New("конфигурация подключает bootstrap вне профиля")
 	}
 	if len(envelope.Basis) > maxBasisFiles {
-		return envelope, errors.New("вывод SDK превышает лимит; сократите выбор файлов")
+		return envelope, errSDKLimit
 	}
 	for _, file := range envelope.Basis {
 		if !localPath(file.Path) || !validDigest(file.SHA256) || file.Bytes < 0 {
@@ -670,38 +680,46 @@ func verifyTyped(body []byte, m Manifest, cfg Config, paths []string, lock []byt
 		}
 	}
 	if len(envelope.Facts) > maxTypedFacts {
-		return envelope, errors.New("вывод SDK превышает лимит; сократите выбор файлов")
+		return envelope, errSDKLimit
 	}
 	for _, fact := range envelope.Facts {
-		if err := verifyFact(fact, sources); err != nil {
+		if err := verifyFact(fact, lines); err != nil {
 			return envelope, err
 		}
 	}
 	return envelope, nil
 }
 
-func verifyFact(fact TypedFact, sources map[string][]byte) error {
+var errSDKLimit = errors.New("вывод SDK превышает лимит; сократите выбор файлов")
+
+func verifyFact(fact TypedFact, lines map[string][]string) error {
 	c := fact.Citation
-	source, ok := sources[c.Path]
-	if !ok || c.LineStart < 1 || c.LineEnd < c.LineStart || c.LineEnd-c.LineStart >= maxFactLines {
+	source, ok := lines[c.Path]
+	if !ok || c.LineStart < 1 || c.LineEnd < c.LineStart || c.LineEnd > len(source) {
 		return errors.New("неверный диапазон цитаты SDK")
 	}
-	quote, err := lineQuote(source, c.LineStart, c.LineEnd)
-	if err != nil || quote != c.Quote {
+	if c.LineEnd-c.LineStart >= maxFactLines {
+		return errSDKLimit
+	}
+	// Та же формула, что в lineQuote, без повторного чтения файла.
+	if strings.TrimSuffix(strings.Join(source[c.LineStart-1:c.LineEnd], "\n"), "\r") != c.Quote {
 		return errors.New("цитата SDK не совпадает с исходником")
 	}
 	if !oneOf(fact.Syntax, "Stmt_ClassMethod", "Expr_MethodCall", "Expr_StaticCall", "Expr_NullsafeMethodCall") || !oneOf(fact.Origin, "phpstan", "larastan") || !oneOf(fact.Resolution, "declared", "resolved", "ambiguous", "unresolved", "virtual", "dynamic") {
 		return errors.New("неверный тип SDK fact")
 	}
-	if fact.Name == "" || len(fact.Name) > maxSDKString || len(fact.ReceiverType) > maxReceiverType || !utf8.ValidString(fact.Name) || !utf8.ValidString(fact.ReceiverType) || (fact.Resolution == "dynamic") != (fact.Name == "{dynamic}") || (fact.ReceiverType == "") != (fact.Resolution == "declared") {
-		return errors.New("неверное имя или тип получателя SDK fact")
+	if len(fact.Name) > maxSDKString || len(fact.ReceiverType) > maxReceiverType || len(fact.Targets) > maxTypedTargets {
+		return errSDKLimit
 	}
-	if len(fact.Targets) > maxTypedTargets {
-		return errors.New("вывод SDK превышает лимит; сократите выбор файлов")
+	if fact.Name == "" || !utf8.ValidString(fact.Name) || !utf8.ValidString(fact.ReceiverType) || (fact.Resolution == "dynamic") != (fact.Name == "{dynamic}") || (fact.ReceiverType == "") != (fact.Resolution == "declared") {
+		return errors.New("неверное имя или тип получателя SDK fact")
 	}
 	located, virtual := 0, true
 	for _, target := range fact.Targets {
-		if target.Class == "" || target.Method == "" || len(target.Class) > maxSDKString || len(target.Method) > maxSDKString || len(target.File) > maxSDKString || target.Line < 0 || (target.Line > 0) != (target.File != "") {
+		if len(target.Class) > maxSDKString || len(target.Method) > maxSDKString || len(target.File) > maxSDKString {
+			return errSDKLimit
+		}
+		if target.Class == "" || target.Method == "" || target.Line < 0 || (target.Line > 0) != (target.File != "") {
 			return errors.New("неверная цель SDK fact")
 		}
 		outside := strings.HasPrefix(target.File, "/") && !strings.HasPrefix(target.File, containerMount+"/") && !strings.Contains(target.File, "..")

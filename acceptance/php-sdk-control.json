@@ -843,6 +843,7 @@
           "DB_URL=",
           "DATABASE_URL=",
           "REDIS_URL=",
+          "DB_SOCKET=",
           "DB_HOST=127.0.0.1",
           "DB_PORT=1",
           "REDIS_HOST=127.0.0.1",
@@ -854,9 +855,11 @@
           "MAIL_MAILER=array",
           "BROADCAST_CONNECTION=null",
           "BROADCAST_DRIVER=null",
-          "LOG_CHANNEL=stderr"
+          "LOG_CHANNEL=stderr",
+          "APP_CONFIG_CACHE=/tmp/spec-audit-none/config.php"
         ]
-      }
+      },
+      "note": "2026-09-16 review: добавлены DB_SOCKET= (unix-сокет обходил host/port) и APP_CONFIG_CACHE (кастомный путь кеша обходил preflight); усиление изоляции, не подгонка под экспортёр"
     }
   ]
 }
