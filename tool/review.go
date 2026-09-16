@@ -139,7 +139,7 @@ func reviewContext(run *os.Root, runID string, m Manifest, state State, fresh bo
 	status := makeStatus(runID, m, state, fresh)
 	return ReviewContext{runID, m.SnapshotID, status.DeliveryComplete, status.Freshness, summarizeReviews(runID, m, state, fresh, journal), m.Requirements, state.Entries, state.Executions}, nil
 }
-func submitReview(run *os.Root, runID string, m Manifest, state State, path string) (any, error) {
+func submitReview(run *os.Root, runID string, m Manifest, state State, path string, versions []byte) (any, error) {
 	slog.Debug("проверка согласования", "run_id", runID)
 	journal, err := readReviews(run, runID, m)
 	if err != nil {
@@ -186,6 +186,7 @@ func submitReview(run *os.Root, runID string, m Manifest, state State, path stri
 	if err := atomicWrite(run, "host-reviews.json", append(body, '\n'), 0600); err != nil {
 		return nil, err
 	}
+	publishToolVersion(run, versions)
 	slog.Info("согласование сохранено", "run_id", runID, "review_id", decision.ReviewID, "requirements", len(decision.Assessments))
 	return map[string]any{"accepted": true, "duplicate": false, "review_id": decision.ReviewID, "review_state": "current"}, nil
 }

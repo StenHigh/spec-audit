@@ -16,7 +16,7 @@
 <header><div class="eyebrow">spec-audit / карта проекта</div><h1>От требований к доказательствам</h1>
 <p>Где нужна доработка, что ещё не проверено и на чём основан вывод.</p>
 <div class="notice {{if eq .Freshness "stale"}}stale{{end}}"><strong>{{.Freshness}} · Согласование хоста — {{.HostReviewState}}</strong><p>{{.Conclusion}}</p></div>
-<p class="meta">Run: {{.RunID}} · {{.GeneratedAt}}<br>Snapshot: <code>{{.SnapshotID}}</code></p>
+<p class="meta">Run: {{.RunID}} · {{.GeneratedAt}}<br>Snapshot: <code>{{.SnapshotID}}</code>{{if .ToolVersions}}<br>Версии бинарника: {{range $i, $v := .ToolVersions}}{{if $i}}, {{end}}{{$v.Command}} <code>{{$v.ToolVersion}}</code>{{end}}{{end}}</p>
 <p class="meta">Статическая страница не отслеживает последующие изменения. Перед решением обновите status/report. Связь не означает соответствие; passed не означает достаточность теста.</p>
 <nav aria-label="Разделы отчёта"><a href="#overview">Обзор</a><a href="#charts">Графики по ТЗ</a><a href="#requirements">Требования</a><a href="#files">ТЗ, код и тесты</a><a href="#executions">Исполнения</a><a href="#preferences">Настройки</a><a href="#history">История и происхождение</a></nav>
 </header>

@@ -648,3 +648,53 @@ func TestDeclaredHistoricalRun(t *testing.T) {
 		t.Fatal("чтение старого run потеряло или усилило свидетельства")
 	}
 }
+
+// tool-spec §19.1: the apply response carries the same view as a read, with measured freshness and record-level revision/clarity.
+func TestReconcileApplyView(t *testing.T) {
+	config, base := acceptedFixture(t)
+	c := candidateAt(t, base, "rules.md", "C001", "Лимит 8 МиБ", 2, 2)
+	unclear := candidateAt(t, base, "rules.md", "C003", "Уведомить", 4, 4)
+	unclear.Clarity, unclear.Unresolved = "ambiguous", []string{"Какой срок?"}
+	raw, decision := acceptedInputs(t, config, "view", []legacyCandidate{c, unclear},
+		acceptOperation("accept", []string{}, "C001"), acceptOperation("accept", []string{}, "C003"))
+	applied := runOK(t, "reconcile", config, raw, decision).(map[string]any)
+	if applied["accepted"] != true || applied["duplicate"] != false || applied["freshness"] != "fresh" || applied["semantic_completeness_proven"] != false {
+		t.Fatalf("apply view: %v", applied)
+	}
+	for _, key := range []string{"base_index", "source_set", "records", "history", "journal"} {
+		if _, ok := applied[key]; !ok {
+			t.Fatalf("apply без %s", key)
+		}
+	}
+	records := applied["records"].([]AcceptedRecord)
+	if len(records) != 2 {
+		t.Fatalf("records: %d", len(records))
+	}
+	for _, record := range records {
+		if record.Revision != record.Requirement.Accepted.Revision || record.Clarity != record.Requirement.Accepted.Clarity || record.Revision != 1 {
+			t.Fatalf("record %s: %+v", record.Requirement.ID, record)
+		}
+	}
+	if records[1].Clarity != "ambiguous" {
+		t.Fatal("clarity не продублирована")
+	}
+	read := runOK(t, "reconcile", config).(map[string]any)
+	if read["freshness"] != "fresh" || len(read["records"].([]AcceptedRecord)) != 2 || read["records"].([]AcceptedRecord)[1].Clarity != "ambiguous" {
+		t.Fatalf("read view: %v", read["freshness"])
+	}
+	replay := runOK(t, "reconcile", config, raw, decision).(map[string]any)
+	if replay["duplicate"] != true || replay["freshness_checked"] != false {
+		t.Fatalf("replay: %v", replay)
+	}
+	if _, ok := replay["freshness"]; ok {
+		t.Fatal("duplicate не подтверждает свежесть")
+	}
+	// A specification edited between decisions is reported honestly, not assumed fresh.
+	rules := filepath.Join(base, "source", "rules.md")
+	prior := readFixture(t, rules)
+	writeFixture(t, rules, append(prior, []byte("\n\nДополнение.\n")...))
+	if runOK(t, "reconcile", config).(map[string]any)["freshness"] != "stale" {
+		t.Fatal("устаревание скрыто")
+	}
+	writeFixture(t, rules, prior)
+}

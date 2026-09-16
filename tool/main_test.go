@@ -6,12 +6,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeFixture(t *testing.T, path string, data []byte) {
@@ -201,7 +204,52 @@ func TestContract(t *testing.T) {
 	}
 	first := sampleResult(t, batch.Tasks[0], source)
 	firstPath := resultPath("first", first)
+	runSnapshot := func() map[string]string {
+		t.Helper()
+		out := map[string]string{}
+		if err := filepath.WalkDir(reports, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !d.IsDir() {
+				out[p] = digest(readFixture(t, p))
+			} else {
+				out[p] = "dir"
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	t.Run("validate_ok", func(t *testing.T) {
+		getReport() // report.json must survive validate untouched
+		before := runSnapshot()
+		got := runOK(t, "validate", config, "normal", first.TaskID, firstPath).(map[string]any)
+		if got["valid"] != true || got["already_submitted"] != false || got["task_id"] != first.TaskID || got["attempt"] != first.Attempt {
+			t.Fatalf("%v", got)
+		}
+		if !reflect.DeepEqual(before, runSnapshot()) {
+			t.Fatal("validate изменил каталог run")
+		}
+	})
 	runOK(t, "submit", config, "normal", first.TaskID, firstPath)
+	t.Run("validate_submitted", func(t *testing.T) {
+		before := runSnapshot()
+		got := runOK(t, "validate", config, "normal", first.TaskID, firstPath).(map[string]any)
+		if got["valid"] != true || got["already_submitted"] != true {
+			t.Fatalf("%v", got)
+		}
+		conflict := first
+		conflict.Summary = "other"
+		// validate does not judge duplicates or conflicts; only submit does.
+		if got := runOK(t, "validate", config, "normal", first.TaskID, resultPath("validate-conflict", conflict)).(map[string]any); got["valid"] != true {
+			t.Fatalf("%v", got)
+		}
+		if !reflect.DeepEqual(before, runSnapshot()) {
+			t.Fatal("validate изменил каталог run")
+		}
+	})
 	if getReport().DeliveryComplete {
 		t.Fatal("нет второй роли")
 	}
@@ -220,6 +268,7 @@ func TestContract(t *testing.T) {
 			"absolute":              func(r *Result) { r.Assessments[0].Code[0].Path = "/etc/passwd" },
 			"wrong_group":           func(r *Result) { r.Assessments[0].Code[0] = r.Assessments[0].Tests[0].Citation },
 			"enum":                  func(r *Result) { r.Assessments[0].Implementation = "PASS" },
+			"empty_statement":       func(r *Result) { r.Assessments[0].Statement = " " },
 			"attempt":               func(r *Result) { r.Attempt++ },
 			"task":                  func(r *Result) { r.TaskID = "other" },
 			"role":                  func(r *Result) { r.Role = "mapper" },
@@ -236,7 +285,25 @@ func TestContract(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				r := sampleResult(t, task, source)
 				mutate(&r)
-				runFail(t, "submit", config, "normal", task.TaskID, resultPath(name, r))
+				path := resultPath(name, r)
+				before := runSnapshot()
+				_, errValidate := execute([]string{"validate", config, "normal", task.TaskID, path})
+				_, errSubmit := execute([]string{"submit", config, "normal", task.TaskID, path})
+				if errValidate == nil || errSubmit == nil || errValidate.Error() != errSubmit.Error() {
+					t.Fatalf("validate=%v submit=%v", errValidate, errSubmit)
+				}
+				if oneOf(name, "enum", "empty_statement", "duplicate_requirement") && !strings.Contains(errValidate.Error(), "REQ-DEMO-") {
+					t.Fatalf("ошибка без ID нормы: %v", errValidate)
+				}
+				if name == "foreign_requirement" && strings.Contains(errValidate.Error(), "REQ-OTHER") {
+					t.Fatalf("ошибка раскрывает чужой requirement_id: %v", errValidate)
+				}
+				if strings.Contains(errValidate.Error(), "invented") {
+					t.Fatalf("ошибка раскрывает содержимое ответа: %v", errValidate)
+				}
+				if !reflect.DeepEqual(before, runSnapshot()) {
+					t.Fatal("отказ изменил каталог run")
+				}
 			})
 		}
 		valid, _ := json.Marshal(sampleResult(t, task, source))
@@ -253,8 +320,13 @@ func TestContract(t *testing.T) {
 		} {
 			path := filepath.Join(base, name+".json")
 			writeFixture(t, path, body)
-			runFail(t, "submit", config, "normal", task.TaskID, path)
+			_, errValidate := execute([]string{"validate", config, "normal", task.TaskID, path})
+			_, errSubmit := execute([]string{"submit", config, "normal", task.TaskID, path})
+			if errValidate == nil || errSubmit == nil || errValidate.Error() != errSubmit.Error() {
+				t.Fatalf("%s: validate=%v submit=%v", name, errValidate, errSubmit)
+			}
 		}
+		runFail(t, "validate", config, "normal", "unknown-task", resultPath("validate-unknown", sampleResult(t, task, source)))
 	})
 	second := sampleResult(t, batch.Tasks[1], source)
 	runOK(t, "submit", config, "normal", second.TaskID, resultPath("second", second))
@@ -277,7 +349,8 @@ func TestContract(t *testing.T) {
 		t.Fatal("потеряна история")
 	}
 	runFail(t, "submit", config, "normal", first.TaskID, firstPath)
-	runOK(t, "submit", config, "normal", first.TaskID, resultPath("retry", sampleResult(t, task, source)))
+	retryPath := resultPath("retry", sampleResult(t, task, source))
+	runOK(t, "submit", config, "normal", first.TaskID, retryPath)
 	if !bytes.Equal(manifest, readFixture(t, filepath.Join(reports, "manifest.json"))) {
 		t.Fatal("переписан manifest")
 	}
@@ -289,8 +362,14 @@ func TestContract(t *testing.T) {
 			t.Fatal("скрыто устаревание")
 		}
 		runFail(t, "submit", config, "normal", first.TaskID, firstPath)
+		if _, err := execute([]string{"validate", config, "normal", first.TaskID, retryPath}); err == nil || !strings.Contains(err.Error(), "stale") {
+			t.Fatalf("validate на stale run: %v", err)
+		}
 		runFail(t, "test", config, "normal", "stale-run")
 		writeFixture(t, path, prior)
+		if got := runOK(t, "validate", config, "normal", first.TaskID, retryPath).(map[string]any); got["valid"] != true || got["already_submitted"] != true {
+			t.Fatalf("validate после восстановления: %v", got)
+		}
 		writeFixture(t, config, append(originalConfig, []byte("# physical comment\n")...))
 		if getReport().Freshness != "fresh" {
 			t.Fatal("комментарий изменил identity")
@@ -432,6 +511,8 @@ func TestNativeCLI(t *testing.T) {
 		body, _ := json.Marshal(sampleResult(t, task, filepath.Join(base, "source")))
 		path := filepath.Join(base, task.TaskID+".json")
 		writeFixture(t, path, body)
+		invoke("error", true, "validate", config, "native", task.TaskID, path)
+		invoke("error", false, "validate", config, "native", "missing-task", path)
 		invoke("error", true, "submit", config, "native", task.TaskID, path)
 	}
 	invoke("error", true, "status", config, "native")
@@ -506,4 +587,180 @@ func TestConfigurationAndIndex(t *testing.T) {
 	if err := checkStateSize(State{Entries: []Entry{{Result: &Result{Summary: strings.Repeat("x", maxState)}}}}); err == nil {
 		t.Fatal("нет write-side лимита")
 	}
+}
+
+// Provenance journal (tool-spec §19, REQ-SA-040): appended only after a successful publication, never on refusal.
+func TestToolVersions(t *testing.T) {
+	journalPath := func(base, run string) string { return filepath.Join(base, "runs", run, toolVersionsFile) }
+	readJournal := func(t *testing.T, path string) toolVersionJournal {
+		t.Helper()
+		var journal toolVersionJournal
+		if err := json.Unmarshal(readFixture(t, path), &journal); err != nil {
+			t.Fatal(err)
+		}
+		return journal
+	}
+	captureLogs := func(t *testing.T) *bytes.Buffer {
+		t.Helper()
+		var buf bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		t.Cleanup(func() { slog.SetDefault(previous) })
+		return &buf
+	}
+	t.Run("ordered", func(t *testing.T) {
+		config, base, _ := reviewedFixture(t, false)
+		manifest := readFixture(t, filepath.Join(base, "runs/review/manifest.json"))
+		runOK(t, "review", config, "review", writeReviewInput(t, base, reviewInput(t, config)))
+		journal := readJournal(t, journalPath(base, "review"))
+		want := []string{"prepare", "submit", "submit", "review"}
+		if journal.Version != 1 || len(journal.Records) != len(want) {
+			t.Fatalf("журнал: %+v", journal)
+		}
+		for i, record := range journal.Records {
+			if _, err := time.Parse(time.RFC3339, record.RecordedAt); record.Command != want[i] || record.ToolVersion != version || err != nil || !strings.HasSuffix(record.RecordedAt, "Z") {
+				t.Fatalf("запись %d: %+v", i, record)
+			}
+		}
+		runOK(t, "report", config, "review")
+		var report Report
+		if err := json.Unmarshal(readFixture(t, filepath.Join(base, "runs/review/report.json")), &report); err != nil {
+			t.Fatal(err)
+		}
+		if len(report.ToolVersions) != 4 || report.ToolVersions[3].Command != "review" {
+			t.Fatalf("report.tool_versions: %+v", report.ToolVersions)
+		}
+		if !strings.Contains(string(readFixture(t, filepath.Join(base, "runs/review/report.html"))), "Версии бинарника") {
+			t.Fatal("HTML без версий")
+		}
+		if !bytes.Equal(manifest, readFixture(t, filepath.Join(base, "runs/review/manifest.json"))) {
+			t.Fatal("журнал изменил manifest")
+		}
+		if runOK(t, "status", config, "review").(Status).Freshness != "fresh" {
+			t.Fatal("журнал изменил freshness")
+		}
+	})
+	t.Run("no_record_on_failure_and_read_only", func(t *testing.T) {
+		config, base := fixture(t)
+		batch := runOK(t, "prepare", config, "journal").(TaskBatch)
+		path := journalPath(base, "journal")
+		before := readFixture(t, path)
+		if journal := readJournal(t, path); len(journal.Records) != 1 || journal.Records[0].Command != "prepare" {
+			t.Fatalf("после prepare: %+v", journal)
+		}
+		entries, _ := os.ReadDir(filepath.Join(base, "runs", "journal"))
+		bad := sampleResult(t, batch.Tasks[0], filepath.Join(base, "source"))
+		bad.Assessments[0].Implementation = "PASS"
+		body, _ := json.Marshal(bad)
+		badPath := filepath.Join(base, "bad.json")
+		writeFixture(t, badPath, body)
+		runFail(t, "submit", config, "journal", batch.Tasks[0].TaskID, badPath)
+		runOK(t, "status", config, "journal")
+		runOK(t, "report", config, "journal")
+		runOK(t, "tasks", config, "journal")
+		good, _ := json.Marshal(sampleResult(t, batch.Tasks[0], filepath.Join(base, "source")))
+		goodPath := filepath.Join(base, "good.json")
+		writeFixture(t, goodPath, good)
+		runOK(t, "validate", config, "journal", batch.Tasks[0].TaskID, goodPath)
+		after, _ := os.ReadDir(filepath.Join(base, "runs", "journal"))
+		if !bytes.Equal(before, readFixture(t, path)) || len(after) != len(entries)+2 { // + report.json + report.html only
+			t.Fatalf("отказ, read-only или validate изменили журнал: %d → %d записей каталога", len(entries), len(after))
+		}
+	})
+	t.Run("legacy_run", func(t *testing.T) {
+		config, base := fixture(t)
+		writeFixture(t, config, bytes.Replace(readFixture(t, config), []byte("runtime: {kind: none}"), []byte("runtime: {kind: go, paths: ['.'], tests: [], timeout_seconds: 30}"), 1))
+		for _, file := range []string{"manifest.json", "state.json"} {
+			writeFixture(t, filepath.Join(base, "runs/blind-v1", file), readFixture(t, "../acceptance/declared-v01/"+file))
+		}
+		runOK(t, "status", config, "blind-v1")
+		runOK(t, "report", config, "blind-v1")
+		if _, err := os.Stat(journalPath(base, "blind-v1")); !os.IsNotExist(err) {
+			t.Fatal("read-only команды создали журнал")
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(readFixture(t, filepath.Join(base, "runs/blind-v1/report.json")), &raw); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := raw["tool_versions"]; ok {
+			t.Fatal("tool_versions у исторического run без журнала")
+		}
+		view := runOK(t, "review", config, "blind-v1").(ReviewContext)
+		decision := ReviewDecision{1, "legacy-review", "blind-v1", view.SnapshotID, view.BasisSHA256, "host", "Historical canonical evidence only", view.Entries[0].Result.Assessments, []string{"Original raw formatting unavailable"}}
+		runOK(t, "review", config, "blind-v1", writeReviewInput(t, base, decision))
+		if journal := readJournal(t, journalPath(base, "blind-v1")); len(journal.Records) != 1 || journal.Records[0].Command != "review" {
+			t.Fatalf("первая запись исторического run: %+v", journal)
+		}
+	})
+	t.Run("corrupt_journal", func(t *testing.T) {
+		config, base := fixture(t)
+		batch := runOK(t, "prepare", config, "corrupt").(TaskBatch)
+		path := journalPath(base, "corrupt")
+		writeFixture(t, path, []byte(`{"version":1}`))
+		state := readFixture(t, filepath.Join(base, "runs/corrupt/state.json"))
+		good, _ := json.Marshal(sampleResult(t, batch.Tasks[0], filepath.Join(base, "source")))
+		goodPath := filepath.Join(base, "good.json")
+		writeFixture(t, goodPath, good)
+		runFail(t, "submit", config, "corrupt", batch.Tasks[0].TaskID, goodPath)
+		runFail(t, "validate", config, "corrupt", batch.Tasks[0].TaskID, goodPath)
+		runFail(t, "tasks", config, "corrupt")
+		runFail(t, "report", config, "corrupt")
+		runFail(t, "status", config, "corrupt")
+		if !bytes.Equal(state, readFixture(t, filepath.Join(base, "runs/corrupt/state.json"))) || string(readFixture(t, path)) != `{"version":1}` {
+			t.Fatal("повреждённый журнал не остановил запись")
+		}
+		if entries, _ := os.ReadDir(filepath.Join(base, "runs/corrupt/results")); len(entries) != 0 {
+			t.Fatal("результат записан при повреждённом журнале")
+		}
+	})
+	t.Run("version_change", func(t *testing.T) {
+		config, base := fixture(t)
+		runOK(t, "prepare", config, "versions")
+		root, err := os.OpenRoot(filepath.Join(base, "runs", "versions"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer root.Close()
+		logs := captureLogs(t)
+		data, err := prepareToolVersion(root, "submit", "9.9.9")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(logs.String(), "другой версией") {
+			t.Fatalf("нет WARN о смене версии: %s", logs.String())
+		}
+		publishToolVersion(root, data)
+		runOK(t, "report", config, "versions")
+		var report Report
+		if err := json.Unmarshal(readFixture(t, filepath.Join(base, "runs/versions/report.json")), &report); err != nil {
+			t.Fatal(err)
+		}
+		if len(report.ToolVersions) != 2 || report.ToolVersions[0].ToolVersion != version || report.ToolVersions[1].ToolVersion != "9.9.9" {
+			t.Fatalf("%+v", report.ToolVersions)
+		}
+	})
+	t.Run("append_failure_is_warning", func(t *testing.T) {
+		config, base := fixture(t)
+		runOK(t, "prepare", config, "blocked")
+		root, err := os.OpenRoot(filepath.Join(base, "runs", "blocked"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer root.Close()
+		data, err := prepareToolVersion(root, "submit", version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := root.Remove(toolVersionsFile); err != nil {
+			t.Fatal(err)
+		}
+		if err := root.Mkdir(toolVersionsFile, 0700); err != nil { // rename onto a directory fails after the commit point
+			t.Fatal(err)
+		}
+		logs := captureLogs(t)
+		publishToolVersion(root, data)
+		if !strings.Contains(logs.String(), "журнал версий не записан") {
+			t.Fatalf("сбой публикации журнала не предупредил: %s", logs.String())
+		}
+	})
 }
