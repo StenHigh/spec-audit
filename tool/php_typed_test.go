@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSDKConfig(t *testing.T) {
@@ -824,4 +828,488 @@ func TestTypedReportEndToEnd(t *testing.T) {
 		t.Fatal("HTML должен показывать подсказки с экранированной цитатой")
 	}
 	checkReportAnchors(t, html)
+}
+
+// externalTypedRun выполняет prepare и php-typed настоящим бинарником против синтетического примера
+// в его собственном контейнере. Требует Docker и переменную окружения с CONFIG примера; иначе skip.
+func externalTypedRun(t *testing.T, envName, fixtureName string) []byte {
+	t.Helper()
+	configPath := os.Getenv(envName)
+	if configPath == "" {
+		t.Skip(envName + " не задан: внешний прогон в контейнере пропущен")
+	}
+	if !filepath.IsAbs(configPath) {
+		t.Fatal("нужен абсолютный путь CONFIG")
+	}
+	raw := string(readFixture(t, configPath))
+	root := filepath.Dir(configPath)
+	reports := filepath.Join(t.TempDir(), "reports")
+	raw = strings.Replace(raw, "project_root: .", "project_root: "+root, 1)
+	raw = regexp.MustCompile(`(?m)^reports_dir: .*$`).ReplaceAllString(raw, "reports_dir: "+reports)
+	config := filepath.Join(t.TempDir(), "config.yaml")
+	writeFixture(t, config, []byte(raw))
+	cfg, err := loadConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := snapshot(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var files []string
+	for _, file := range m.Files {
+		if oneOf(file.Kind, "code", "tests") && filepath.Ext(file.Path) == ".php" {
+			files = append(files, file.Path)
+		}
+	}
+	runOK(t, "prepare", config, "external")
+	started := time.Now()
+	response := runOK(t, append([]string{"php-typed", config, "external"}, files...)...).(map[string]any)
+	t.Logf("php-typed: %d файлов за %s, facts=%v diagnostics=%v", len(files), time.Since(started).Round(time.Millisecond), response["facts"], response["diagnostics"])
+	artifact := readFixture(t, response["artifact"].(string))
+	if os.Getenv("SPEC_AUDIT_TYPED_RECORD") == "1" {
+		writeFixture(t, filepath.Join("testdata", fixtureName), artifact)
+		t.Logf("фикстура %s перезаписана", fixtureName)
+	}
+	var state State
+	if err := json.Unmarshal(readFixture(t, filepath.Join(reports, "external/state.json")), &state); err != nil || len(state.SDK) != 1 {
+		t.Fatal("state должен содержать запись SDK", err)
+	}
+	t.Logf("versions: phpstan=%s larastan=%s", state.SDK[0].PHPStanVersion, state.SDK[0].LarastanVersion)
+	return artifact
+}
+
+func TestExternalTypedPlain(t *testing.T) {
+	artifact := externalTypedRun(t, "SPEC_AUDIT_TYPED_PLAIN_CONFIG", "typed-plain.json")
+	var envelope TypedEnvelope
+	if err := json.Unmarshal(artifact, &envelope); err != nil || envelope.Profile != "php" || len(envelope.BootstrapFiles) != 0 {
+		t.Fatal("профиль php без bootstrap", err)
+	}
+	checkControlCases(t, "plain", "positive", envelope.Facts)
+}
+
+type controlCase struct {
+	ID          string         `json:"id"`
+	Requirement string         `json:"requirement"`
+	Kind        string         `json:"kind"`
+	Fixture     string         `json:"fixture"`
+	Scenario    string         `json:"scenario"`
+	Expect      map[string]any `json:"expect"`
+}
+
+func loadControl(t *testing.T) []controlCase {
+	t.Helper()
+	var control struct {
+		Cases []controlCase `json:"cases"`
+	}
+	if err := json.Unmarshal(readFixture(t, "../acceptance/php-sdk-control.json"), &control); err != nil {
+		t.Fatal(err)
+	}
+	return control.Cases
+}
+
+func stringList(value any) []string {
+	items, _ := value.([]any)
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		out = append(out, item.(string))
+	}
+	return out
+}
+
+// targetMatches сравнивает цель с частичным описанием из контроля.
+func targetMatches(target TypedTarget, want map[string]any) bool {
+	for key, value := range want {
+		switch key {
+		case "class":
+			if target.Class != value.(string) {
+				return false
+			}
+		case "method":
+			if target.Method != value.(string) {
+				return false
+			}
+		case "file":
+			if target.File != value.(string) {
+				return false
+			}
+		case "file_prefix":
+			if !strings.HasPrefix(target.File, value.(string)) {
+				return false
+			}
+		case "line_positive":
+			if (target.Line > 0) != value.(bool) {
+				return false
+			}
+		case "line":
+			if target.Line != int(value.(float64)) {
+				return false
+			}
+		case "interface":
+			if target.Interface != value.(bool) {
+				return false
+			}
+		case "native":
+			if target.Native != value.(bool) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// factMatches проверяет один факт против ожиданий позитивного случая контроля.
+func factMatches(fact TypedFact, expect map[string]any) bool {
+	if v, ok := expect["syntax"]; ok && fact.Syntax != v.(string) {
+		return false
+	}
+	if v, ok := expect["name"]; ok && fact.Name != v.(string) {
+		return false
+	}
+	if v, ok := expect["resolution"]; ok && fact.Resolution != v.(string) {
+		return false
+	}
+	if v, ok := expect["resolution_in"]; ok && !oneOf(fact.Resolution, stringList(v)...) {
+		return false
+	}
+	if v, ok := expect["origin"]; ok && fact.Origin != v.(string) {
+		return false
+	}
+	if v, ok := expect["origin_in"]; ok && !oneOf(fact.Origin, stringList(v)...) {
+		return false
+	}
+	if v, ok := expect["targets_count"]; ok && len(fact.Targets) != int(v.(float64)) {
+		return false
+	}
+	if v, ok := expect["targets_min"]; ok && len(fact.Targets) < int(v.(float64)) {
+		return false
+	}
+	if v, ok := expect["quote_is_signature_line"]; ok && v.(bool) && !strings.Contains(fact.Citation.Quote, "function ") {
+		return false
+	}
+	if v, ok := expect["quote_not_attribute_line"]; ok && v.(bool) && strings.Contains(fact.Citation.Quote, "#[") {
+		return false
+	}
+	for _, key := range []string{"targets", "targets_include"} {
+		for _, item := range expectList(expect[key]) {
+			found := false
+			for _, target := range fact.Targets {
+				if targetMatches(target, item) {
+					found = true
+				}
+			}
+			if !found {
+				return false
+			}
+		}
+	}
+	for _, item := range expectList(expect["not_targets"]) {
+		for _, target := range fact.Targets {
+			if targetMatches(target, item) {
+				return false
+			}
+		}
+	}
+	if all, ok := expect["all_targets"].(map[string]any); ok {
+		for _, target := range fact.Targets {
+			if !targetMatches(target, all) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func expectList(value any) []map[string]any {
+	items, _ := value.([]any)
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		out = append(out, item.(map[string]any))
+	}
+	return out
+}
+
+// checkControlCases требует, чтобы для каждого позитивного случая нашёлся факт, удовлетворяющий ожиданиям.
+// Ожидания не редактируются под экспортёр: расхождение — известное ограничение, а не правка контроля.
+func checkControlCases(t *testing.T, fixture, kind string, facts []TypedFact) {
+	t.Helper()
+	for _, c := range loadControl(t) {
+		if c.Fixture != fixture || c.Kind != kind {
+			continue
+		}
+		t.Run(c.ID, func(t *testing.T) {
+			for _, fact := range facts {
+				if factMatches(fact, c.Expect) {
+					return
+				}
+			}
+			t.Fatalf("нет факта, удовлетворяющего ожиданию %s: %s", c.ID, c.Scenario)
+		})
+	}
+}
+
+// knownLimitations — ожидания контроля, которые фактическое поведение анализатора не подтверждает.
+// Контроль не редактируется; расхождение описано в README и обязано воспроизводиться, иначе ограничение устарело.
+var knownLimitations = map[string]string{
+	"container_binding_app_make": "Larastan разрешает app(Contract::class) в привязанную реализацию через загруженный контейнер: target — конкретный класс, не интерфейс",
+}
+
+func checkControlCasesWithLimitations(t *testing.T, fixture, kind string, facts []TypedFact) {
+	t.Helper()
+	for _, c := range loadControl(t) {
+		if c.Fixture != fixture || c.Kind != kind {
+			continue
+		}
+		t.Run(c.ID, func(t *testing.T) {
+			matched := false
+			for _, fact := range facts {
+				if factMatches(fact, c.Expect) {
+					matched = true
+				}
+			}
+			if reason, limited := knownLimitations[c.ID]; limited {
+				if matched {
+					t.Fatalf("известное ограничение %s больше не воспроизводится — обновите README: %s", c.ID, reason)
+				}
+				t.Logf("известное ограничение: %s", reason)
+				return
+			}
+			if !matched {
+				t.Fatalf("нет факта, удовлетворяющего ожиданию %s: %s", c.ID, c.Scenario)
+			}
+		})
+	}
+}
+
+// composeApp пересоздаёт контейнер синтетического примера с переключателями bootstrap.
+func composeApp(t *testing.T, dir string, env ...string) {
+	t.Helper()
+	cmd := exec.Command("docker", "compose", "up", "-d", "--force-recreate", "app")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("docker compose up: %v\n%s", err, out)
+	}
+}
+
+func TestExternalTypedLaravel(t *testing.T) {
+	configPath := os.Getenv("SPEC_AUDIT_TYPED_LARAVEL_CONFIG")
+	if configPath == "" {
+		t.Skip("SPEC_AUDIT_TYPED_LARAVEL_CONFIG не задан: внешний прогон в контейнере пропущен")
+	}
+	dir := filepath.Dir(configPath)
+	composeApp(t, dir)
+	artifact := externalTypedRun(t, "SPEC_AUDIT_TYPED_LARAVEL_CONFIG", "typed-laravel.json")
+	var envelope TypedEnvelope
+	if err := json.Unmarshal(artifact, &envelope); err != nil || envelope.Profile != "laravel" || !oneOf(larastanBoot, envelope.BootstrapFiles...) {
+		t.Fatal("профиль laravel с bootstrap Larastan", err)
+	}
+	checkControlCasesWithLimitations(t, "laravel", "positive", envelope.Facts)
+	// Негативы SA-034: bootstrap пытается обратиться к БД, записать в checkout или выйти в сеть.
+	for name, want := range map[string]string{"SPEC_AUDIT_BOOT_DB": "экспорт SDK не завершён", "SPEC_AUDIT_BOOT_WRITE": "снимок изменился", "SPEC_AUDIT_BOOT_HTTP": "экспорт SDK не завершён"} {
+		t.Run(name, func(t *testing.T) {
+			composeApp(t, dir, name+"=1")
+			defer func() {
+				_ = os.Remove(filepath.Join(dir, "bootstrap/cache/probe.php"))
+				composeApp(t, dir)
+			}()
+			raw := string(readFixture(t, configPath))
+			reports := filepath.Join(t.TempDir(), "reports")
+			raw = strings.Replace(raw, "project_root: .", "project_root: "+dir, 1)
+			raw = regexp.MustCompile(`(?m)^reports_dir: .*$`).ReplaceAllString(raw, "reports_dir: "+reports)
+			config := filepath.Join(t.TempDir(), "config.yaml")
+			writeFixture(t, config, []byte(raw))
+			runOK(t, "prepare", config, "negative")
+			_, err := execute([]string{"php-typed", config, "negative", "app/Services/Demo.php"})
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("%s: ожидалось %q, получено %v", name, want, err)
+			}
+			if _, statErr := os.Stat(filepath.Join(reports, "negative/state.json")); statErr != nil {
+				t.Fatal(statErr)
+			}
+			var state State
+			if err := json.Unmarshal(readFixture(t, filepath.Join(reports, "negative/state.json")), &state); err != nil || len(state.SDK) != 0 {
+				t.Fatal("отказ не должен оставлять запись SDK", err)
+			}
+		})
+	}
+}
+
+func TestExternalTypedLaravelProfileOnPlain(t *testing.T) {
+	configPath := os.Getenv("SPEC_AUDIT_TYPED_PLAIN_CONFIG")
+	if configPath == "" {
+		t.Skip("SPEC_AUDIT_TYPED_PLAIN_CONFIG не задан")
+	}
+	dir := filepath.Dir(configPath)
+	raw := string(readFixture(t, configPath))
+	reports := filepath.Join(t.TempDir(), "reports")
+	raw = strings.Replace(raw, "project_root: .", "project_root: "+dir, 1)
+	raw = strings.Replace(raw, "sdk: {profile: php}", "sdk: {profile: laravel}", 1)
+	raw = regexp.MustCompile(`(?m)^reports_dir: .*$`).ReplaceAllString(raw, "reports_dir: "+reports)
+	config := filepath.Join(t.TempDir(), "config.yaml")
+	writeFixture(t, config, []byte(raw))
+	runOK(t, "prepare", config, "nolarastan")
+	_, err := execute([]string{"php-typed", config, "nolarastan", "src/Service.php"})
+	if err == nil || !(strings.Contains(err.Error(), "Larastan") || strings.Contains(err.Error(), "bootstrap/app.php")) {
+		t.Fatalf("профиль laravel без Larastan должен отклоняться: %v", err)
+	}
+}
+
+// controlFixture поднимает синтетический пример из репозитория без Docker: контейнер имитируется,
+// вывод PHPStan — записанный envelope. Файлы примера и composer.lock должны совпадать с фикстурой.
+func controlFixture(t *testing.T, name string) (config string, cfg Config, m Manifest, envelope TypedEnvelope, log string) {
+	t.Helper()
+	dir, err := filepath.Abs("../acceptance/php-sdk/" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err = canonicalPath(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := string(readFixture(t, filepath.Join(dir, "config.yaml")))
+	base := t.TempDir()
+	raw = strings.Replace(raw, "project_root: .", "project_root: "+dir, 1)
+	raw = regexp.MustCompile(`(?m)^reports_dir: .*$`).ReplaceAllString(raw, "reports_dir: "+filepath.Join(base, "reports"))
+	config = filepath.Join(base, "config.yaml")
+	writeFixture(t, config, []byte(raw))
+	cfg, err = loadConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err = snapshot(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := readFixture(t, filepath.Join("testdata", "typed-"+name+".json"))
+	if err := json.Unmarshal(fixture, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Runtime.SDKSHA256 != typedSHA256 {
+		t.Fatalf("фикстура %s записана другим экспортёром; перезапишите её внешним тестом с SPEC_AUDIT_TYPED_RECORD=1", name)
+	}
+	f := &typedFixture{base: base, source: dir}
+	log = f.mockDocker(t, phpstanJSON(t, fixture, 0, nil))
+	return config, cfg, m, envelope, log
+}
+
+func TestTypedControl(t *testing.T) {
+	for _, name := range []string{"plain", "laravel"} {
+		t.Run(name, func(t *testing.T) {
+			config, cfg, m, envelope, log := controlFixture(t, name)
+			lock := readFixture(t, filepath.Join(cfg.ProjectRoot, "composer.lock"))
+			var paths []string
+			for _, file := range envelope.Files {
+				paths = append(paths, file.Path)
+			}
+			if _, err := verifyTyped(mustMarshal(t, envelope), m, cfg, paths, lock); err != nil {
+				t.Fatal("записанная фикстура не проходит проверку против примера:", err)
+			}
+			runOK(t, "prepare", config, "control")
+			response := runOK(t, append([]string{"php-typed", config, "control"}, paths...)...).(map[string]any)
+			if response["facts"] != len(envelope.Facts) {
+				t.Fatal("CLI-путь потерял факты", response)
+			}
+			if name == "plain" {
+				checkControlCases(t, name, "positive", envelope.Facts)
+			} else {
+				checkControlCasesWithLimitations(t, name, "positive", envelope.Facts)
+			}
+			// SA-033 через CLI: мутация фикстуры отклоняется, state и каталог run не меняются.
+			before := readFixture(t, filepath.Join(cfg.ReportsDir, "control/state.json"))
+			entries, _ := os.ReadDir(filepath.Join(cfg.ReportsDir, "control"))
+			mutated := envelope
+			mutated.Facts = append([]TypedFact{}, envelope.Facts...)
+			mutated.Facts[0].Citation.Quote += " "
+			phpstanOut := filepath.Join(filepath.Dir(config), "phpstan.json")
+			writeFixture(t, phpstanOut, phpstanJSON(t, mustMarshal(t, mutated), 0, nil))
+			runFail(t, append([]string{"php-typed", config, "control"}, paths...)...)
+			after, _ := os.ReadDir(filepath.Join(cfg.ReportsDir, "control"))
+			if !bytes.Equal(before, readFixture(t, filepath.Join(cfg.ReportsDir, "control/state.json"))) || len(after) != len(entries) {
+				t.Fatal("отклонённый envelope изменил run")
+			}
+			// SA-034 через мок: каждый негатив — отказ без записи, Composer не вызывается.
+			modes := map[string]string{"wrong_mount": "", "missing": "", "multiple": "", "stopped": "", "no_phpstan": "PHPStan", "config_cached": "закешированный", "internal_error": "не завершён", "exit_2": "не завершён", "slow": "таймаут", "huge_output": "лимит"}
+			if name == "laravel" {
+				modes["no_larastan"] = "Larastan"
+			}
+			writeFixture(t, phpstanOut, phpstanJSON(t, mustMarshal(t, envelope), 0, nil))
+			for mode, want := range modes {
+				resetLog(t, log)
+				t.Setenv("SPEC_AUDIT_DOCKER_MODE", mode)
+				_, err := execute(append([]string{"php-typed", config, "control"}, paths...))
+				if err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("%s: ожидался отказ %q, получено %v", mode, want, err)
+				}
+				if strings.Contains(strings.Join(callLog(t, log), "\n"), "composer") {
+					t.Fatal(mode, "Composer вызван")
+				}
+			}
+			t.Setenv("SPEC_AUDIT_DOCKER_MODE", "")
+			if !bytes.Equal(before, readFixture(t, filepath.Join(cfg.ReportsDir, "control/state.json"))) {
+				t.Fatal("негативы изменили state")
+			}
+			// Отчёт: подсказки видны, связей и метрик не создают.
+			runOK(t, "report", config, "control")
+			var report Report
+			if err := json.Unmarshal(readFixture(t, filepath.Join(cfg.ReportsDir, "control/report.json")), &report); err != nil {
+				t.Fatal(err)
+			}
+			if report.SDK == nil || report.SDK.Facts != len(envelope.Facts) || report.Navigation.Metrics.Ready != 0 || report.Navigation.Metrics.WithTests != 0 {
+				t.Fatalf("отчёт контроля: %+v %+v", report.SDK, report.Navigation.Metrics)
+			}
+			for _, file := range report.Navigation.Files {
+				if len(file.SDK) > 0 && (file.Current || len(file.Evidence) != 0) {
+					t.Fatal("подсказки не должны создавать связи", file.Path)
+				}
+			}
+		})
+	}
+	// SA-032 на записанных фактах plain: слабый assertion остаётся weak, чужой одноимённый метод не становится целью.
+	t.Run("report_cases", func(t *testing.T) {
+		var envelope TypedEnvelope
+		if err := json.Unmarshal(readFixture(t, "testdata/typed-plain.json"), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		m := Manifest{Config: Config{ProjectRoot: "/work/plain"}, Files: []SourceFile{{Path: "spec.md", Kind: "spec"}}}
+		for _, file := range envelope.Files {
+			m.Files = append(m.Files, SourceFile{Path: file.Path, Kind: map[bool]string{true: "tests", false: "code"}[strings.HasPrefix(file.Path, "tests/")], SHA256: file.SHA256, Bytes: file.Bytes})
+		}
+		sort.Slice(m.Files, func(i, j int) bool { return m.Files[i].Path < m.Files[j].Path })
+		spec := Citation{"spec.md", 5, 5, "### REQ-DEMO-001 — Сохранение в файловое хранилище"}
+		weak := Assessment{RequirementID: "REQ-DEMO-001", Specification: "clear", Implementation: "supported", Assertion: "weak",
+			Code:  []Citation{{"src/FileStore.php", 12, 12, "    public function save(string $key, string $value): void"}},
+			Tests: []TestCitation{{TestID: "Tests\\FileStoreTest::it_saves_without_checking_the_result", Citation: Citation{"tests/FileStoreTest.php", 18, 18, "        $this->assertTrue(true);"}}}}
+		build := func(withSDK bool) Report {
+			r := Report{Status: Status{Freshness: "fresh"}, HostReview: &ReviewSummary{State: "current", Latest: &ReviewDecision{ReviewID: "host", Assessments: []Assessment{weak}}},
+				Requirements: []RequirementReport{{Requirement: Requirement{ID: "REQ-DEMO-001", Source: spec}}}}
+			if withSDK {
+				r.SDK = &SDKSummary{Records: []SDKRecord{{Artifact: "sdk-typed-x.json"}}, Available: true, Profile: "php", Facts: len(envelope.Facts), Limitations: sdkLimitations, facts: envelope.Facts}
+			}
+			buildNavigation(&r, m)
+			return r
+		}
+		plain, hinted := build(false), build(true)
+		if plain.Navigation.Metrics != hinted.Navigation.Metrics || hinted.Navigation.Metrics.Weak != 1 || hinted.Navigation.Metrics.Ready != 0 {
+			t.Fatal("weak_test_with_matching_call: метрики или статус assertion изменились", hinted.Navigation.Metrics)
+		}
+		files := map[string]NavigationFile{}
+		for _, file := range hinted.Navigation.Files {
+			files[file.Path] = file
+		}
+		if len(files["tests/FileStoreTest.php"].SDK) == 0 || len(files["tests/FileStoreTest.php"].Evidence) != 1 || len(files["tests/FileStoreTest.php"].Evidence[0].Links) != 1 {
+			t.Fatal("подсказка видна рядом с единственной подтверждённой связью, не внутри Links")
+		}
+		for _, hint := range files["tests/DbStoreTest.php"].SDK {
+			if strings.Contains(hint.Origin, "Demo\\FileStore::save") {
+				t.Fatal("foreign_same_name_not_target: DbStore::save не должен указывать на FileStore")
+			}
+		}
+		if len(files["tests/DbStoreTest.php"].Evidence) != 0 || files["tests/DbStoreTest.php"].Current {
+			t.Fatal("подсказка не создаёт автоматической связи с нормой")
+		}
+		if len(files["tests/Support/Helper.php"].SDK) == 0 {
+			t.Fatal("shared_helper_context: общий helper должен иметь подсказку-контекст")
+		}
+	})
 }

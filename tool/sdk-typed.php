@@ -77,6 +77,9 @@ final class FactCollector implements Collector
         if ($node instanceof InClassMethodNode) {
             return $this->declaration($node, $scope);
         }
+        if ($node instanceof Expr\MethodCall && $node->getAttribute('virtualNullsafeMethodCall') === true) {
+            return null; // PHPStan дублирует nullsafe-вызов синтетическим MethodCall; факт даёт исходный узел.
+        }
         if ($node instanceof Expr\MethodCall || $node instanceof Expr\StaticCall || $node instanceof Expr\NullsafeMethodCall) {
             return $this->call($node, $scope);
         }

@@ -1,0 +1,24 @@
+# Синтетическое Laravel-приложение для приёмки профиля laravel (docs/php-sdk-contract.md).
+# app: без сети, environment показывает, что docker exec -e перекрывает compose; install: зависимости с сетью.
+services:
+  app:
+    image: composer:2
+    working_dir: /var/www/html
+    volumes:
+      - ./:/var/www/html
+    environment:
+      DB_HOST: db-must-not-be-used
+      DB_CONNECTION: pgsql
+      # Переключатели негативных сценариев SA-034; задаются при (пере)создании контейнера.
+      SPEC_AUDIT_BOOT_DB: ${SPEC_AUDIT_BOOT_DB:-}
+      SPEC_AUDIT_BOOT_WRITE: ${SPEC_AUDIT_BOOT_WRITE:-}
+      SPEC_AUDIT_BOOT_HTTP: ${SPEC_AUDIT_BOOT_HTTP:-}
+    command: ["sleep", "infinity"]
+    network_mode: none
+  install:
+    image: composer:2
+    working_dir: /var/www/html
+    volumes:
+      - ./:/var/www/html
+    command: ["composer", "install", "--no-interaction", "--prefer-dist", "--no-progress"]
+    profiles: ["install"]

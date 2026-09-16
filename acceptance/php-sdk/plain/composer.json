@@ -1,0 +1,23 @@
+{
+    "name": "spec-audit/php-sdk-plain-control",
+    "description": "Synthetic control project for SA-031…034: independent of any business project.",
+    "type": "project",
+    "license": "MIT",
+    "require": {
+        "php": "^8.2"
+    },
+    "require-dev": {
+        "phpstan/phpstan": "^2.2",
+        "phpunit/phpunit": "^12"
+    },
+    "autoload": {
+        "psr-4": {"Demo\\": "src/"}
+    },
+    "autoload-dev": {
+        "psr-4": {"Tests\\": "tests/"}
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": false
+    }
+}
