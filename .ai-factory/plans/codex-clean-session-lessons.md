@@ -113,7 +113,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (§6 с�
 <!-- Commit checkpoint: tasks 5-6 -->
 
 ### Phase 4: Поставка
-- [ ] Task 7: релиз `v0.1.4`, обновление хоста, пилота и синтетического проекта (действия владельца, сеть)
+- [x] Task 7: релиз `v0.1.4`, обновление хоста, пилота и синтетического проекта (действия владельца, сеть)
   - Deliverable: merge в `codex/bootstrap`, тег `v0.1.4`, approve окружения `release`; на хосте `spec-audit update` → `updated:true` (0.1.3→0.1.4); в пилоте `spec-audit skill update --dir <pilot> --host both` → `updated:true` (изменены `references/protocol.txt`, `SKILL.md`, receipt) и chore-коммит в `development` (push по запросу); то же в `spec-audit-synthetic`; `validate` проверен на живом run пилота: сначала `status <scope-config> finance-2026-09-16-01` → если `freshness: fresh`, то `validate <scope-config> finance-2026-09-16-01 <task> <существующий results-файл>` → `valid:true, already_submitted:true`; если stale — ожидаемое свидетельство: отказ «снимок stale» с неизменным каталогом run. В обоих случаях каталог run без изменений и без `tool-versions.json` (`validate` ничего не публикует). Свидетельства — строка в README «Приёмка и ограничения».
   - Files: `README.md`; (пилот и синтетический проект — вне репозитория инструмента)
   - Depends: 6
