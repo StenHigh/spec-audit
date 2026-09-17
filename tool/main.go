@@ -778,8 +778,13 @@ func checkAssessment(assessment Assessment, req Requirement, m Manifest, root *o
 			return errors.New("пустое limitation")
 		}
 	}
+	return checkCitations(assessment.Spec, assessment.Code, assessment.Tests, req, m, root, checkSources)
+}
+
+// checkCitations applies the §7 citation rules to one group set; a host's own citations (§25) pass the same checks.
+func checkCitations(spec, code []Citation, testCitations []TestCitation, req Requirement, m Manifest, root *os.Root, checkSources bool) error {
 	tests := []Citation{}
-	for _, test := range assessment.Tests {
+	for _, test := range testCitations {
 		if strings.TrimSpace(test.TestID) == "" || len(test.TestID) > 1024 {
 			return errors.New("нужен непустой test_id до 1024 байт")
 		}
@@ -788,7 +793,7 @@ func checkAssessment(assessment Assessment, req Requirement, m Manifest, root *o
 	for _, group := range []struct {
 		kind      string
 		citations []Citation
-	}{{"spec", assessment.Spec}, {"code", assessment.Code}, {"tests", tests}} {
+	}{{"spec", spec}, {"code", code}, {"tests", tests}} {
 		if len(group.citations) > 128 {
 			return errors.New("слишком много цитат в assessment")
 		}
@@ -1247,7 +1252,7 @@ func execute(args []string) (any, error) {
 	case "prepare", "tasks":
 		return TaskBatch{RunID: runID, SnapshotID: m.SnapshotID, ProjectRoot: cfg.ProjectRoot, Runtime: cfg.Runtime, Tasks: pending(state), Files: m.Files, SDK: sdkRecordsFor(cfg.ReportsDir, runID, state.SDK)}, nil
 	case "status":
-		view, err := reviewContext(run, runID, m, state, fresh)
+		view, err := reviewContext(reports, run, runID, m, state, fresh)
 		if err != nil {
 			return nil, err
 		}
@@ -1258,7 +1263,7 @@ func execute(args []string) (any, error) {
 		if len(args) == 4 {
 			return submitReview(run, runID, m, state, args[3], journal)
 		}
-		return reviewContext(run, runID, m, state, fresh)
+		return reviewContext(reports, run, runID, m, state, fresh)
 	case "draft":
 		reviews, err := readReviews(run, runID, m)
 		if err != nil {
@@ -1267,7 +1272,7 @@ func execute(args []string) (any, error) {
 		return draftDecision(runID, m, state, reviews)
 	case "report":
 		report := makeReport(runID, m, state, fresh)
-		view, err := reviewContext(run, runID, m, state, fresh)
+		view, err := reviewContext(reports, run, runID, m, state, fresh)
 		if err != nil {
 			return nil, err
 		}
