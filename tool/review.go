@@ -42,6 +42,7 @@ type ReviewSummary struct {
 	// Form and Concur describe the latest decision (tool-spec §23): "assessments" for version 1, "verdicts" for version 2.
 	Form   string            `json:"form,omitempty"`
 	Concur map[string]string `json:"concur,omitempty"`
+	Own    map[string]bool   `json:"own_citations,omitempty"`
 }
 
 // ReviewVerdict is one norm of a version 2 decision: the host's states without citations (REQ-SA-044).
@@ -68,6 +69,37 @@ type ReviewCounts struct {
 	Ambiguous             int `json:"ambiguous"`
 }
 
+// ReviewVerdictV3 is a version 2 verdict plus the host's own citations (tool-spec §25, REQ-SA-046); empty arrays are allowed.
+type ReviewVerdictV3 struct {
+	RequirementID  string         `json:"requirement_id"`
+	Specification  string         `json:"specification"`
+	Implementation string         `json:"implementation"`
+	Assertion      string         `json:"assertion"`
+	Concur         string         `json:"concur"`
+	Statement      string         `json:"statement"`
+	Limitations    []string       `json:"limitations"`
+	Spec           []Citation     `json:"spec"`
+	Code           []Citation     `json:"code"`
+	Tests          []TestCitation `json:"tests"`
+}
+
+func (verdict ReviewVerdictV3) base() ReviewVerdict {
+	return ReviewVerdict{verdict.RequirementID, verdict.Specification, verdict.Implementation, verdict.Assertion, verdict.Concur, verdict.Statement, verdict.Limitations}
+}
+
+type ReviewDecisionV3 struct {
+	Version     int               `json:"version"`
+	ReviewID    string            `json:"review_id"`
+	RunID       string            `json:"run_id"`
+	SnapshotID  string            `json:"snapshot_id"`
+	BasisSHA256 string            `json:"basis_sha256"`
+	Reviewer    string            `json:"reviewer"`
+	Summary     string            `json:"summary"`
+	Verdicts    []ReviewVerdictV3 `json:"verdicts"`
+	Counts      ReviewCounts      `json:"counts"`
+	Limitations []string          `json:"limitations"`
+}
+
 type ReviewDecisionV2 struct {
 	Version     int             `json:"version"`
 	ReviewID    string          `json:"review_id"`
@@ -92,11 +124,12 @@ type reviewRecord struct {
 	Summary     string
 	Assessments []Assessment
 	Concur      map[string]string
+	Own         map[string]bool // requirement_id → the host added citations of its own (version 3)
 	Limitations []string
 }
 
 func (record reviewRecord) form() string {
-	if record.Version == 2 {
+	if record.Version >= 2 {
 		return "verdicts"
 	}
 	return "assessments"
@@ -200,19 +233,19 @@ func outcomes(m Manifest, state State) []Outcome {
 	return rows
 }
 
-// draftDecision prints an empty version 2 decision for the current basis (REQ-SA-045); states stay the host's call.
-func draftDecision(runID string, m Manifest, state State, journal reviewJournal) (ReviewDecisionV2, error) {
+// draftDecision prints an empty version 3 decision for the current basis (REQ-SA-045); states stay the host's call.
+func draftDecision(runID string, m Manifest, state State, journal reviewJournal) (ReviewDecisionV3, error) {
 	if len(pending(state)) != 0 {
-		return ReviewDecisionV2{}, errors.New("нужны все ответы ролей; перечитайте review")
+		return ReviewDecisionV3{}, errors.New("нужны все ответы ролей; перечитайте review")
 	}
 	previous := ""
 	if n := len(journal.Records); n > 0 {
 		previous = journal.Records[n-1]
 	}
-	draft := ReviewDecisionV2{Version: 2, ReviewID: fmt.Sprintf("host-review-%03d", len(journal.Records)+1), RunID: runID, SnapshotID: m.SnapshotID,
-		BasisSHA256: reviewBasis(m.SnapshotID, state, previous), Verdicts: []ReviewVerdict{}, Limitations: []string{}}
+	draft := ReviewDecisionV3{Version: 3, ReviewID: fmt.Sprintf("host-review-%03d", len(journal.Records)+1), RunID: runID, SnapshotID: m.SnapshotID,
+		BasisSHA256: reviewBasis(m.SnapshotID, state, previous), Verdicts: []ReviewVerdictV3{}, Limitations: []string{}}
 	for _, req := range m.Requirements {
-		draft.Verdicts = append(draft.Verdicts, ReviewVerdict{RequirementID: req.ID, Limitations: []string{}})
+		draft.Verdicts = append(draft.Verdicts, ReviewVerdictV3{RequirementID: req.ID, Limitations: []string{}, Spec: []Citation{}, Code: []Citation{}, Tests: []TestCitation{}})
 	}
 	slog.Info("черновик решения", "run_id", runID, "review_id", draft.ReviewID, "requirements", len(draft.Verdicts))
 	return draft, nil
@@ -253,13 +286,15 @@ func reviewVersion(data []byte) int {
 }
 
 func validReviewIdentity(version int, reviewID, runID, wantRun, snapshotID, wantSnapshot, basis, reviewer string) bool {
-	return (version == 1 || version == 2) && slugRE.MatchString(reviewID) && runID == wantRun && snapshotID == wantSnapshot && validDigest(basis) && strings.TrimSpace(reviewer) != ""
+	return (version == 1 || version == 2 || version == 3) && slugRE.MatchString(reviewID) && runID == wantRun && snapshotID == wantSnapshot && validDigest(basis) && strings.TrimSpace(reviewer) != ""
 }
 
 // validateReview parses a decision of either version into the common record. state supplies the adopted evidence of a
 // version 2 decision; nil (journal replay) checks the form only.
 func validateReview(data []byte, runID string, m Manifest, state *State, checkSources bool) (reviewRecord, error) {
 	switch reviewVersion(data) {
+	case 3:
+		return validateReviewV3(data, runID, m, state, checkSources)
 	case 2:
 		return validateReviewV2(data, runID, m, state)
 	case 1:
@@ -280,7 +315,15 @@ func validateReview(data []byte, runID string, m Manifest, state *State, checkSo
 	if err := validateResult(result, task, m, checkSources); err != nil {
 		return reviewRecord{}, err
 	}
-	return reviewRecord{1, decision.ReviewID, decision.RunID, decision.SnapshotID, decision.Reviewer, decision.BasisSHA256, decision.Summary, decision.Assessments, nil, decision.Limitations}, nil
+	return reviewRecord{1, decision.ReviewID, decision.RunID, decision.SnapshotID, decision.Reviewer, decision.BasisSHA256, decision.Summary, decision.Assessments, nil, nil, decision.Limitations}, nil
+}
+
+func baseVerdicts(verdicts []ReviewVerdictV3) []ReviewVerdict {
+	bases := []ReviewVerdict{}
+	for _, verdict := range verdicts {
+		bases = append(bases, verdict.base())
+	}
+	return bases
 }
 
 func countVerdicts(verdicts []ReviewVerdict) ReviewCounts {
@@ -322,10 +365,33 @@ func validateReviewV2(data []byte, runID string, m Manifest, state *State) (revi
 	if !validReviewIdentity(decision.Version, decision.ReviewID, decision.RunID, runID, decision.SnapshotID, m.SnapshotID, decision.BasisSHA256, decision.Reviewer) || decision.Version != 2 {
 		return reviewRecord{}, errors.New("неверная версия/идентичность host review")
 	}
-	if strings.TrimSpace(decision.Summary) == "" || len(decision.Verdicts) != len(m.Requirements) {
+	verdicts := []ReviewVerdictV3{}
+	for _, verdict := range decision.Verdicts {
+		verdicts = append(verdicts, ReviewVerdictV3{verdict.RequirementID, verdict.Specification, verdict.Implementation, verdict.Assertion, verdict.Concur, verdict.Statement, verdict.Limitations, []Citation{}, []Citation{}, []TestCitation{}})
+	}
+	record := reviewRecord{Version: 2, ReviewID: decision.ReviewID, RunID: decision.RunID, SnapshotID: decision.SnapshotID, Reviewer: decision.Reviewer, BasisSHA256: decision.BasisSHA256, Summary: decision.Summary, Limitations: decision.Limitations}
+	return validateVerdicts(record, verdicts, decision.Counts, m, state, false)
+}
+
+// validateReviewV3 is version 2 plus the host's own citations, checked like a role's (§25).
+func validateReviewV3(data []byte, runID string, m Manifest, state *State, checkSources bool) (reviewRecord, error) {
+	var decision ReviewDecisionV3
+	if err := legacyDecode(data, &decision); err != nil {
+		return reviewRecord{}, err
+	}
+	if !validReviewIdentity(decision.Version, decision.ReviewID, decision.RunID, runID, decision.SnapshotID, m.SnapshotID, decision.BasisSHA256, decision.Reviewer) || decision.Version != 3 {
+		return reviewRecord{}, errors.New("неверная версия/идентичность host review")
+	}
+	record := reviewRecord{Version: 3, ReviewID: decision.ReviewID, RunID: decision.RunID, SnapshotID: decision.SnapshotID, Reviewer: decision.Reviewer, BasisSHA256: decision.BasisSHA256, Summary: decision.Summary, Limitations: decision.Limitations}
+	return validateVerdicts(record, decision.Verdicts, decision.Counts, m, state, checkSources)
+}
+
+// validateVerdicts is the shared version 2/3 body: form, counts, the host's own citations, then the adopted evidence.
+func validateVerdicts(record reviewRecord, verdicts []ReviewVerdictV3, counts ReviewCounts, m Manifest, state *State, checkSources bool) (reviewRecord, error) {
+	if strings.TrimSpace(record.Summary) == "" || len(verdicts) != len(m.Requirements) {
 		return reviewRecord{}, errors.New("нужны summary и ровно один вердикт на каждую норму")
 	}
-	for _, limitation := range decision.Limitations {
+	for _, limitation := range record.Limitations {
 		if strings.TrimSpace(limitation) == "" {
 			return reviewRecord{}, errors.New("пустое limitation")
 		}
@@ -334,18 +400,37 @@ func validateReviewV2(data []byte, runID string, m Manifest, state *State) (revi
 	for _, req := range m.Requirements {
 		requirements[req.ID] = req
 	}
+	var root *os.Root
+	if checkSources {
+		for _, verdict := range verdicts {
+			if len(verdict.Spec)+len(verdict.Code)+len(verdict.Tests) > 0 {
+				opened, err := os.OpenRoot(m.Config.ProjectRoot)
+				if err != nil {
+					return reviewRecord{}, err
+				}
+				root = opened
+				defer root.Close()
+				break
+			}
+		}
+	}
 	seen := map[string]bool{}
-	for _, verdict := range decision.Verdicts {
+	bases := []ReviewVerdict{}
+	for _, verdict := range verdicts {
 		req, ok := requirements[verdict.RequirementID]
 		if !ok || seen[verdict.RequirementID] {
 			return reviewRecord{}, errors.New("вердикт для неизвестной или повторной нормы")
 		}
 		seen[verdict.RequirementID] = true
-		if err := checkVerdict(verdict, req); err != nil {
+		if err := checkVerdict(verdict.base(), req); err != nil {
 			return reviewRecord{}, fmt.Errorf("%s: %w", verdict.RequirementID, err)
 		}
+		if err := checkCitations(verdict.Spec, verdict.Code, verdict.Tests, req, m, root, checkSources); err != nil {
+			return reviewRecord{}, fmt.Errorf("%s: цитаты хоста: %w", verdict.RequirementID, err)
+		}
+		bases = append(bases, verdict.base())
 	}
-	given, computed := decision.Counts, countVerdicts(decision.Verdicts)
+	given, computed := counts, countVerdicts(bases)
 	for _, pair := range []struct {
 		name            string
 		given, computed int
@@ -359,21 +444,81 @@ func validateReviewV2(data []byte, runID string, m Manifest, state *State) (revi
 			return reviewRecord{}, fmt.Errorf("counts.%s: %d ≠ %d", pair.name, pair.given, pair.computed)
 		}
 	}
-	record := reviewRecord{2, decision.ReviewID, decision.RunID, decision.SnapshotID, decision.Reviewer, decision.BasisSHA256, decision.Summary, []Assessment{}, map[string]string{}, decision.Limitations}
-	for _, verdict := range decision.Verdicts {
+	record.Assessments, record.Concur, record.Own = []Assessment{}, map[string]string{}, map[string]bool{}
+	for _, verdict := range verdicts {
 		record.Concur[verdict.RequirementID] = verdict.Concur
+		own := len(verdict.Spec)+len(verdict.Code)+len(verdict.Tests) > 0
+		if own {
+			record.Own[verdict.RequirementID] = true
+		}
 		assessment := Assessment{RequirementID: verdict.RequirementID, Specification: verdict.Specification, Implementation: verdict.Implementation,
-			Assertion: verdict.Assertion, Statement: verdict.Statement, Spec: []Citation{}, Code: []Citation{}, Tests: []TestCitation{}, Limitations: verdict.Limitations}
+			Assertion: verdict.Assertion, Statement: verdict.Statement, Spec: verdict.Spec, Code: verdict.Code, Tests: verdict.Tests, Limitations: verdict.Limitations}
+		if assessment.Spec == nil {
+			assessment.Spec = []Citation{}
+		}
+		if assessment.Code == nil {
+			assessment.Code = []Citation{}
+		}
+		if assessment.Tests == nil {
+			assessment.Tests = []TestCitation{}
+		}
 		if state != nil {
-			adopted, err := adoptEvidence(verdict, m, *state)
+			adopted, err := adoptEvidence(verdict.base(), m, *state)
 			if err != nil {
 				return reviewRecord{}, err
 			}
-			assessment.Spec, assessment.Code, assessment.Tests = adopted.Spec, adopted.Code, adopted.Tests
+			assessment.Spec, assessment.Code, assessment.Tests = mergeCitations(adopted, assessment)
+			// Version 3 promises §7 completeness on the union (REQ-SA-046); version 2 keeps its §23 contract unchanged.
+			if record.Version == 3 {
+				if len(assessment.Spec) == 0 || (assessment.Implementation != "unknown" && len(assessment.Code) == 0) {
+					return reviewRecord{}, fmt.Errorf("%s: нужна spec; supported/contradicted требуют code", verdict.RequirementID)
+				}
+				if oneOf(assessment.Assertion, "relevant", "weak", "contradicts") && len(assessment.Tests) == 0 {
+					return reviewRecord{}, fmt.Errorf("%s: оценка assertion требует тестовый источник", verdict.RequirementID)
+				}
+			}
+			slog.Debug("review: свидетельства по concur", "requirement_id", verdict.RequirementID, "concur", verdict.Concur, "spec", len(assessment.Spec), "code", len(assessment.Code), "tests", len(assessment.Tests), "own_spec", len(verdict.Spec), "own_code", len(verdict.Code), "own_tests", len(verdict.Tests))
 		}
 		record.Assessments = append(record.Assessments, assessment)
 	}
+	if len(record.Own) == 0 {
+		record.Own = nil
+	}
 	return record, nil
+}
+
+// mergeCitations appends the host's own citations after the roles' ones, dropping duplicates by value.
+func mergeCitations(adopted, own Assessment) ([]Citation, []Citation, []TestCitation) {
+	spec, code, tests := append([]Citation{}, adopted.Spec...), append([]Citation{}, adopted.Code...), append([]TestCitation{}, adopted.Tests...)
+	seenSpec, seenCode, seenTest := map[Citation]bool{}, map[Citation]bool{}, map[TestCitation]bool{}
+	for _, cite := range spec {
+		seenSpec[cite] = true
+	}
+	for _, cite := range code {
+		seenCode[cite] = true
+	}
+	for _, test := range tests {
+		seenTest[test] = true
+	}
+	for _, cite := range own.Spec {
+		if !seenSpec[cite] {
+			seenSpec[cite] = true
+			spec = append(spec, cite)
+		}
+	}
+	for _, cite := range own.Code {
+		if !seenCode[cite] {
+			seenCode[cite] = true
+			code = append(code, cite)
+		}
+	}
+	for _, test := range own.Tests {
+		if !seenTest[test] {
+			seenTest[test] = true
+			tests = append(tests, test)
+		}
+	}
+	return spec, code, tests
 }
 
 func checkVerdict(verdict ReviewVerdict, req Requirement) error {
@@ -440,7 +585,6 @@ func adoptEvidence(verdict ReviewVerdict, m Manifest, state State) (Assessment, 
 			return adopted, fmt.Errorf("%s: у роли %s нет текущего результата по норме", verdict.RequirementID, role)
 		}
 	}
-	slog.Debug("review: свидетельства по concur", "requirement_id", verdict.RequirementID, "concur", verdict.Concur, "spec", len(adopted.Spec), "code", len(adopted.Code), "tests", len(adopted.Tests))
 	return adopted, nil
 }
 func readReviews(run *os.Root, runID string, m Manifest) (reviewJournal, error) {
@@ -485,7 +629,7 @@ func summarizeReviews(runID string, m Manifest, state State, fresh bool, journal
 			record, _ = validateReview([]byte(raw), runID, m, nil, false)
 		}
 		summary.History = append(summary.History, ReviewHistory{record.ReviewID, record.Reviewer, digest([]byte(raw)), record.BasisSHA256, record.Summary})
-		summary.Latest, summary.Form, summary.Concur = record.decision(), record.form(), record.Concur
+		summary.Latest, summary.Form, summary.Concur, summary.Own = record.decision(), record.form(), record.Concur, record.Own
 		summary.State = "outdated"
 		if fresh && len(pending(state)) == 0 && record.BasisSHA256 == reviewBasis(m.SnapshotID, state, previous) {
 			summary.State = "current"
@@ -535,7 +679,7 @@ func submitReview(run *os.Root, runID string, m Manifest, state State, path stri
 	if len(pending(state)) != 0 || decision.BasisSHA256 != view.BasisSHA256 {
 		return nil, errors.New("нужны все ответы ролей и текущая база review; перечитайте review")
 	}
-	if decision.Version == 2 {
+	if decision.Version >= 2 {
 		if decision, err = validateReview(data, runID, m, &state, true); err != nil {
 			return nil, err
 		}

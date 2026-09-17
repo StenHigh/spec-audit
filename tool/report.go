@@ -45,16 +45,20 @@ type RequirementNavigation struct {
 }
 
 // hostConcurLabel names whose evidence a version 2 verdict adopted (tool-spec §23).
-func hostConcurLabel(concur string) string {
+func hostConcurLabel(concur string, own bool) string {
+	label := ""
 	switch concur {
 	case "mapper":
-		return "свидетельства mapper"
+		label = "свидетельства mapper"
 	case "redteam":
-		return "свидетельства redteam"
+		label = "свидетельства redteam"
 	case "both":
-		return "свидетельства обеих ролей"
+		label = "свидетельства обеих ролей"
 	}
-	return ""
+	if label != "" && own {
+		label += " и хоста"
+	}
+	return label
 }
 
 type NavigationLink struct {
@@ -318,7 +322,7 @@ func buildNavigation(report *Report, m Manifest) {
 		req := row.Requirement
 		row.Navigation = RequirementNavigation{Section: req.Source.Path, Basis: "roles", Flags: []string{}, Host: host[req.ID], HostExecutions: []TestExecution{}}
 		if report.HostReview != nil && host[req.ID] != nil {
-			row.Navigation.HostConcur = hostConcurLabel(report.HostReview.Concur[req.ID])
+			row.Navigation.HostConcur = hostConcurLabel(report.HostReview.Concur[req.ID], report.HostReview.Own[req.ID])
 		}
 		flags := map[string]bool{"unreviewed": !currentHost}
 		if !fresh {

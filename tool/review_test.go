@@ -523,7 +523,7 @@ func TestReviewV2(t *testing.T) {
 	refuse("missing", func(d *ReviewDecisionV2) { d.Verdicts = d.Verdicts[1:]; d.Counts = countVerdicts(d.Verdicts) }, "ровно один вердикт")
 	refuse("duplicate", func(d *ReviewDecisionV2) { d.Verdicts[1] = d.Verdicts[0]; d.Counts = countVerdicts(d.Verdicts) }, "повторной нормы")
 	refuse("statement", func(d *ReviewDecisionV2) { d.Verdicts[2].Statement = " " }, "statement")
-	refuse("version", func(d *ReviewDecisionV2) { d.Version = 3 }, "неверная версия")
+	refuse("version", func(d *ReviewDecisionV2) { d.Version = 4 }, "неверная версия")
 	refuse("stale", func(d *ReviewDecisionV2) { d.BasisSHA256 = both.BasisSHA256 }, "текущая база")
 	if !bytes.Equal(beforeJournal, readFixture(t, journalPath)) {
 		t.Fatal("отказы изменили журнал")
@@ -628,13 +628,13 @@ func TestReviewDraft(t *testing.T) {
 	}
 	versionsPath := filepath.Join(base, "runs/review/tool-versions.json")
 	versionsBefore := readFixture(t, versionsPath)
-	draft := runOK(t, "draft", config, "review").(ReviewDecisionV2)
+	draft := runOK(t, "draft", config, "review").(ReviewDecisionV3)
 	view := runOK(t, "review", config, "review").(ReviewContext)
-	if draft.Version != 2 || draft.ReviewID != "host-review-001" || draft.RunID != "review" || draft.SnapshotID != view.SnapshotID || draft.BasisSHA256 != view.BasisSHA256 || len(draft.Verdicts) != len(view.Requirements) || draft.Counts != (ReviewCounts{}) || draft.Reviewer != "" || draft.Summary != "" || draft.Limitations == nil {
+	if draft.Version != 3 || draft.ReviewID != "host-review-001" || draft.RunID != "review" || draft.SnapshotID != view.SnapshotID || draft.BasisSHA256 != view.BasisSHA256 || len(draft.Verdicts) != len(view.Requirements) || draft.Counts != (ReviewCounts{}) || draft.Reviewer != "" || draft.Summary != "" || draft.Limitations == nil {
 		t.Fatal("черновик должен нести основание и все нормы с пустыми полями хоста", draft)
 	}
 	for i, verdict := range draft.Verdicts {
-		if verdict.RequirementID != view.Requirements[i].ID || verdict.Specification != "" || verdict.Concur != "" || verdict.Statement != "" || verdict.Limitations == nil {
+		if verdict.RequirementID != view.Requirements[i].ID || verdict.Specification != "" || verdict.Concur != "" || verdict.Statement != "" || verdict.Limitations == nil || verdict.Spec == nil || verdict.Code == nil || verdict.Tests == nil {
 			t.Fatal("вердикт черновика", verdict)
 		}
 	}
@@ -643,9 +643,9 @@ func TestReviewDraft(t *testing.T) {
 	}
 	// The serialized draft is the exact form review accepts once filled; an unfilled one is refused without a record.
 	raw := legacyMarshal(t, draft)
-	var parsed ReviewDecisionV2
+	var parsed ReviewDecisionV3
 	if err := legacyDecode(raw, &parsed); err != nil || requiredJSON(raw, reflect.TypeOf(parsed)) != nil {
-		t.Fatal("черновик должен проходить строгий разбор формы version 2", err)
+		t.Fatal("черновик должен проходить строгий разбор формы version 3", err)
 	}
 	draftPath := filepath.Join(base, "draft.json")
 	writeFixture(t, draftPath, raw)
@@ -655,12 +655,12 @@ func TestReviewDraft(t *testing.T) {
 		draft.Verdicts[i].Specification, draft.Verdicts[i].Implementation, draft.Verdicts[i].Assertion = row.Specification, row.Implementation, row.Assertion
 		draft.Verdicts[i].Concur, draft.Verdicts[i].Statement = "both", "host: по совпадающим свидетельствам"
 	}
-	draft.Reviewer, draft.Summary, draft.Counts = "host", "Заполненный черновик", countVerdicts(draft.Verdicts)
+	draft.Reviewer, draft.Summary, draft.Counts = "host", "Заполненный черновик", countVerdicts(baseVerdicts(draft.Verdicts))
 	writeFixture(t, draftPath, legacyMarshal(t, draft))
 	if accepted := runOK(t, "review", config, "review", draftPath).(map[string]any); accepted["accepted"] != true || accepted["review_state"] != "current" {
 		t.Fatal("заполненный черновик должен приниматься", accepted)
 	}
-	second := runOK(t, "draft", config, "review").(ReviewDecisionV2)
+	second := runOK(t, "draft", config, "review").(ReviewDecisionV3)
 	if second.ReviewID != "host-review-002" || second.BasisSHA256 == draft.BasisSHA256 || second.BasisSHA256 != runOK(t, "review", config, "review").(ReviewContext).BasisSHA256 {
 		t.Fatal("второй черновик должен учитывать запись журнала", second.ReviewID)
 	}
@@ -680,10 +680,125 @@ func TestReviewDraft(t *testing.T) {
 	if len(legacy.Outcomes) != len(legacy.Requirements) || !legacy.Outcomes[0].Agree {
 		t.Fatal("outcomes на историческом run", legacy.Outcomes)
 	}
-	if historical := runOK(t, "draft", config, "blind-v1").(ReviewDecisionV2); historical.ReviewID != "host-review-001" || historical.BasisSHA256 != legacy.BasisSHA256 {
+	if historical := runOK(t, "draft", config, "blind-v1").(ReviewDecisionV3); historical.ReviewID != "host-review-001" || historical.BasisSHA256 != legacy.BasisSHA256 {
 		t.Fatal("draft на историческом run", historical.ReviewID)
 	}
 	if _, err := os.Stat(filepath.Join(base, "runs/blind-v1/dispatch")); !os.IsNotExist(err) {
 		t.Fatal("dispatch/ не создаётся задним числом")
 	}
+}
+
+func reviewV3Input(t *testing.T, config, id, concur string) ReviewDecisionV3 {
+	t.Helper()
+	view := runOK(t, "review", config, "review").(ReviewContext)
+	verdicts := []ReviewVerdictV3{}
+	for _, a := range view.Entries[0].Result.Assessments {
+		verdicts = append(verdicts, ReviewVerdictV3{a.RequirementID, a.Specification, a.Implementation, a.Assertion, concur, "host: принимает свидетельства роли", []string{}, []Citation{}, []Citation{}, []TestCitation{}})
+	}
+	return ReviewDecisionV3{3, id, "review", view.SnapshotID, view.BasisSHA256, "host-session", "Согласование по вердиктам с цитатами хоста", verdicts, countVerdicts(baseVerdicts(verdicts)), []string{"Суждение хоста; не сертификат"}}
+}
+
+// tool-spec §25 / REQ-SA-046: version 3 carries the host's own citations under the §7 rules, merged with the roles' evidence.
+func TestReviewV3(t *testing.T) {
+	config, base := fixture(t)
+	batch := runOK(t, "prepare", config, "review").(TaskBatch)
+	for _, task := range batch.Tasks {
+		result := sampleResult(t, task, filepath.Join(base, "source"))
+		if task.Role == "redteam" {
+			result.Assessments[0].Assertion, result.Assessments[0].Tests = "unknown", []TestCitation{}
+		}
+		path := filepath.Join(base, task.TaskID+".json")
+		writeFixture(t, path, legacyMarshal(t, result))
+		runOK(t, "submit", config, "review", task.TaskID, path)
+	}
+	journalPath := filepath.Join(base, "runs/review/host-reviews.json")
+	write := func(decision ReviewDecisionV3) string {
+		path := filepath.Join(base, "host-"+decision.ReviewID+".json")
+		writeFixture(t, path, legacyMarshal(t, decision))
+		return path
+	}
+	// A journal of three forms: version 1, version 2, then version 3.
+	runOK(t, "review", config, "review", writeReviewInput(t, base, reviewInput(t, config)))
+	runOK(t, "review", config, "review", func() string {
+		d := reviewV2Input(t, config, "v2-both", "both")
+		p := filepath.Join(base, "host-v2.json")
+		writeFixture(t, p, legacyMarshal(t, d))
+		return p
+	}())
+	empty := reviewV3Input(t, config, "v3-empty", "both")
+	runOK(t, "review", config, "review", write(empty))
+	view := runOK(t, "review", config, "review").(ReviewContext)
+	if view.State != "current" || view.Form != "verdicts" || view.Own != nil || view.Latest.Version != 3 || len(view.History) != 3 || len(view.Latest.Assessments[0].Tests) != 1 {
+		t.Fatal("version 3 без собственных цитат должна равняться version 2", view.State, view.Form, view.Own, len(view.History))
+	}
+	// The host's own citations: a sub-range of source.go no role cites and a test citation for a norm the redteam left without tests.
+	source := readFixture(t, filepath.Join(base, "source/source.go"))
+	ownQuote, err := lineQuote(source, 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownCode := Citation{"source.go", 1, 2, ownQuote}
+	testSource := readFixture(t, filepath.Join(base, "source/source_test.go"))
+	testQuote, err := lineQuote(testSource, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownTest := TestCitation{"host-observed-test", Citation{"source_test.go", 1, 1, testQuote}}
+	own := reviewV3Input(t, config, "v3-own", "redteam")
+	own.Verdicts[0].Code, own.Verdicts[0].Tests = []Citation{ownCode}, []TestCitation{ownTest}
+	own.Verdicts[1].Concur, own.Verdicts[1].Code = "both", []Citation{view.Entries[0].Result.Assessments[1].Code[0]} // duplicate of the mapper's citation
+	if accepted := runOK(t, "review", config, "review", write(own)).(map[string]any); accepted["accepted"] != true || accepted["review_state"] != "current" {
+		t.Fatal("version 3 с цитатами хоста должна приниматься", accepted)
+	}
+	view = runOK(t, "review", config, "review").(ReviewContext)
+	first, second := view.Latest.Assessments[0], view.Latest.Assessments[1]
+	if !view.Own["REQ-DEMO-001"] || !view.Own[second.RequirementID] || len(first.Code) != 2 || first.Code[1] != ownCode || len(first.Tests) != 1 || first.Tests[0] != ownTest || len(second.Code) != 1 {
+		t.Fatal("свидетельства = роли ∪ хост без повторов", view.Own, first.Code, first.Tests, second.Code)
+	}
+	runOK(t, "report", config, "review")
+	var report Report
+	if err := json.Unmarshal(readFixture(t, filepath.Join(base, "runs/review/report.json")), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Requirements[0].Navigation.HostConcur != "свидетельства redteam и хоста" || report.Requirements[1].Navigation.HostConcur != "свидетельства обеих ролей и хоста" || report.Requirements[2].Navigation.HostConcur != "свидетельства redteam" {
+		t.Fatal("подпись должна называть цитаты хоста", report.Requirements[0].Navigation.HostConcur, report.Requirements[1].Navigation.HostConcur)
+	}
+	if html := readFixture(t, filepath.Join(base, "runs/review/report.html")); !bytes.Contains(html, []byte("свидетельства redteam и хоста")) {
+		t.Fatal("HTML без подписи «и хоста»")
+	}
+	// Refusals leave the journal as written.
+	beforeJournal := readFixture(t, journalPath)
+	refuse := func(name string, mutate func(d *ReviewDecisionV3), fragment string) {
+		t.Helper()
+		decision := reviewV3Input(t, config, "v3-"+name, "redteam")
+		decision.Verdicts[0].Code, decision.Verdicts[0].Tests = []Citation{ownCode}, []TestCitation{ownTest}
+		mutate(&decision)
+		_, err := execute([]string{"review", config, "review", write(decision)})
+		if err == nil || !strings.Contains(err.Error(), fragment) {
+			t.Fatalf("%s: ожидался отказ %q, получено %v", name, fragment, err)
+		}
+	}
+	refuse("quote", func(d *ReviewDecisionV3) { d.Verdicts[0].Code[0].Quote = "not the source" }, "цитата не совпадает")
+	refuse("outside", func(d *ReviewDecisionV3) { d.Verdicts[0].Code[0].Path = "missing.go" }, "цитата вне группы code")
+	refuse("group", func(d *ReviewDecisionV3) { d.Verdicts[0].Spec = []Citation{ownCode} }, "цитата вне группы spec")
+	refuse("limit", func(d *ReviewDecisionV3) {
+		for i := 0; i < 129; i++ {
+			d.Verdicts[0].Code = append(d.Verdicts[0].Code, ownCode)
+		}
+	}, "слишком много цитат")
+	refuse("tests", func(d *ReviewDecisionV3) { d.Verdicts[0].Tests = []TestCitation{} }, "требует тестовый источник")
+	nullSpec := reviewV3Input(t, config, "v3-null", "both")
+	raw := bytes.Replace(legacyMarshal(t, nullSpec), []byte(`"spec":[]`), []byte(`"spec":null`), 1)
+	nullPath := filepath.Join(base, "host-null.json")
+	writeFixture(t, nullPath, raw)
+	runFail(t, "review", config, "review", nullPath)
+	if !bytes.Equal(beforeJournal, readFixture(t, journalPath)) {
+		t.Fatal("отказы изменили журнал")
+	}
+	runOK(t, "retry", config, "review", batch.Tasks[0].TaskID)
+	after := runOK(t, "review", config, "review").(ReviewContext)
+	if after.State != "outdated" || len(after.History) != 4 || after.Latest == nil || after.Latest.Version != 3 {
+		t.Fatal("retry должен сделать решение outdated, сохранив историю трёх форм", after.State, len(after.History))
+	}
+	runOK(t, "report", config, "review")
 }

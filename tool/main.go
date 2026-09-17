@@ -778,8 +778,13 @@ func checkAssessment(assessment Assessment, req Requirement, m Manifest, root *o
 			return errors.New("пустое limitation")
 		}
 	}
+	return checkCitations(assessment.Spec, assessment.Code, assessment.Tests, req, m, root, checkSources)
+}
+
+// checkCitations applies the §7 citation rules to one group set; a host's own citations (§25) pass the same checks.
+func checkCitations(spec, code []Citation, testCitations []TestCitation, req Requirement, m Manifest, root *os.Root, checkSources bool) error {
 	tests := []Citation{}
-	for _, test := range assessment.Tests {
+	for _, test := range testCitations {
 		if strings.TrimSpace(test.TestID) == "" || len(test.TestID) > 1024 {
 			return errors.New("нужен непустой test_id до 1024 байт")
 		}
@@ -788,7 +793,7 @@ func checkAssessment(assessment Assessment, req Requirement, m Manifest, root *o
 	for _, group := range []struct {
 		kind      string
 		citations []Citation
-	}{{"spec", assessment.Spec}, {"code", assessment.Code}, {"tests", tests}} {
+	}{{"spec", spec}, {"code", code}, {"tests", tests}} {
 		if len(group.citations) > 128 {
 			return errors.New("слишком много цитат в assessment")
 		}
