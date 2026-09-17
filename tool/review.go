@@ -436,7 +436,8 @@ func submitReview(run *os.Root, runID string, m Manifest, state State, path stri
 	if err != nil {
 		return nil, err
 	}
-	decision, err := validateReview(data, runID, m, &state, true)
+	// Form first: a duplicate or an incomplete delivery must answer as §14 says before any evidence is adopted.
+	decision, err := validateReview(data, runID, m, nil, true)
 	if err != nil {
 		return nil, err
 	}
@@ -456,6 +457,11 @@ func submitReview(run *os.Root, runID string, m Manifest, state State, path stri
 	}
 	if len(pending(state)) != 0 || decision.BasisSHA256 != view.BasisSHA256 {
 		return nil, errors.New("нужны все ответы ролей и текущая база review; перечитайте review")
+	}
+	if decision.Version == 2 {
+		if decision, err = validateReview(data, runID, m, &state, true); err != nil {
+			return nil, err
+		}
 	}
 	if len(journal.Records) >= 64 {
 		return nil, errors.New("достигнут лимит 64 host reviews")

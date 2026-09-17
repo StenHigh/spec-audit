@@ -477,6 +477,11 @@ func TestReviewV2(t *testing.T) {
 		writeFixture(t, path, legacyMarshal(t, decision))
 		return path
 	}
+	// A version 1 decision goes first, so the journal holds both forms (§23) and every later history count includes it.
+	runOK(t, "review", config, "review", writeReviewInput(t, base, reviewInput(t, config)))
+	if v1 := runOK(t, "review", config, "review").(ReviewContext); v1.Form != "assessments" || v1.Concur != nil {
+		t.Fatal("контекст после version 1", v1.Form, v1.Concur)
+	}
 	both := reviewV2Input(t, config, "v2-both", "both")
 	bothPath := write(both)
 	accepted := runOK(t, "review", config, "review", bothPath).(map[string]any)
@@ -484,8 +489,8 @@ func TestReviewV2(t *testing.T) {
 		t.Fatal("version 2 должна приниматься", accepted)
 	}
 	var journal reviewJournal
-	if err := json.Unmarshal(readFixture(t, journalPath), &journal); err != nil || len(journal.Records) != 1 || journal.Records[0] != string(readFixture(t, bothPath)) {
-		t.Fatal("журнал должен хранить точные байты version 2", err)
+	if err := json.Unmarshal(readFixture(t, journalPath), &journal); err != nil || len(journal.Records) != 2 || journal.Records[1] != string(readFixture(t, bothPath)) {
+		t.Fatal("журнал должен хранить точные байты version 2 после version 1", err)
 	}
 	view := runOK(t, "review", config, "review").(ReviewContext)
 	if view.State != "current" || view.Form != "verdicts" || view.Concur["REQ-DEMO-001"] != "both" || view.Latest.Version != 2 {
@@ -499,7 +504,7 @@ func TestReviewV2(t *testing.T) {
 	redteam := reviewV2Input(t, config, "v2-redteam", "redteam")
 	runOK(t, "review", config, "review", write(redteam))
 	view = runOK(t, "review", config, "review").(ReviewContext)
-	if len(view.History) != 2 || len(view.Latest.Assessments[0].Tests) != 0 || len(view.Latest.Assessments[0].Code) != 1 || view.Concur["REQ-DEMO-002"] != "redteam" {
+	if len(view.History) != 3 || len(view.Latest.Assessments[0].Tests) != 0 || len(view.Latest.Assessments[0].Code) != 1 || view.Concur["REQ-DEMO-002"] != "redteam" {
 		t.Fatal("redteam должен давать только свои свидетельства", view.Latest.Assessments[0])
 	}
 	// Refusals: counts, concur, coverage, statement, version, stale basis — the journal stays as written.
@@ -550,11 +555,25 @@ func TestReviewV2(t *testing.T) {
 	}
 	runOK(t, "retry", config, "review", batch.Tasks[0].TaskID)
 	after := runOK(t, "review", config, "review").(ReviewContext)
-	if after.State != "outdated" || len(after.History) != 2 || after.Latest == nil {
+	if after.State != "outdated" || len(after.History) != 3 || after.Latest == nil {
 		t.Fatal("retry должен сделать решение outdated, сохранив историю", after.State, len(after.History))
 	}
 	if after.Roles[0].Submitted || after.Roles[0].Attempt != 2 || after.Roles[0].RawSHA256 != "" || !after.Roles[1].Submitted {
 		t.Fatal("roles[] после retry", after.Roles)
+	}
+	// §14 answers still hold for version 2 while a role is pending: the same bytes are a duplicate, new bytes wait for delivery.
+	journalAfterRetry := readFixture(t, journalPath)
+	duplicate := runOK(t, "review", config, "review", bothPath).(map[string]any)
+	if duplicate["duplicate"] != true || duplicate["review_state"] != "outdated" || duplicate["latest_review_id"] != redteam.ReviewID {
+		t.Fatal("повтор тех же байт version 2 после retry — duplicate", duplicate)
+	}
+	pendingDecision := both
+	pendingDecision.ReviewID, pendingDecision.BasisSHA256 = "v2-pending", after.BasisSHA256
+	if _, err := execute([]string{"review", config, "review", write(pendingDecision)}); err == nil || !strings.Contains(err.Error(), "нужны все ответы ролей") {
+		t.Fatal("version 2 при недоставленной роли должна ждать доставки", err)
+	}
+	if !bytes.Equal(journalAfterRetry, readFixture(t, journalPath)) {
+		t.Fatal("журнал изменился после duplicate/отказа")
 	}
 	runOK(t, "report", config, "review")
 }
