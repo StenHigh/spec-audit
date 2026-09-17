@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -123,4 +124,61 @@ func TestScopeAssignmentErrors(t *testing.T) {
 		"scope b", "неизвестные ID []", "повторно назначенные [REQ-DEMO-001]")
 	check("scopes: [{id: part, focus: 'A', requirements: [REQ-DEMO-001, REQ-DEMO-002]}]\n",
 		"не распределены по scope: [REQ-DEMO-003 REQ-DEMO-004 REQ-DEMO-005]")
+}
+
+// tool-spec §26.1: a successful accepted-mode index is fresh by construction and says so; declared mode has no such field.
+func TestIndexFreshness(t *testing.T) {
+	config, base := acceptedFixture(t)
+	c := candidateAt(t, base, "rules.md", "C001", "Лимит 8 МиБ", 2, 2)
+	raw, decision := acceptedInputs(t, config, "initial", []legacyCandidate{c}, acceptOperation("accept", []string{}, "C001"))
+	runOK(t, "reconcile", config, raw, decision)
+	if index := runOK(t, "index", config).(map[string]any); index["freshness"] != "fresh" {
+		t.Fatal("index в accepted-режиме должен называть freshness", index["freshness"])
+	}
+	writeFixture(t, filepath.Join(base, "source/rules.md"), append(readFixture(t, filepath.Join(base, "source/rules.md")), []byte("\nещё строка\n")...))
+	runFail(t, "index", config)
+	declared, _ := fixture(t)
+	if index := runOK(t, "index", declared).(map[string]any); index["freshness"] != nil {
+		t.Fatal("в declared-режиме поля freshness нет", index["freshness"])
+	}
+}
+
+// tool-spec §26.2: anchors a norm names must be defined (not merely mentioned) in the snapshot's spec files.
+func TestAnchorAdvisories(t *testing.T) {
+	config, base := acceptedFixture(t)
+	rules := filepath.Join(base, "source/rules.md")
+	writeFixture(t, rules, append(readFixture(t, rules), []byte("Срок согласуется по §9.9 и A-777 (см. также §1.2).\n")...))
+	c := candidateAt(t, base, "rules.md", "C001", "Срок по §9.9 и правилу A-777 не превышает суток", 6, 6)
+	c.Exceptions = []string{"Кроме случаев §1.2"}
+	plain := candidateAt(t, base, "rules.md", "C002", "Лимит 8 МиБ", 2, 2)
+	raw, decision := acceptedInputs(t, config, "initial", []legacyCandidate{c, plain}, acceptOperation("accept", []string{}, "C001"), acceptOperation("accept", []string{}, "C002"))
+	want := "C001: якоря §9.9, A-777, §1.2 не определены в spec-файлах snapshot (source_set+references); норма может опираться на раздел вне scope"
+	if view := runOK(t, "check", config, raw).(map[string]any); !reflect.DeepEqual(view["advisories"], []string{want}) {
+		t.Fatal("check RAW должен назвать неопределённые якоря по кандидатам", view["advisories"])
+	}
+	runOK(t, "reconcile", config, raw, decision)
+	index := runOK(t, "index", config).(map[string]any)
+	advisories, _ := index["advisories"].([]string)
+	if len(advisories) != 1 || !strings.HasPrefix(advisories[0], "REQ-AI-001: якоря §9.9, A-777, §1.2 не определены") {
+		t.Fatal("index должен повторить подсказку по принятой норме", index["advisories"])
+	}
+	if view := runOK(t, "reconcile", config).(map[string]any); !reflect.DeepEqual(view["advisories"], index["advisories"]) {
+		t.Fatal("reconcile без RAW должен нести ту же подсказку", view["advisories"])
+	}
+	// Definitions: a heading in the spec file and a list item in a references file; §1.2 stays only a mention.
+	writeFixture(t, rules, append(readFixture(t, rules), []byte("## 9.9 Сроки\nТекст раздела.\n")...))
+	writeFixture(t, filepath.Join(base, "source/clarification.md"), []byte("# Уточнения\n* A-777: правило суток.\n"))
+	writeFixture(t, config, append(readFixture(t, config), []byte("references: {paths: [clarification.md]}\n")...))
+	c = candidateAt(t, base, "rules.md", "C001", "Срок по §9.9 и правилу A-777 не превышает суток", 6, 6)
+	c.Exceptions = []string{"Кроме случаев §1.2"}
+	plain = candidateAt(t, base, "rules.md", "C002", "Лимит 8 МиБ", 2, 2)
+	raw, decision = acceptedInputs(t, config, "defined", []legacyCandidate{c, plain}, acceptOperation("rebind", []string{"REQ-AI-001"}, "C001"), acceptOperation("rebind", []string{"REQ-AI-002"}, "C002"))
+	if view := runOK(t, "check", config, raw, decision).(map[string]any); !reflect.DeepEqual(view["advisories"], []string{"REQ-AI-001: якоря §1.2 не определены в spec-файлах snapshot (source_set+references); норма может опираться на раздел вне scope"}) {
+		t.Fatal("определения в заголовке и references снимают подсказку, упоминание в прозе — нет", view["advisories"])
+	}
+	runOK(t, "reconcile", config, raw, decision)
+	index = runOK(t, "index", config).(map[string]any)
+	if advisories, _ := index["advisories"].([]string); len(advisories) != 1 || !strings.Contains(advisories[0], "якоря §1.2 не определены") {
+		t.Fatal("после apply index показывает только §1.2", index["advisories"])
+	}
 }

@@ -775,21 +775,25 @@ func TestPrepareDispatch(t *testing.T) {
 		if err := json.Unmarshal(readFixture(t, filepath.Join(dir, "task.json")), &stored); err != nil || !reflect.DeepEqual(stored, task) {
 			t.Fatalf("task.json должен равняться заданию prepare: %v", err)
 		}
-		var files []SourceFile
-		if err := json.Unmarshal(readFixture(t, filepath.Join(dir, "files.json")), &files); err != nil || !reflect.DeepEqual(files, batch.Files) {
-			t.Fatalf("files.json должен равняться списку файлов prepare: %v", err)
+		if _, err := os.Stat(filepath.Join(dir, "files.json")); !os.IsNotExist(err) {
+			t.Fatal("files.json не копируется в каталог задания (§26.3)")
 		}
+	}
+	sharedPath := filepath.Join(base, "runs/review/dispatch/files.json")
+	var files []SourceFile
+	if err := json.Unmarshal(readFixture(t, sharedPath), &files); err != nil || !reflect.DeepEqual(files, batch.Files) {
+		t.Fatalf("dispatch/files.json должен равняться списку файлов prepare: %v", err)
 	}
 	first := batch.Tasks[0]
 	dir := filepath.Join(base, "runs/review/dispatch", first.TaskID)
 	writeFixture(t, filepath.Join(dir, "prompt.md"), []byte("launcher prompt\n"))
-	filesBefore := readFixture(t, filepath.Join(dir, "files.json"))
+	filesBefore := readFixture(t, sharedPath)
 	retried := runOK(t, "retry", config, "review", first.TaskID).(Task)
 	var stored Task
 	if err := json.Unmarshal(readFixture(t, filepath.Join(dir, "task.json")), &stored); err != nil || stored.Attempt != 2 || !reflect.DeepEqual(stored, retried) {
 		t.Fatal("retry должен перезаписать task.json новой попыткой", stored.Attempt)
 	}
-	if string(readFixture(t, filepath.Join(dir, "prompt.md"))) != "launcher prompt\n" || !bytes.Equal(filesBefore, readFixture(t, filepath.Join(dir, "files.json"))) {
+	if string(readFixture(t, filepath.Join(dir, "prompt.md"))) != "launcher prompt\n" || !bytes.Equal(filesBefore, readFixture(t, sharedPath)) {
 		t.Fatal("retry не должен трогать остальные файлы каталога")
 	}
 	if tasks := runOK(t, "tasks", config, "review").(TaskBatch); !reflect.DeepEqual(tasks.Tasks[0], stored) {

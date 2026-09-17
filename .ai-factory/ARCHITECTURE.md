@@ -10,8 +10,8 @@
 
 | Файлы | Ответственность |
 | --- | --- |
-| [tool/main.go](../tool/main.go) | CLI, CONFIG (группы specs/references/code/tests), snapshot, задания/результаты, проверки источников (в т.ч. `validate` без записи), журнал версий `tool-versions.json`, материализация `dispatch/<task_id>/` в `prepare`/`retry` и безопасная запись состояния |
-| [tool/specs.go](../tool/specs.go) | Markdown, объявленные требования, распределение по scope с диагностикой расхождений `scopes` и `advisories` о большом scope |
+| [tool/main.go](../tool/main.go) | CLI, CONFIG (группы specs/references/code/tests), snapshot, задания/результаты, проверки источников (в т.ч. `validate` без записи), журнал версий `tool-versions.json`, материализация `dispatch/<task_id>/` и общего `dispatch/files.json` в `prepare`/`retry` и безопасная запись состояния |
+| [tool/specs.go](../tool/specs.go) | Markdown, объявленные требования, распределение по scope с диагностикой расхождений `scopes` и `advisories` о большом scope и о якорях ТЗ вне snapshot, `freshness` в `index` |
 | [tool/accepted.go](../tool/accepted.go), [tool/legacy.go](../tool/legacy.go) | Принятие кандидатов, ID/редакции, reconcile (единый view для чтения и apply, справочные источники и guard нормативной цитаты), общий `stageAcceptance` для apply и `check` (проверка приёмки без записи, подсказки сопоставления с `unique_shared`), операция `reanchor` и проверка извлечения |
 | [tool/review.go](../tool/review.go) | Согласование хоста: DECISION version 1 (полные оценки), version 2 (вердикты с `concur` и `counts`, свидетельства из результатов ролей) и version 3 (плюс собственные цитаты хоста); `previous_host` из соседних run, общее основание/журнал, список ролей и таблица расхождений `outcomes[]` в контексте `review`, черновик решения `draft` |
 | [tool/runtime.go](../tool/runtime.go) | Контролируемый запуск процессов, timeout, результаты тестов и receipts |

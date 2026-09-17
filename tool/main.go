@@ -872,8 +872,8 @@ func publishPreparedFile(root *os.Root, tmp, path string, dir *os.File) error {
 	return nil
 }
 
-// writeDispatch materializes the role's directory (tool-spec §24.2): task.json always, files.json only on prepare.
-func writeDispatch(run *os.Root, task Task, files []SourceFile) error {
+// writeDispatch materializes the role's directory (tool-spec §24.2); the shared file list lives in dispatch/files.json (§26.3).
+func writeDispatch(run *os.Root, task Task) error {
 	dir := "dispatch/" + task.TaskID
 	if err := run.MkdirAll(dir, 0700); err != nil {
 		return err
@@ -881,12 +881,7 @@ func writeDispatch(run *os.Root, task Task, files []SourceFile) error {
 	if err := writeJSON(run, dir+"/task.json", task, 0600); err != nil {
 		return err
 	}
-	if files != nil {
-		if err := writeJSON(run, dir+"/files.json", files, 0600); err != nil {
-			return err
-		}
-	}
-	slog.Debug("dispatch: каталог задания", "task_id", task.TaskID, "files", len(files))
+	slog.Debug("dispatch: каталог задания", "task_id", task.TaskID)
 	return nil
 }
 
@@ -1191,8 +1186,15 @@ func execute(args []string) (any, error) {
 		if err := saveState(run, state, journal); err != nil {
 			return nil, err
 		}
+		if err := run.MkdirAll("dispatch", 0700); err != nil {
+			return nil, err
+		}
+		if err := writeJSON(run, "dispatch/files.json", m.Files, 0600); err != nil {
+			return nil, err
+		}
+		slog.Debug("dispatch: список файлов", "files", len(m.Files))
 		for _, entry := range state.Entries {
-			if err := writeDispatch(run, entry.Task, m.Files); err != nil {
+			if err := writeDispatch(run, entry.Task); err != nil {
 				return nil, err
 			}
 		}
@@ -1373,7 +1375,7 @@ func execute(args []string) (any, error) {
 		if err := saveState(run, state, journal); err != nil {
 			return nil, err
 		}
-		if err := writeDispatch(run, entry.Task, nil); err != nil {
+		if err := writeDispatch(run, entry.Task); err != nil {
 			return nil, err
 		}
 		return entry.Task, nil
