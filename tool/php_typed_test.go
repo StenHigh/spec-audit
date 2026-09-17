@@ -692,10 +692,10 @@ func TestTypedCLI(t *testing.T) {
 	if !bytes.Equal(before, readFixture(t, filepath.Join(f.base, "runs", run, "state.json"))) || len(after) != len(entries) {
 		t.Fatal("отказ php-typed изменил state или оставил артефакт")
 	}
-	// Старый run без SDK читается байт-в-байт как прежде.
+	// Старый run без SDK хранится байт-в-байт как прежде (state.json без ключа); ответ prepare отдаёт sdk: [] (§28.1).
 	plain := runOK(t, "prepare", f.config, "plain").(TaskBatch)
-	if bytes.Contains(mustMarshal(t, plain), []byte(`"sdk"`)) || bytes.Contains(readFixture(t, filepath.Join(f.base, "runs/plain/state.json")), []byte(`"sdk"`)) {
-		t.Fatal("run без импорта не должен получать ключ sdk")
+	if !bytes.Contains(mustMarshal(t, plain), []byte(`"sdk":[]`)) || bytes.Contains(readFixture(t, filepath.Join(f.base, "runs/plain/state.json")), []byte(`"sdk"`)) {
+		t.Fatal("run без импорта: state.json без ключа sdk, ответ prepare с sdk: []")
 	}
 }
 
