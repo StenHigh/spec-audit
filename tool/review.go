@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"reflect"
@@ -177,8 +178,19 @@ func roleEntries(state State) []RoleEntry {
 
 // RoleOutcome is one role's current states for a norm (tool-spec §24.1); citations stay in entries.
 type RoleOutcome struct {
-	TaskID         string `json:"task_id"`
-	Attempt        int    `json:"attempt"`
+	TaskID         string   `json:"task_id"`
+	Attempt        int      `json:"attempt"`
+	Specification  string   `json:"specification"`
+	Implementation string   `json:"implementation"`
+	Assertion      string   `json:"assertion"`
+	Limitations    []string `json:"limitations"`
+}
+
+// PreviousHost is the last host verdict on the same norm from an earlier run with the same snapshot and accepted head
+// (tool-spec §25.2): a reading aid the binary never carries over.
+type PreviousHost struct {
+	RunID          string `json:"run_id"`
+	ReviewID       string `json:"review_id"`
 	Specification  string `json:"specification"`
 	Implementation string `json:"implementation"`
 	Assertion      string `json:"assertion"`
@@ -190,13 +202,17 @@ type Outcome struct {
 	Scope         string                 `json:"scope"`
 	Roles         map[string]RoleOutcome `json:"roles"`
 	Agree         bool                   `json:"agree"`
+	PreviousHost  *PreviousHost          `json:"previous_host,omitempty"`
 }
 
-func outcomes(m Manifest, state State) []Outcome {
+func outcomes(m Manifest, state State, previous map[string]PreviousHost) []Outcome {
 	rows := []Outcome{}
 	disagree := 0
 	for _, req := range m.Requirements {
 		row := Outcome{RequirementID: req.ID, Roles: map[string]RoleOutcome{}}
+		if prior, ok := previous[req.ID]; ok {
+			row.PreviousHost = &prior
+		}
 		for _, entry := range state.Entries {
 			assigned := false
 			for _, task := range entry.Task.Requirements {
@@ -216,7 +232,11 @@ func outcomes(m Manifest, state State) []Outcome {
 			}
 			for _, assessment := range entry.Result.Assessments {
 				if assessment.RequirementID == req.ID {
-					row.Roles[entry.Task.Role] = RoleOutcome{entry.Task.TaskID, entry.Task.Attempt, assessment.Specification, assessment.Implementation, assessment.Assertion}
+					limitations := assessment.Limitations
+					if limitations == nil {
+						limitations = []string{}
+					}
+					row.Roles[entry.Task.Role] = RoleOutcome{entry.Task.TaskID, entry.Task.Attempt, assessment.Specification, assessment.Implementation, assessment.Assertion, limitations}
 				}
 			}
 		}
@@ -231,6 +251,122 @@ func outcomes(m Manifest, state State) []Outcome {
 	}
 	slog.Debug("review: расхождения ролей", "requirements", len(rows), "disagree", disagree)
 	return rows
+}
+
+// previousHost scans the sibling runs of reports_dir for the latest host decision on the same snapshot and accepted
+// head (tool-spec §25.2). Only reads; a damaged or unrelated run is skipped.
+func previousHost(reports *os.Root, runID string, m Manifest) map[string]PreviousHost {
+	dirs, err := fs.ReadDir(reports.FS(), ".")
+	if err != nil {
+		slog.Debug("review: прошлый вердикт: каталог пропущен", "run_id", "", "error", err.Error())
+		return nil
+	}
+	head := ""
+	if m.Accepted != nil {
+		head = m.Accepted.Head
+	}
+	type candidate struct {
+		runID, reviewID, recordedAt string
+		states                      map[string]PreviousHost
+	}
+	var best *candidate
+	for _, dir := range dirs {
+		other := dir.Name()
+		if !dir.IsDir() || other == runID || !slugRE.MatchString(other) {
+			continue
+		}
+		states, reviewID, recordedAt, err := previousHostRun(reports, other, m.SnapshotID, head)
+		if err != nil {
+			slog.Debug("review: прошлый вердикт: каталог пропущен", "run_id", other, "error", err.Error())
+			continue
+		}
+		if states == nil {
+			continue
+		}
+		current := &candidate{other, reviewID, recordedAt, states}
+		if best == nil || current.recordedAt > best.recordedAt || (current.recordedAt == best.recordedAt && current.runID > best.runID) {
+			best = current
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	for id, prior := range best.states {
+		prior.RunID, prior.ReviewID = best.runID, best.reviewID
+		best.states[id] = prior
+	}
+	slog.Debug("review: прошлый вердикт", "run_id", best.runID, "review_id", best.reviewID, "requirements", len(best.states))
+	return best.states
+}
+
+// previousHostRun reads one sibling run; nil states mean "not the same snapshot/head or no decision".
+func previousHostRun(reports *os.Root, other, snapshotID, head string) (map[string]PreviousHost, string, string, error) {
+	run, err := reports.OpenRoot(other)
+	if err != nil {
+		return nil, "", "", err
+	}
+	defer run.Close()
+	manifest, err := readRoot(run, "manifest.json", maxState)
+	if err != nil {
+		return nil, "", "", err
+	}
+	var brief struct {
+		SnapshotID string `json:"snapshot_id"`
+		Accepted   *struct {
+			Head string `json:"head"`
+		} `json:"accepted"`
+	}
+	if err := json.Unmarshal(manifest, &brief); err != nil {
+		return nil, "", "", err
+	}
+	otherHead := ""
+	if brief.Accepted != nil {
+		otherHead = brief.Accepted.Head
+	}
+	if brief.SnapshotID != snapshotID || otherHead != head {
+		return nil, "", "", nil
+	}
+	data, err := readRoot(run, "host-reviews.json", maxState)
+	if os.IsNotExist(err) {
+		return nil, "", "", nil
+	}
+	if err != nil {
+		return nil, "", "", err
+	}
+	var journal reviewJournal
+	if err := json.Unmarshal(data, &journal); err != nil {
+		return nil, "", "", err
+	}
+	if len(journal.Records) == 0 {
+		return nil, "", "", nil
+	}
+	type row struct {
+		RequirementID  string `json:"requirement_id"`
+		Specification  string `json:"specification"`
+		Implementation string `json:"implementation"`
+		Assertion      string `json:"assertion"`
+	}
+	var last struct {
+		ReviewID    string `json:"review_id"`
+		Assessments []row  `json:"assessments"`
+		Verdicts    []row  `json:"verdicts"`
+	}
+	if err := json.Unmarshal([]byte(journal.Records[len(journal.Records)-1]), &last); err != nil {
+		return nil, "", "", err
+	}
+	states := map[string]PreviousHost{}
+	for _, r := range append(last.Assessments, last.Verdicts...) {
+		states[r.RequirementID] = PreviousHost{Specification: r.Specification, Implementation: r.Implementation, Assertion: r.Assertion}
+	}
+	recordedAt := ""
+	if versions, err := readToolVersions(run); err == nil {
+		for _, record := range versions.Records {
+			if record.Command == "review" {
+				recordedAt = record.RecordedAt
+			}
+		}
+	}
+	return states, last.ReviewID, recordedAt, nil
 }
 
 // draftDecision prints an empty version 3 decision for the current basis (REQ-SA-045); states stay the host's call.
@@ -639,13 +775,13 @@ func summarizeReviews(runID string, m Manifest, state State, fresh bool, journal
 	summary.BasisSHA256 = reviewBasis(m.SnapshotID, state, previous)
 	return summary
 }
-func reviewContext(run *os.Root, runID string, m Manifest, state State, fresh bool) (ReviewContext, error) {
+func reviewContext(reports, run *os.Root, runID string, m Manifest, state State, fresh bool) (ReviewContext, error) {
 	journal, err := readReviews(run, runID, m)
 	if err != nil {
 		return ReviewContext{}, err
 	}
 	status := makeStatus(runID, m, state, fresh)
-	return ReviewContext{runID, m.SnapshotID, status.DeliveryComplete, status.Freshness, summarizeReviews(runID, m, state, fresh, journal), m.Requirements, roleEntries(state), outcomes(m, state), state.Entries, state.Executions}, nil
+	return ReviewContext{runID, m.SnapshotID, status.DeliveryComplete, status.Freshness, summarizeReviews(runID, m, state, fresh, journal), m.Requirements, roleEntries(state), outcomes(m, state, previousHost(reports, runID, m)), state.Entries, state.Executions}, nil
 }
 func submitReview(run *os.Root, runID string, m Manifest, state State, path string, versions []byte) (any, error) {
 	slog.Debug("проверка согласования", "run_id", runID)

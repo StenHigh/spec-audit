@@ -1252,7 +1252,7 @@ func execute(args []string) (any, error) {
 	case "prepare", "tasks":
 		return TaskBatch{RunID: runID, SnapshotID: m.SnapshotID, ProjectRoot: cfg.ProjectRoot, Runtime: cfg.Runtime, Tasks: pending(state), Files: m.Files, SDK: sdkRecordsFor(cfg.ReportsDir, runID, state.SDK)}, nil
 	case "status":
-		view, err := reviewContext(run, runID, m, state, fresh)
+		view, err := reviewContext(reports, run, runID, m, state, fresh)
 		if err != nil {
 			return nil, err
 		}
@@ -1263,7 +1263,7 @@ func execute(args []string) (any, error) {
 		if len(args) == 4 {
 			return submitReview(run, runID, m, state, args[3], journal)
 		}
-		return reviewContext(run, runID, m, state, fresh)
+		return reviewContext(reports, run, runID, m, state, fresh)
 	case "draft":
 		reviews, err := readReviews(run, runID, m)
 		if err != nil {
@@ -1272,7 +1272,7 @@ func execute(args []string) (any, error) {
 		return draftDecision(runID, m, state, reviews)
 	case "report":
 		report := makeReport(runID, m, state, fresh)
-		view, err := reviewContext(run, runID, m, state, fresh)
+		view, err := reviewContext(reports, run, runID, m, state, fresh)
 		if err != nil {
 			return nil, err
 		}

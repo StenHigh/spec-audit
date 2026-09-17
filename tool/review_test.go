@@ -802,3 +802,103 @@ func TestReviewV3(t *testing.T) {
 	}
 	runOK(t, "report", config, "review")
 }
+
+// tool-spec §25.2: previous_host names the last host verdict of a sibling run on the same snapshot; nothing is carried over.
+func TestReviewPreviousHost(t *testing.T) {
+	config, base := fixture(t)
+	submitAll := func(runID string) TaskBatch {
+		batch := runOK(t, "prepare", config, runID).(TaskBatch)
+		for _, task := range batch.Tasks {
+			path := filepath.Join(base, runID+"-"+task.TaskID+".json")
+			writeFixture(t, path, legacyMarshal(t, sampleResult(t, task, filepath.Join(base, "source"))))
+			runOK(t, "submit", config, runID, task.TaskID, path)
+		}
+		return batch
+	}
+	decide := func(runID, reviewID string) {
+		view := runOK(t, "review", config, runID).(ReviewContext)
+		verdicts := []ReviewVerdict{}
+		for _, a := range view.Entries[0].Result.Assessments {
+			verdicts = append(verdicts, ReviewVerdict{a.RequirementID, a.Specification, a.Implementation, a.Assertion, "both", "host", []string{}})
+		}
+		verdicts[0].Implementation, verdicts[0].Assertion = "contradicted", "contradicts"
+		decision := ReviewDecisionV2{2, reviewID, runID, view.SnapshotID, view.BasisSHA256, "host", "прошлое решение", verdicts, countVerdicts(verdicts), []string{}}
+		path := filepath.Join(base, runID+"-"+reviewID+".json")
+		writeFixture(t, path, legacyMarshal(t, decision))
+		runOK(t, "review", config, runID, path)
+	}
+	submitAll("a")
+	if view := runOK(t, "review", config, "a").(ReviewContext); view.Outcomes[0].PreviousHost != nil || len(view.Outcomes[0].Roles["mapper"].Limitations) != 0 {
+		t.Fatal("без соседей previous_host отсутствует; limitations — пустой массив", view.Outcomes[0])
+	}
+	decide("a", "host-review-001")
+	submitAll("b")
+	writeFixture(t, filepath.Join(base, "runs/broken/manifest.json"), []byte("{not json"))
+	view := runOK(t, "review", config, "b").(ReviewContext)
+	prior := view.Outcomes[0].PreviousHost
+	if prior == nil || prior.RunID != "a" || prior.ReviewID != "host-review-001" || prior.Implementation != "contradicted" || prior.Assertion != "contradicts" || view.Outcomes[1].PreviousHost == nil || view.Outcomes[1].PreviousHost.Implementation != "supported" {
+		t.Fatal("previous_host должен показать последний вердикт run a", prior)
+	}
+	if draft := runOK(t, "draft", config, "b").(ReviewDecisionV3); draft.Verdicts[0].Implementation != "" {
+		t.Fatal("draft не копирует прошлый вердикт")
+	}
+	// A later decision on another sibling wins by its review time; a run on a different snapshot sees nothing.
+	submitAll("d")
+	decide("d", "later-review")
+	if view := runOK(t, "review", config, "b").(ReviewContext); view.Outcomes[0].PreviousHost.RunID != "d" || view.Outcomes[0].PreviousHost.ReviewID != "later-review" {
+		t.Fatal("выбирается последний по времени записи review", view.Outcomes[0].PreviousHost)
+	}
+	writeFixture(t, filepath.Join(base, "source/rules.md"), append(readFixture(t, filepath.Join(base, "source/rules.md")), []byte("\n<!-- другой snapshot -->\n")...))
+	submitAll("c")
+	if view := runOK(t, "review", config, "c").(ReviewContext); view.Outcomes[0].PreviousHost != nil {
+		t.Fatal("другой snapshot — previous_host отсутствует", view.Outcomes[0].PreviousHost)
+	}
+}
+
+// tool-spec §25.2 in accepted mode: the accepted head must match as well as the snapshot.
+func TestReviewPreviousHostAccepted(t *testing.T) {
+	config, base := acceptedFixture(t)
+	c := candidateAt(t, base, "rules.md", "C001", "Лимит 8 МиБ", 2, 2)
+	raw, decision := acceptedInputs(t, config, "initial", []legacyCandidate{c}, acceptOperation("accept", []string{}, "C001"))
+	runOK(t, "reconcile", config, raw, decision)
+	whole := func(path string) Citation {
+		data := readFixture(t, filepath.Join(base, "source", path))
+		end := len(strings.Split(strings.TrimSuffix(string(data), "\n"), "\n"))
+		quote, err := lineQuote(data, 1, end)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Citation{path, 1, end, quote}
+	}
+	submitAll := func(runID string) {
+		batch := runOK(t, "prepare", config, runID).(TaskBatch)
+		for _, task := range batch.Tasks {
+			result := Result{TaskID: task.TaskID, Attempt: task.Attempt, SnapshotID: task.SnapshotID, Role: task.Role, Scope: task.Scope, Summary: "s", Assessments: []Assessment{}, Limitations: []string{}}
+			for _, req := range task.Requirements {
+				result.Assessments = append(result.Assessments, Assessment{RequirementID: req.ID, Specification: "clear", Implementation: "supported", Assertion: "relevant", Statement: "ok",
+					Spec: req.Accepted.Citations, Code: []Citation{whole("source.go")}, Tests: []TestCitation{{"TestLimit", whole("source_test.go")}}, Limitations: []string{"граница проверена частично"}})
+			}
+			path := filepath.Join(base, runID+"-"+task.TaskID+".json")
+			writeFixture(t, path, legacyMarshal(t, result))
+			runOK(t, "submit", config, runID, task.TaskID, path)
+		}
+	}
+	submitAll("a")
+	view := runOK(t, "review", config, "a").(ReviewContext)
+	verdicts := []ReviewVerdict{{view.Requirements[0].ID, "clear", "supported", "weak", "both", "host", []string{}}}
+	path := filepath.Join(base, "a-decision.json")
+	writeFixture(t, path, legacyMarshal(t, ReviewDecisionV2{2, "host-review-001", "a", view.SnapshotID, view.BasisSHA256, "host", "s", verdicts, countVerdicts(verdicts), []string{}}))
+	runOK(t, "review", config, "a", path)
+	submitAll("b")
+	if view := runOK(t, "review", config, "b").(ReviewContext); view.Outcomes[0].PreviousHost == nil || view.Outcomes[0].PreviousHost.Assertion != "weak" || view.Outcomes[0].Roles["mapper"].Limitations[0] != "граница проверена частично" {
+		t.Fatal("тот же snapshot и accepted head — previous_host есть, limitations ролей видны", view.Outcomes[0])
+	}
+	// A new acceptance on unchanged sources moves the head: the same snapshot no longer counts.
+	revised := candidateAt(t, base, "rules.md", "C001", "Лимит 8 МиБ включительно", 2, 2)
+	raw, decision = acceptedInputs(t, config, "revise", []legacyCandidate{revised}, acceptOperation("revise", []string{view.Requirements[0].ID}, "C001"))
+	runOK(t, "reconcile", config, raw, decision)
+	submitAll("c")
+	if view := runOK(t, "review", config, "c").(ReviewContext); view.Outcomes[0].PreviousHost != nil {
+		t.Fatal("другой accepted head — previous_host отсутствует", view.Outcomes[0].PreviousHost)
+	}
+}
