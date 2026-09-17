@@ -80,7 +80,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (`valida
 <!-- Commit checkpoint: task 3 -->
 
 ### Phase 3: Документация и поставка
-- [ ] Task 4: launcher SKILL.md; README, ROADMAP, документ применения
+- [x] Task 4: launcher SKILL.md; README, ROADMAP, документ применения
   - Deliverable: `skills/spec-audit/SKILL.md` шаг 6: перед `review … DECISION` — «run `BINARY validate CONFIG RUN_ID host DECISION` first: the same checks as `review`, nothing is written; fix the file until it answers `valid:true`, then call `review`»; `outcomes[]`: «`roles.<role>.only_here` lists the lines only that role cites — use it to decide whether the host's own citations are needed; `previous_host.statement` explains the earlier verdict, still a reading aid». README «Первый запуск» — `validate … host`, `only_here`, `previous_host.statement`; «Приёмка и ограничения» — строка §27 (реализовано; регрессии; не проверено до релиза: пилот). ROADMAP «Уроки шестого прогона» — 1, 2, 3 `[x]`; строка таблицы этапов. docs/smsplace-adoption.md «рабочий цикл» — с 0.1.14 `validate … host` перед `review`.
   - Files: `skills/spec-audit/SKILL.md`, `README.md`, `.ai-factory/ROADMAP.md`, `docs/smsplace-adoption.md`
   - Depends: 2, 3
