@@ -231,10 +231,112 @@ func indexConfig(cfg Config) (any, error) {
 	index := map[string]any{"snapshot_id": m.SnapshotID, "profile": m.Profile, "requirements": m.Requirements, "files": m.Files,
 		"completeness_basis": basis, "semantic_completeness_proven": false, "accepted": m.Accepted,
 		"project_root": filepath.Clean(cfg.ProjectRoot)}
-	if advisories := scopeAdvisories(m); len(advisories) > 0 {
+	if m.Accepted != nil {
+		// tool-spec §26.1: snapshot refuses a stale accepted index, so a successful index is fresh by construction.
+		index["freshness"] = "fresh"
+	}
+	advisories := append(scopeAdvisories(m), anchorAdvisories(cfg.ProjectRoot, m.Files, requirementAnchorSources(m.Requirements))...)
+	if len(advisories) > 0 {
 		index["advisories"] = advisories
 	}
 	return index, nil
+}
+
+// tool-spec §26.2: a norm that names a section anchor (A-NNN, §N.N…) the snapshot's spec files never define may rest on
+// a section outside scope. The check is a reading aid: mentions in prose do not count as definitions.
+var (
+	anchorRE        = regexp.MustCompile(`\bA-\d{2,4}\b|§\s?\d+(?:\.\d+)*[A-Za-zА-Яа-я]?`)
+	anchorDefinedRE = regexp.MustCompile(`^\s*(?:#{1,6}\s+|[*-]\s+|\|\s*)?(?:\*\*)?(A-\d{2,4}|\d+(?:\.\d+)*[A-Za-zА-Яа-я]?)(?:\*\*)?(?:[\s:.)|*]|$)`)
+)
+
+type anchorSource struct {
+	ID    string
+	Texts []string
+}
+
+func requirementAnchorSources(reqs []Requirement) []anchorSource {
+	sources := []anchorSource{}
+	for _, req := range reqs {
+		texts := []string{req.Condition, req.Statement, req.Verification}
+		if req.Accepted != nil {
+			texts = append(append(texts, req.Accepted.Exceptions...), req.Accepted.Unresolved...)
+		}
+		sources = append(sources, anchorSource{req.ID, texts})
+	}
+	return sources
+}
+
+func candidateAnchorSources(candidates []legacyCandidate) []anchorSource {
+	sources := []anchorSource{}
+	for _, candidate := range candidates {
+		sources = append(sources, anchorSource{candidate.ID, append(append([]string{candidate.Condition, candidate.Statement}, candidate.Exceptions...), candidate.Unresolved...)})
+	}
+	return sources
+}
+
+// anchorKey normalizes a matched anchor: A-NNN stays as is, §1.6.10A becomes 1.6.10A.
+func anchorKey(anchor string) string {
+	return strings.TrimSpace(strings.TrimPrefix(anchor, "§"))
+}
+
+func anchorAdvisories(projectRoot string, files []SourceFile, sources []anchorSource) []string {
+	named := map[string]bool{}
+	for _, source := range sources {
+		for _, text := range source.Texts {
+			for _, anchor := range anchorRE.FindAllString(text, -1) {
+				named[anchorKey(anchor)] = true
+			}
+		}
+	}
+	if len(named) == 0 {
+		return []string{}
+	}
+	defined := map[string]bool{}
+	root, err := os.OpenRoot(projectRoot)
+	if err != nil {
+		slog.Debug("index: spec-файл пропущен", "path", projectRoot, "error", err.Error())
+		return []string{}
+	}
+	defer root.Close()
+	for _, file := range files {
+		if file.Kind != "spec" {
+			continue
+		}
+		data, err := readRoot(root, file.Path, maxFile)
+		if err != nil {
+			slog.Debug("index: spec-файл пропущен", "path", file.Path, "error", err.Error())
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if match := anchorDefinedRE.FindStringSubmatch(line); match != nil && named[match[1]] {
+				defined[match[1]] = true
+			}
+		}
+	}
+	advisories := []string{}
+	total := 0
+	for _, source := range sources {
+		missing := []string{}
+		seen := map[string]bool{}
+		for _, text := range source.Texts {
+			for _, anchor := range anchorRE.FindAllString(text, -1) {
+				key := anchorKey(anchor)
+				if defined[key] || seen[key] {
+					continue
+				}
+				seen[key] = true
+				missing = append(missing, strings.TrimSpace(anchor))
+			}
+		}
+		if len(missing) > 0 {
+			total += len(missing)
+			advisories = append(advisories, fmt.Sprintf("%s: якоря %s не определены в spec-файлах snapshot (source_set+references); норма может опираться на раздел вне scope", source.ID, strings.Join(missing, ", ")))
+		}
+	}
+	if len(advisories) > 0 {
+		slog.Debug("index: якоря вне snapshot", "requirements", len(advisories), "anchors", total)
+	}
+	return advisories
 }
 
 const defaultConfig = `version: 1
