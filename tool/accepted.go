@@ -525,10 +525,9 @@ func acceptedView(cfg Config, ledger acceptedLedger, state acceptedState) map[st
 	}
 	view := map[string]any{"base_index": state.Head, "source_set": set, "freshness": freshness,
 		"records": state.Records, "history": state.History, "journal": ledger, "semantic_completeness_proven": false}
+	view["advisories"] = []string{}
 	if scanErr == nil {
-		if advisories := anchorAdvisories(cfg.ProjectRoot, m.Files, requirementAnchorSources(recordRequirements(state.Records))); len(advisories) > 0 {
-			view["advisories"] = advisories
-		}
+		view["advisories"] = anchorAdvisories(cfg.ProjectRoot, m.Files, requirementAnchorSources(recordRequirements(state.Records)))
 	}
 	return view
 }
@@ -719,15 +718,11 @@ func checkAcceptance(cfg Config, paths []string) (any, error) {
 	view := map[string]any{"valid": true, "base_index": state.Head, "freshness": acceptedFreshness(ledger, state, staged.files),
 		"source_set": sourcesView(staged.files), "candidates": candidates}
 	if decision == nil {
-		if advisories := anchorAdvisories(cfg.ProjectRoot, staged.files, candidateAnchorSources(staged.raw.Candidates)); len(advisories) > 0 {
-			view["advisories"] = advisories
-		}
+		view["advisories"] = anchorAdvisories(cfg.ProjectRoot, staged.files, candidateAnchorSources(staged.raw.Candidates))
 		slog.Info("check: приёмка проверена", "candidates", len(candidates), "decision", false, "freshness", view["freshness"])
 		return view, nil
 	}
-	if advisories := anchorAdvisories(cfg.ProjectRoot, staged.files, requirementAnchorSources(recordRequirements(staged.state.Records))); len(advisories) > 0 {
-		view["advisories"] = advisories
-	}
+	view["advisories"] = anchorAdvisories(cfg.ProjectRoot, staged.files, requirementAnchorSources(recordRequirements(staged.state.Records)))
 	operations := map[string]AcceptedOperation{}
 	for _, operation := range decision.Operations {
 		for _, target := range operation.Targets {
