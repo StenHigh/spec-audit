@@ -1041,6 +1041,9 @@ func makeStatus(runID string, m Manifest, state State, fresh bool) Status {
 	return status
 }
 
+// usage is the command list of tool-spec §1–10 with later extensions; help prints it, wrong arguments refuse with it (§24.4).
+const usage = "команды: help; init/index CONFIG; reconcile CONFIG [RAW DECISION]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]"
+
 func execute(args []string) (any, error) {
 	if len(args) > 0 && args[0] == "reconcile" {
 		if len(args) != 2 && len(args) != 4 {
@@ -1078,7 +1081,10 @@ func execute(args []string) (any, error) {
 	if len(args) > 0 && args[0] == "skill" {
 		return runSkillCommand(args[1:], version)
 	}
-	if len(args) == 1 && args[0] == "version" {
+	if len(args) == 1 && oneOf(args[0], "help", "--help", "-h") {
+		return map[string]any{"usage": usage}, nil
+	}
+	if len(args) == 1 && oneOf(args[0], "version", "--version", "-V") {
 		return runVersion(), nil
 	}
 	if len(args) == 1 && args[0] == "update" {
@@ -1089,7 +1095,7 @@ func execute(args []string) (any, error) {
 		return runUpdate(&http.Client{Timeout: releaseTimeout}, releaseBaseURL, exe, version, releasePublicKeyHex)
 	}
 	if len(args) < 3 {
-		return nil, errors.New("команды: init/index CONFIG; reconcile CONFIG [RAW DECISION]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]")
+		return nil, errors.New(usage)
 	}
 	command, runID := args[0], args[2]
 	argc := map[string]int{"prepare": 3, "tasks": 3, "status": 3, "report": 3, "review": -2, "draft": 3, "submit": 5, "validate": 5, "retry": 4, "test": 4, "php-facts": -1, "php-typed": -1}

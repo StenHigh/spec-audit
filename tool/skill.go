@@ -81,10 +81,9 @@ func skillReceipt(files map[string][]byte, version string) []byte {
 }
 
 const (
-	skillInstallDir  = ".spec-audit/skill"
-	skillLinkTarget  = "../../.spec-audit/skill"
-	skillUsage       = "skill install|update --dir DIR --host codex|claude|both [--replace]"
-	skillNeedInstall = "каталог skill отсутствует или не установлен этим инструментом; сначала skill install"
+	skillInstallDir = ".spec-audit/skill"
+	skillLinkTarget = "../../.spec-audit/skill"
+	skillUsage      = "skill install|update --dir DIR --host codex|claude|both [--replace]"
 )
 
 var skillHosts = map[string][]string{
@@ -120,7 +119,22 @@ func runSkillCommand(args []string, current string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return runSkill(args[0], abs, *host, *replace, current)
+	root := skillProjectRoot(abs)
+	if root != abs {
+		slog.Debug("skill: корень проекта", "dir", root, "given", abs)
+	}
+	return runSkill(args[0], root, *host, *replace, current)
+}
+
+// skillProjectRoot maps DIR/.spec-audit or DIR/.spec-audit/skill back to DIR by directory names alone (tool-spec §24.5).
+func skillProjectRoot(abs string) string {
+	if filepath.Base(abs) == "skill" && filepath.Base(filepath.Dir(abs)) == ".spec-audit" {
+		return filepath.Dir(filepath.Dir(abs))
+	}
+	if filepath.Base(abs) == ".spec-audit" {
+		return filepath.Dir(abs)
+	}
+	return abs
 }
 
 func runSkill(sub, dir, host string, replace bool, current string) (map[string]any, error) {
@@ -154,7 +168,7 @@ func runSkill(sub, dir, host string, replace bool, current string) (map[string]a
 	case state.kind == "foreign":
 		return nil, errors.New("каталог .spec-audit/skill создан не этим инструментом (нет receipt или receipt не по контракту); он не заменяется")
 	case state.kind != "ours":
-		return nil, errors.New(skillNeedInstall)
+		return nil, fmt.Errorf("каталог %s отсутствует или не установлен этим инструментом; --dir — корень проекта, содержащий .spec-audit/skill; сначала skill install", filepath.Join(dir, filepath.FromSlash(skillInstallDir)))
 	case len(state.drift) > 0 && !replace:
 		return nil, fmt.Errorf("локально изменённые файлы skill: %s; повторите с --replace, чтобы переписать только управляемые файлы", strings.Join(state.drift, ", "))
 	default:
