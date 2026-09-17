@@ -148,17 +148,43 @@ func assignRequirements(m *Manifest) error {
 	}
 	assigned := map[string]bool{}
 	for _, scope := range m.Config.Scopes {
+		unknown, duplicate := []string{}, []string{}
 		for _, id := range scope.Requirements {
-			if !ids[id] || assigned[id] {
-				return errors.New("неизвестное или повторно назначенное требование")
+			switch {
+			case !ids[id]:
+				unknown = append(unknown, id)
+			case assigned[id]:
+				duplicate = append(duplicate, id)
+			default:
+				assigned[id] = true
 			}
-			assigned[id] = true
+		}
+		if len(unknown) > 0 || len(duplicate) > 0 {
+			// tool-spec §22.2: after an acceptance that changed IDs, name the scope and the IDs so the host can fix `scopes`.
+			return fmt.Errorf("scope %s: неизвестные ID %v; повторно назначенные %v", scope.ID, idList(unknown), idList(duplicate))
 		}
 	}
 	if len(assigned) != len(ids) {
-		return errors.New("не все требования распределены по scope")
+		unassigned := []string{}
+		for _, id := range all {
+			if !assigned[id] {
+				unassigned = append(unassigned, id)
+			}
+		}
+		return fmt.Errorf("не распределены по scope: %v", idList(unassigned))
 	}
 	return nil
+}
+
+// idList keeps diagnostics readable: sorted, at most scopeErrorIDs entries.
+const scopeErrorIDs = 64
+
+func idList(ids []string) []string {
+	sort.Strings(ids)
+	if len(ids) > scopeErrorIDs {
+		ids = append(ids[:scopeErrorIDs:scopeErrorIDs], "…")
+	}
+	return ids
 }
 
 func initConfig(path string) error {

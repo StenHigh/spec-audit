@@ -527,21 +527,38 @@ func acceptedView(cfg Config, ledger acceptedLedger, state acceptedState) map[st
 		"records": state.Records, "history": state.History, "journal": ledger, "semantic_completeness_proven": false}
 }
 
-// tool-spec §21.1: hints pair a candidate with previous active records by shared exact citation lines.
-// Threshold and limit come from the pilot replay accept-001→accept-002 (49 mapped candidates): Jaccard ranking put the
-// true ID first in 48/49; at 0.1 the truth was within three hints in 49/49, at 0.5 in only 28/49 because added
-// reference citations dilute the overlap. A hint is never semantic equivalence and never a decision.
+// tool-spec §21.1/§22.1: hints pair a candidate with previous active records by shared exact citation lines.
+// Threshold and limit come from two pilot replays (49 and 50 mapped candidates): Jaccard ranking put the true ID first
+// in 48/49 and 46/50; at 0.1 the truth was within four hints in 49/49 and 50/50 (three: 49/49 and 49/50), at 0.5 in only
+// 28/49 because added reference citations dilute the overlap. Frequency weighting or dropping shared lines lowered the
+// first replay to 43/49, so ranking stays plain Jaccard and unique_shared exposes header-only matches instead.
+// A hint is never semantic equivalence and never a decision.
 const (
 	matchHintThreshold = 0.1
-	matchHintLimit     = 3
+	matchHintLimit     = 4
 )
 
 type matchHint struct {
-	ID          string  `json:"id"`
-	Revision    int     `json:"revision"`
-	Overlap     float64 `json:"overlap"`
-	SharedLines int     `json:"shared_lines"`
-	FieldsEqual bool    `json:"fields_equal"`
+	ID           string  `json:"id"`
+	Revision     int     `json:"revision"`
+	Overlap      float64 `json:"overlap"`
+	SharedLines  int     `json:"shared_lines"`
+	UniqueShared int     `json:"unique_shared"`
+	FieldsEqual  bool    `json:"fields_equal"`
+}
+
+// lineFrequency counts, per exact citation line, how many active records cite it; frequency 1 marks a line unique to one norm.
+func lineFrequency(records []AcceptedRecord) map[string]int {
+	frequency := map[string]int{}
+	for _, record := range records {
+		if record.Status != "active" || record.Requirement.Accepted == nil {
+			continue
+		}
+		for line := range quoteLines(record.Requirement.Accepted.Citations) {
+			frequency[line]++
+		}
+	}
+	return frequency
 }
 
 type checkedCandidate struct {
@@ -580,7 +597,7 @@ func fieldsEqual(candidate legacyCandidate, req Requirement) bool {
 		sameStrings(candidate.Unresolved, req.Accepted.Unresolved)
 }
 
-func matchHints(candidate legacyCandidate, records []AcceptedRecord) []matchHint {
+func matchHints(candidate legacyCandidate, records []AcceptedRecord, frequency map[string]int) []matchHint {
 	lines := quoteLines(candidate.Citations)
 	hints := []matchHint{}
 	for _, record := range records {
@@ -588,10 +605,13 @@ func matchHints(candidate legacyCandidate, records []AcceptedRecord) []matchHint
 			continue
 		}
 		other := quoteLines(record.Requirement.Accepted.Citations)
-		shared := 0
+		shared, unique := 0, 0
 		for line := range lines {
 			if other[line] {
 				shared++
+				if frequency[line] == 1 {
+					unique++
+				}
 			}
 		}
 		union := len(lines) + len(other) - shared
@@ -602,7 +622,7 @@ func matchHints(candidate legacyCandidate, records []AcceptedRecord) []matchHint
 		if overlap < matchHintThreshold {
 			continue
 		}
-		hints = append(hints, matchHint{record.Requirement.ID, record.Revision, overlap, shared, fieldsEqual(candidate, record.Requirement)})
+		hints = append(hints, matchHint{record.Requirement.ID, record.Revision, overlap, shared, unique, fieldsEqual(candidate, record.Requirement)})
 	}
 	sort.Slice(hints, func(i, j int) bool {
 		if hints[i].Overlap != hints[j].Overlap {
@@ -619,6 +639,7 @@ func matchHints(candidate legacyCandidate, records []AcceptedRecord) []matchHint
 func checkedCandidates(raw legacyRaw, state acceptedState, reference map[string]bool) []checkedCandidate {
 	result := []checkedCandidate{}
 	hinted := 0
+	frequency := lineFrequency(state.Records)
 	for _, candidate := range raw.Candidates {
 		normative := false
 		for _, cite := range candidate.Citations {
@@ -627,11 +648,13 @@ func checkedCandidates(raw legacyRaw, state acceptedState, reference map[string]
 				break
 			}
 		}
-		matches := matchHints(candidate, state.Records)
+		matches := matchHints(candidate, state.Records, frequency)
+		unique := 0
 		if len(matches) > 0 {
 			hinted++
+			unique = matches[0].UniqueShared
 		}
-		slog.Debug("check: подсказки сопоставления", "candidate", candidate.ID, "matches", len(matches))
+		slog.Debug("check: подсказки сопоставления", "candidate", candidate.ID, "matches", len(matches), "unique_shared", unique)
 		result = append(result, checkedCandidate{candidate.ID, candidate.Clarity, normative, matches})
 	}
 	slog.Debug("check: кандидаты с подсказками", "hinted", hinted, "candidates", len(result))
@@ -705,7 +728,8 @@ func checkAcceptance(cfg Config, paths []string) (any, error) {
 		assignments = append(assignments, checkedAssignment{assignment.Candidate, assignment.RequirementID, operation.Action,
 			revisions[assignment.RequirementID], append([]string{}, operation.Previous...)})
 	}
-	view["duplicate"], view["next_head"], view["assignments"], view["retired"] = false, staged.state.Head, assignments, retired
+	// §22.3: on success the decision's base_index equals the current head by construction (applyAccepted enforced it).
+	view["duplicate"], view["base_index_current"], view["next_head"], view["assignments"], view["retired"] = false, true, staged.state.Head, assignments, retired
 	slog.Info("check: приёмка проверена", "candidates", len(candidates), "decision", true, "assignments", len(assignments), "retired", len(retired), "duplicate", false)
 	return view, nil
 }

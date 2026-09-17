@@ -71,7 +71,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (§6 sco
 <!-- Commit checkpoint: tasks 1-2 -->
 
 ### Phase 2: Подсказки, диагностика scopes, признак base_index
-- [ ] Task 3: `unique_shared` и лимит 4 в подсказках `check`
+- [x] Task 3: `unique_shared` и лимит 4 в подсказках `check`
   - Deliverable: `tool/accepted.go`: `matchHintLimit = 4` (комментарий: hit@4 49/49 и 50/50 на двух переходах пилота); `matchHint.UniqueShared int json:"unique_shared"`; `lineFrequency(records []AcceptedRecord) map[string]int` — число active-записей, содержащих строку (по `accepted.citations`); `matchHints(candidate, records, frequency)` считает `unique_shared` = общие строки с `frequency == 1`; `checkedCandidates` вычисляет frequency один раз на вызов; порог и ранжирование прежние. Тесты `tool/check_test.go`: `/hints` — две записи с общей строкой (rules.md:2-3 и 2-2) → у обеих подсказок `unique_shared` по уникальным строкам (0 для общей), кандидат с уникальной строкой → 1; `/hint_limit` — пять записей с одинаковыми цитатами → 4 подсказки; обновить ожидания `matchHint{...}` (новое поле).
   - Files: `tool/accepted.go`, `tool/check_test.go`
   - Depends: 1
@@ -79,7 +79,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (§6 sco
   - Logging: DEBUG «check: подсказки сопоставления» дополняется {unique_shared} у первой подсказки.
   - REQ: 22.1, REQ-SA-042
 
-- [ ] Task 4: диагностика `scopes` в `assignRequirements`; `base_index_current` в `check`
+- [x] Task 4: диагностика `scopes` в `assignRequirements`; `base_index_current` в `check`
   - Deliverable: `tool/specs.go` `assignRequirements`: для каждого scope — `unknown`, `duplicate` (по `ids`/`assigned`), после цикла — `unassigned` (ID из `ids` без `assigned`); ошибки: `fmt.Errorf("scope %s: неизвестные ID %v; повторно назначенные %v", scope.ID, unknown, duplicate)` (первый scope с проблемой; пустой список печатается `[]`) и `fmt.Errorf("не распределены по scope: %v", unassigned)`; списки отсортированы, не более 64 элементов (`…` при усечении); прочие тексты не меняются. `tool/accepted.go` `checkAcceptance`: в DECISION-ответе `view["base_index_current"] = true` (после успешного `stageAcceptance`; не добавляется при duplicate и в RAW-режиме). Тесты: `tool/specs_test.go` `TestScopeAssignmentErrors` — fixture с 5 нормами и `scopes: [{id: a, requirements: [REQ-DEMO-001, REQ-DEMO-009]}, {id: b, requirements: [REQ-DEMO-001, REQ-DEMO-002]}]` → ошибка содержит `scope a`, `REQ-DEMO-009`; вариант с повтором → `повторно назначенные [REQ-DEMO-001]`; вариант, где не хватает ID → `не распределены по scope: [REQ-DEMO-003 …]`; `tool/check_test.go` `/decision`: `base_index_current == true`, отсутствие ключа при duplicate и в RAW-режиме.
   - Files: `tool/specs.go`, `tool/accepted.go`, `tool/specs_test.go`, `tool/check_test.go`
   - Depends: 3
