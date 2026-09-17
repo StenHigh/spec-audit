@@ -579,12 +579,13 @@ func TestTypedCLI(t *testing.T) {
 	log := f.mockDocker(t, phpstanJSON(t, f.body(t, nil), 1, nil))
 	const run = "typed"
 	batch := runOK(t, "prepare", f.config, run).(TaskBatch)
-	if batch.SDK != nil {
+	if len(batch.SDK) != 0 {
 		t.Fatal("новый run не должен содержать записей SDK")
 	}
+	// tool-spec §28.1: the key is always present; an empty list says "no facts imported".
 	plainBatch := mustMarshal(t, batch)
-	if bytes.Contains(plainBatch, []byte(`"sdk"`)) {
-		t.Fatal("TaskBatch без SDK должен сериализоваться как прежде")
+	if !bytes.Contains(plainBatch, []byte(`"sdk":[]`)) {
+		t.Fatal("TaskBatch без SDK отдаёт sdk: [] (§28.1)")
 	}
 	// Роли и согласование хоста до импорта фактов.
 	for _, task := range batch.Tasks {
