@@ -90,7 +90,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (§7 к�
   - Logging: нет нового.
   - REQ: REQ-SA-037, REQ-SA-045, 24.1, 24.2
 
-- [ ] Task 5: релиз `v0.1.9`, обновление хоста/пилота/синтетики, read-only `review`/`draft` на пилоте
+- [x] Task 5: релиз `v0.1.9`, обновление хоста/пилота/синтетики, read-only `review`/`draft` на пилоте
   - Deliverable: merge в `codex/bootstrap` (по подтверждению владельца), тег `v0.1.9`, approve deployment; `spec-audit update` → 0.1.9; `skill update --host both` в `spec-audit-synthetic` и пилоте (коммиты — по запросу); read-only на пилоте: `review CONFIG finance-2026-09-17-03` → `outcomes[]` 51 запись, `agree:false` ровно у 007/023/035/041; `draft CONFIG finance-2026-09-17-03` → `host-review-002` с basis текущего контекста (в файл не сохранять, журнал и `git status` пилота неизменны). README «Приёмка и ограничения» — строка релиза 0.1.9 с этими фактами.
   - Files: `README.md`; (пилот и синтетика — вне репозитория)
   - Depends: 4
