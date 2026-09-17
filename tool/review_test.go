@@ -446,3 +446,104 @@ func TestReviewLimits(t *testing.T) {
 		}
 	})
 }
+
+func reviewV2Input(t *testing.T, config, id, concur string) ReviewDecisionV2 {
+	t.Helper()
+	view := runOK(t, "review", config, "review").(ReviewContext)
+	verdicts := []ReviewVerdict{}
+	for _, a := range view.Entries[0].Result.Assessments {
+		verdicts = append(verdicts, ReviewVerdict{a.RequirementID, a.Specification, a.Implementation, a.Assertion, concur, "host: принимает свидетельства роли", []string{}})
+	}
+	return ReviewDecisionV2{2, id, "review", view.SnapshotID, view.BasisSHA256, "host-session", "Согласование по вердиктам", verdicts, countVerdicts(verdicts), []string{"Суждение хоста; не сертификат"}}
+}
+
+// tool-spec §23 / REQ-SA-044: a version 2 decision carries verdicts and adopts the named roles' evidence.
+func TestReviewV2(t *testing.T) {
+	config, base := fixture(t)
+	batch := runOK(t, "prepare", config, "review").(TaskBatch)
+	for _, task := range batch.Tasks {
+		result := sampleResult(t, task, filepath.Join(base, "source"))
+		if task.Role == "redteam" {
+			// The redteam row for the first norm carries no test evidence, so adoption by role is observable.
+			result.Assessments[0].Assertion, result.Assessments[0].Tests = "unknown", []TestCitation{}
+		}
+		path := filepath.Join(base, task.TaskID+".json")
+		writeFixture(t, path, legacyMarshal(t, result))
+		runOK(t, "submit", config, "review", task.TaskID, path)
+	}
+	journalPath := filepath.Join(base, "runs/review/host-reviews.json")
+	write := func(decision ReviewDecisionV2) string {
+		path := filepath.Join(base, "host-"+decision.ReviewID+".json")
+		writeFixture(t, path, legacyMarshal(t, decision))
+		return path
+	}
+	both := reviewV2Input(t, config, "v2-both", "both")
+	bothPath := write(both)
+	accepted := runOK(t, "review", config, "review", bothPath).(map[string]any)
+	if accepted["accepted"] != true || accepted["review_state"] != "current" {
+		t.Fatal("version 2 должна приниматься", accepted)
+	}
+	var journal reviewJournal
+	if err := json.Unmarshal(readFixture(t, journalPath), &journal); err != nil || len(journal.Records) != 1 || journal.Records[0] != string(readFixture(t, bothPath)) {
+		t.Fatal("журнал должен хранить точные байты version 2", err)
+	}
+	view := runOK(t, "review", config, "review").(ReviewContext)
+	if view.State != "current" || view.Form != "verdicts" || view.Concur["REQ-DEMO-001"] != "both" || view.Latest.Version != 2 {
+		t.Fatal("контекст после version 2", view.State, view.Form, view.Concur)
+	}
+	first := view.Latest.Assessments[0]
+	if first.RequirementID != "REQ-DEMO-001" || len(first.Spec) != 1 || len(first.Code) != 1 || len(first.Tests) != 1 || first.Statement != "host: принимает свидетельства роли" {
+		t.Fatal("both должен объединить свидетельства ролей без повторов", first)
+	}
+	// concur: redteam adopts only the redteam evidence (no tests for the first norm).
+	redteam := reviewV2Input(t, config, "v2-redteam", "redteam")
+	runOK(t, "review", config, "review", write(redteam))
+	view = runOK(t, "review", config, "review").(ReviewContext)
+	if len(view.History) != 2 || len(view.Latest.Assessments[0].Tests) != 0 || len(view.Latest.Assessments[0].Code) != 1 || view.Concur["REQ-DEMO-002"] != "redteam" {
+		t.Fatal("redteam должен давать только свои свидетельства", view.Latest.Assessments[0])
+	}
+	// Refusals: counts, concur, coverage, statement, version, stale basis — the journal stays as written.
+	beforeJournal := readFixture(t, journalPath)
+	refuse := func(name string, mutate func(d *ReviewDecisionV2), fragment string) {
+		t.Helper()
+		decision := reviewV2Input(t, config, "v2-"+name, "mapper")
+		mutate(&decision)
+		_, err := execute([]string{"review", config, "review", write(decision)})
+		if err == nil || !strings.Contains(err.Error(), fragment) {
+			t.Fatalf("%s: ожидался отказ %q, получено %v", name, fragment, err)
+		}
+	}
+	refuse("counts", func(d *ReviewDecisionV2) { d.Counts.Relevant++ }, "counts.relevant")
+	refuse("concur", func(d *ReviewDecisionV2) { d.Verdicts[0].Concur = "host" }, "concur")
+	refuse("missing", func(d *ReviewDecisionV2) { d.Verdicts = d.Verdicts[1:]; d.Counts = countVerdicts(d.Verdicts) }, "ровно один вердикт")
+	refuse("duplicate", func(d *ReviewDecisionV2) { d.Verdicts[1] = d.Verdicts[0]; d.Counts = countVerdicts(d.Verdicts) }, "повторной нормы")
+	refuse("statement", func(d *ReviewDecisionV2) { d.Verdicts[2].Statement = " " }, "statement")
+	refuse("version", func(d *ReviewDecisionV2) { d.Version = 3 }, "неверная версия")
+	refuse("stale", func(d *ReviewDecisionV2) { d.BasisSHA256 = both.BasisSHA256 }, "текущая база")
+	if !bytes.Equal(beforeJournal, readFixture(t, journalPath)) {
+		t.Fatal("отказы изменили журнал")
+	}
+	// An accepted ambiguous norm cannot be judged clear in a verdict (same rule as §7).
+	ambiguous := Requirement{ID: "REQ-AI-001", Accepted: &AcceptedDetails{Clarity: "ambiguous"}}
+	if err := checkVerdict(ReviewVerdict{"REQ-AI-001", "clear", "unknown", "unknown", "mapper", "s", []string{}}, ambiguous); err == nil {
+		t.Fatal("принятая неоднозначность требует ambiguous")
+	}
+	// Report renders the version 2 decision beside the adopted evidence; retry makes it outdated but readable.
+	runOK(t, "report", config, "review")
+	var report Report
+	if err := json.Unmarshal(readFixture(t, filepath.Join(base, "runs/review/report.json")), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.HostReview.State != "current" || report.HostReview.Form != "verdicts" || report.HostReview.Latest == nil || len(report.HostReview.Latest.Assessments) != 5 || len(report.HostReview.Latest.Assessments[1].Code) != 1 || report.HostReview.Concur["REQ-DEMO-003"] != "redteam" {
+		t.Fatalf("отчёт должен показать решение version 2 с принятыми свидетельствами: state=%s form=%s", report.HostReview.State, report.HostReview.Form)
+	}
+	if html := readFixture(t, filepath.Join(base, "runs/review/report.html")); !bytes.Contains(html, []byte("Решение хоста")) {
+		t.Fatal("HTML без блока решения хоста")
+	}
+	runOK(t, "retry", config, "review", batch.Tasks[0].TaskID)
+	after := runOK(t, "review", config, "review").(ReviewContext)
+	if after.State != "outdated" || len(after.History) != 2 || after.Latest == nil {
+		t.Fatal("retry должен сделать решение outdated, сохранив историю", after.State, len(after.History))
+	}
+	runOK(t, "report", config, "review")
+}

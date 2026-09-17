@@ -1,4 +1,4 @@
-Mirror of section 14 «Контракт согласования аудита» of the spec-audit tool specification (`docs/tool-spec.md` in the tool checkout). The specification is authoritative; this copy is checked for equality by the tool tests and is not edited by hand.
+Mirror of sections 14 «Контракт согласования аудита» and 23 «Облегчённая форма host DECISION (version 2) и список ролей» of the spec-audit tool specification (`docs/tool-spec.md` in the tool checkout). The specification is authoritative; this copy is checked for equality by the tool tests and is not edited by hand.
 
 ## 14. Контракт согласования аудита
 
@@ -13,3 +13,21 @@ DECISION — строгий UTF-8 JSON до 4 MiB со всеми полями: 
 Под общим lock run хранится `host-reviews.json`: `{version:1, records:[<точная UTF-8 строка DECISION>,...]}`, до 64 решений и 32 MiB целиком. Массив append-only; один и тот же review_id с теми же байтами — duplicate без записи, с другими — конфликт. Исторический duplicate не делает решение current. Проверки размеров/схем/цитат, CAS и повторная сверка snapshot происходят до атомарной публикации. Производные отчёты инвалидируются до изменения журнала; отказ не меняет журнал или роли.
 
 Актуальность последнего решения проверяется относительно state/snapshot и review_head его предшественника. Состояния: missing / current / outdated. Read/report валидируют журнал и не скрывают повреждение как отсутствие решения. Старый run без журнала остаётся доступен без миграции. JSON/HTML сохраняют историю и исходные роли; `host_reconciliation_required` становится false только при current, но `semantic_completeness_proven` остаётся false. Отсутствие автоматического PASS сохраняется; это явное суждение хоста, а не сертификат бинарника.
+
+## 23. Облегчённая форма host DECISION (version 2) и список ролей
+
+Причина редакции 1.2 — третий чистый прогон 2026-09-17: host DECISION по §14 повторял цитаты обеих ролей (823 KB), хост тратил около четверти часа на чтение 102 оценок и сборку файла, а арифметическая ошибка в summary потребовала второй записи в append-only журнал. Решение владельца 2026-09-17: вторая, облегчённая форма решения — вердикт хоста со ссылкой на принятое свидетельство роли и машиносверяемые счётчики; полная форма §14 (`version: 1`) остаётся действительной и нужна, когда хост цитирует то, чего роли не приводили. §7, §14, основание CAS, журнал `host-reviews.json`, лимиты и состояния не меняются; журнал может содержать решения обеих форм.
+
+### REQ-SA-044 — Вердикт хоста по свидетельствам роли
+
+Условие: хост подаёт DECISION с `version: 2`.
+
+Требование: документ — строгий UTF-8 JSON до 4 MiB со всеми полями: `version:2, review_id, run_id, snapshot_id, basis_sha256, reviewer, summary, verdicts, counts, limitations`; идентичность, review_id, reviewer, summary, основание, CAS, полнота доставки, дубликаты и конфликты review_id, лимиты журнала — по §14. `verdicts` содержит ровно одну запись на каждую норму run: `requirement_id, specification, implementation, assertion, concur, statement, limitations` с теми же допустимыми состояниями и правилом принятой неоднозначности, что у Assessment §7, но без цитат. `concur` — `mapper`, `redteam` или `both`: свидетельствами хоста по норме считаются цитаты (spec, code, tests) названных ролей из текущих результатов run, при `both` — объединение без повторов; собственных цитат форма не содержит — для них используется `version: 1`. `counts` — `supported, contradicted, implementation_unknown, relevant, weak, contradicts, missing, assertion_unknown, ambiguous`; бинарник пересчитывает их по verdicts и отклоняет решение при первом расхождении, называя поле и оба числа. Запись возможна только при полной доставке, поэтому у названных ролей всегда есть результат; журнал хранит точные байты. Отчёт и `review` показывают решение version 2 в общей форме: вердикт хоста рядом с принятыми цитатами и пометкой, чьи это свидетельства; для outdated-решения принятые цитаты берутся из текущих результатов ролей и не выдаются за цитаты момента решения — состояние outdated уже названо (REQ-SA-020), а основание §14 привязывает решение к состоянию момента записи.
+
+Проверка: version 2 с `concur: both` принимается, состояние current, журнал содержит точные байты; `concur: mapper` даёт в отчёте только цитаты mapper; расхождение любого счётчика — отказ с именем поля; недопустимый `concur`, пропущенная или повторная норма, пустой statement, принятая ambiguous-норма с `specification: clear`, `version: 3`, stale-основание, незавершённая доставка, повтор review_id с другими байтами — отказы без записи; журнал с решениями version 1 и 2 читается целиком; после `retry` роли решение становится outdated; HTML подписывает решение хоста «по mapper / по redteam / по обеим ролям».
+
+Источник: отчёт третьего прогона 2026-09-17. Обоснование: узкое место согласования — не запись, а чтение оценок и копирование чужих цитат; счётчики, проверенные бинарником, ловят ошибку хоста до записи в append-only журнал. Зависимость: SA-019, SA-020, SA-021, §7, §14.
+
+### 23.1 Список ролей в ответе `review`
+
+`review CONFIG RUN_ID` без DECISION дополняет контекст полем `roles[]` — по одной записи на задание: `task_id, role, scope, attempt, submitted` и `raw_sha256` при наличии результата; порядок — порядок entries. Поле `entries` не меняется. Ответ также содержит `form` последнего решения (`assessments` для version 1, `verdicts` для version 2) и `concur` — соответствие requirement_id → concur для version 2.
