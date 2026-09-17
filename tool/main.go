@@ -867,6 +867,24 @@ func publishPreparedFile(root *os.Root, tmp, path string, dir *os.File) error {
 	return nil
 }
 
+// writeDispatch materializes the role's directory (tool-spec §24.2): task.json always, files.json only on prepare.
+func writeDispatch(run *os.Root, task Task, files []SourceFile) error {
+	dir := "dispatch/" + task.TaskID
+	if err := run.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	if err := writeJSON(run, dir+"/task.json", task, 0600); err != nil {
+		return err
+	}
+	if files != nil {
+		if err := writeJSON(run, dir+"/files.json", files, 0600); err != nil {
+			return err
+		}
+	}
+	slog.Debug("dispatch: каталог задания", "task_id", task.TaskID, "files", len(files))
+	return nil
+}
+
 func writeJSON(root *os.Root, path string, value any, mode os.FileMode) error {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
@@ -1162,6 +1180,11 @@ func execute(args []string) (any, error) {
 		if err := saveState(run, state, journal); err != nil {
 			return nil, err
 		}
+		for _, entry := range state.Entries {
+			if err := writeDispatch(run, entry.Task, m.Files); err != nil {
+				return nil, err
+			}
+		}
 	} else {
 		data, err := readRoot(run, "manifest.json", maxState)
 		if err != nil {
@@ -1337,6 +1360,9 @@ func execute(args []string) (any, error) {
 		entry.Result = nil
 		entry.RawSHA256 = ""
 		if err := saveState(run, state, journal); err != nil {
+			return nil, err
+		}
+		if err := writeDispatch(run, entry.Task, nil); err != nil {
 			return nil, err
 		}
 		return entry.Task, nil

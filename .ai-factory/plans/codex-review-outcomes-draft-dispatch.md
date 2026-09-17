@@ -72,7 +72,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (§7 к�
 <!-- Commit checkpoint: tasks 1-2 -->
 
 ### Phase 2: Материализация dispatch
-- [ ] Task 3: `prepare` и `retry` пишут `dispatch/<task_id>/task.json` и `files.json`
+- [x] Task 3: `prepare` и `retry` пишут `dispatch/<task_id>/task.json` и `files.json`
   - Deliverable: `tool/main.go`: `writeDispatch(run *os.Root, task Task, files []SourceFile) error` — `run.MkdirAll("dispatch/"+task.TaskID, 0700)` (`os.Root.MkdirAll`, go 1.27.0), `writeJSON(run, "dispatch/<id>/task.json", task, 0600)`, при `files != nil` — `writeJSON(run, "dispatch/<id>/files.json", files, 0600)`; DEBUG «dispatch: каталог задания» {task_id, files}. В `prepare` после `saveState` — для каждого `state.Entries[i].Task` с `m.Files`; в `retry` (`tool/main.go:1329-1336`, корень `run` уже в области видимости) после `saveState` — только `task.json` (`files == nil`) для `entry.Task`. Порядок: state сохранён до записи каталогов (каталоги — производные; отказ записи каталога после сохранённого state возвращает ошибку, run остаётся пригодным — `tasks` печатает задания, launcher может повторить `retry`). `TaskBatch`, `tasks`, `submit` — без изменений. Тест `tool/main_test.go` (или `review_test.go`) `TestPrepareDispatch`: после `prepare` для каждого `batch.Tasks[i]` `dispatch/<id>/task.json` разбирается в `Task`, равный `batch.Tasks[i]` (`reflect.DeepEqual`), `files.json` — `[]SourceFile`, равный `batch.Files`; положить посторонний `prompt.md` в каталог; `retry` → `task.json.attempt == 2`, `prompt.md` и `files.json` целы; `tasks` после `retry` совпадает с `task.json`.
   - Files: `tool/main.go`, `tool/main_test.go`
   - Depends: 1
