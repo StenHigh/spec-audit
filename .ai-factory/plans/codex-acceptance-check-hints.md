@@ -92,7 +92,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (§6 с�
 <!-- Commit checkpoint: tasks 3-4 -->
 
 ### Phase 3: Документация и поставка
-- [ ] Task 5: README, ROADMAP, документ применения
+- [x] Task 5: README, ROADMAP, документ применения
   - Deliverable: README «Первый запуск»/accepted-абзац (стр. 193) — `check CONFIG RAW` и `check CONFIG RAW DECISION` перед `reconcile` apply, что показывают `candidates[].matches` и `assignments[]`, что не гарантируют; «Приёмка и ограничения» — строка §21 (реализовано; регрессии; не проверено до релиза: живые артефакты пилота); ROADMAP: пункт «Уроки прогона 2026-09-17» — подпункты 1–3 `[x]` с датой и свидетельствами, пункт 4 остаётся `[ ]` с пометкой «после следующего прогона», пункт 5 — вне инструмента; строка таблицы этапов; docs/smsplace-adoption.md «Обычный рабочий цикл» п.2 — `check` перед apply и каталог роли `dispatch/<task_id>/`.
   - Files: `README.md`, `.ai-factory/ROADMAP.md`, `docs/smsplace-adoption.md`
   - Depends: 2, 4
