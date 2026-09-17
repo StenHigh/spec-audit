@@ -577,3 +577,113 @@ func TestReviewV2(t *testing.T) {
 	}
 	runOK(t, "report", config, "review")
 }
+
+// tool-spec §24.1: outcomes[] puts both roles' states side by side; citations stay in entries.
+func TestReviewOutcomes(t *testing.T) {
+	config, base := fixture(t)
+	batch := runOK(t, "prepare", config, "review").(TaskBatch)
+	for _, task := range batch.Tasks {
+		result := sampleResult(t, task, filepath.Join(base, "source"))
+		if task.Role == "redteam" {
+			result.Assessments[0].Assertion = "weak"
+		}
+		path := filepath.Join(base, task.TaskID+".json")
+		writeFixture(t, path, legacyMarshal(t, result))
+		runOK(t, "submit", config, "review", task.TaskID, path)
+	}
+	view := runOK(t, "review", config, "review").(ReviewContext)
+	if len(view.Outcomes) != len(view.Requirements) || view.Outcomes[0].RequirementID != view.Requirements[0].ID || view.Outcomes[0].Scope != "all" {
+		t.Fatal("outcomes[] должен идти по нормам manifest со scope задания", view.Outcomes)
+	}
+	first := view.Outcomes[0]
+	if first.Agree || first.Roles["mapper"].Assertion == "weak" || first.Roles["redteam"].Assertion != "weak" || first.Roles["redteam"].TaskID != batch.Tasks[1].TaskID || first.Roles["redteam"].Attempt != 1 {
+		t.Fatal("расхождение по assertion должно давать agree:false с обеими тройками", first)
+	}
+	for _, row := range view.Outcomes[1:] {
+		if !row.Agree || len(row.Roles) != 2 {
+			t.Fatal("совпадающие роли должны давать agree:true", row)
+		}
+	}
+	runOK(t, "retry", config, "review", batch.Tasks[0].TaskID)
+	after := runOK(t, "review", config, "review").(ReviewContext)
+	for _, row := range after.Outcomes {
+		if _, ok := row.Roles["mapper"]; ok || row.Agree || row.Scope != "all" {
+			t.Fatal("после retry роль без результата отсутствует и agree:false", row)
+		}
+	}
+	if after.Roles[0].Submitted || !reflect.DeepEqual(after.Entries[1], view.Entries[1]) {
+		t.Fatal("roles[] после retry; entries прежней формы", after.Roles)
+	}
+}
+
+// tool-spec §24 / REQ-SA-045: draft prints an empty version 2 decision for the current basis and publishes nothing.
+func TestReviewDraft(t *testing.T) {
+	config, base := fixture(t)
+	batch := runOK(t, "prepare", config, "review").(TaskBatch)
+	runFail(t, "draft", config, "review")
+	for _, task := range batch.Tasks {
+		path := filepath.Join(base, task.TaskID+".json")
+		writeFixture(t, path, legacyMarshal(t, sampleResult(t, task, filepath.Join(base, "source"))))
+		runOK(t, "submit", config, "review", task.TaskID, path)
+	}
+	versionsPath := filepath.Join(base, "runs/review/tool-versions.json")
+	versionsBefore := readFixture(t, versionsPath)
+	draft := runOK(t, "draft", config, "review").(ReviewDecisionV2)
+	view := runOK(t, "review", config, "review").(ReviewContext)
+	if draft.Version != 2 || draft.ReviewID != "host-review-001" || draft.RunID != "review" || draft.SnapshotID != view.SnapshotID || draft.BasisSHA256 != view.BasisSHA256 || len(draft.Verdicts) != len(view.Requirements) || draft.Counts != (ReviewCounts{}) || draft.Reviewer != "" || draft.Summary != "" || draft.Limitations == nil {
+		t.Fatal("черновик должен нести основание и все нормы с пустыми полями хоста", draft)
+	}
+	for i, verdict := range draft.Verdicts {
+		if verdict.RequirementID != view.Requirements[i].ID || verdict.Specification != "" || verdict.Concur != "" || verdict.Statement != "" || verdict.Limitations == nil {
+			t.Fatal("вердикт черновика", verdict)
+		}
+	}
+	if !bytes.Equal(versionsBefore, readFixture(t, versionsPath)) {
+		t.Fatal("draft не должен писать провенанс")
+	}
+	// The serialized draft is the exact form review accepts once filled; an unfilled one is refused without a record.
+	raw := legacyMarshal(t, draft)
+	var parsed ReviewDecisionV2
+	if err := legacyDecode(raw, &parsed); err != nil || requiredJSON(raw, reflect.TypeOf(parsed)) != nil {
+		t.Fatal("черновик должен проходить строгий разбор формы version 2", err)
+	}
+	draftPath := filepath.Join(base, "draft.json")
+	writeFixture(t, draftPath, raw)
+	runFail(t, "review", config, "review", draftPath)
+	for i := range draft.Verdicts {
+		row := view.Outcomes[i].Roles["mapper"]
+		draft.Verdicts[i].Specification, draft.Verdicts[i].Implementation, draft.Verdicts[i].Assertion = row.Specification, row.Implementation, row.Assertion
+		draft.Verdicts[i].Concur, draft.Verdicts[i].Statement = "both", "host: по совпадающим свидетельствам"
+	}
+	draft.Reviewer, draft.Summary, draft.Counts = "host", "Заполненный черновик", countVerdicts(draft.Verdicts)
+	writeFixture(t, draftPath, legacyMarshal(t, draft))
+	if accepted := runOK(t, "review", config, "review", draftPath).(map[string]any); accepted["accepted"] != true || accepted["review_state"] != "current" {
+		t.Fatal("заполненный черновик должен приниматься", accepted)
+	}
+	second := runOK(t, "draft", config, "review").(ReviewDecisionV2)
+	if second.ReviewID != "host-review-002" || second.BasisSHA256 == draft.BasisSHA256 || second.BasisSHA256 != runOK(t, "review", config, "review").(ReviewContext).BasisSHA256 {
+		t.Fatal("второй черновик должен учитывать запись журнала", second.ReviewID)
+	}
+	runOK(t, "retry", config, "review", batch.Tasks[0].TaskID)
+	runFail(t, "draft", config, "review")
+	writeFixture(t, filepath.Join(base, "source/rules.md"), append(readFixture(t, filepath.Join(base, "source/rules.md")), []byte("\n<!-- stale -->\n")...))
+	if _, err := execute([]string{"draft", config, "review"}); err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatal("draft на stale-снимке должен отказывать", err)
+	}
+	// A historical run without dispatch/ is served as before; no directories appear after the fact.
+	config, base = fixture(t)
+	writeFixture(t, config, bytes.Replace(readFixture(t, config), []byte("runtime: {kind: none}"), []byte("runtime: {kind: go, paths: ['.'], tests: [], timeout_seconds: 30}"), 1))
+	for _, file := range []string{"manifest.json", "state.json"} {
+		writeFixture(t, filepath.Join(base, "runs/blind-v1", file), readFixture(t, "../acceptance/declared-v01/"+file))
+	}
+	legacy := runOK(t, "review", config, "blind-v1").(ReviewContext)
+	if len(legacy.Outcomes) != len(legacy.Requirements) || !legacy.Outcomes[0].Agree {
+		t.Fatal("outcomes на историческом run", legacy.Outcomes)
+	}
+	if historical := runOK(t, "draft", config, "blind-v1").(ReviewDecisionV2); historical.ReviewID != "host-review-001" || historical.BasisSHA256 != legacy.BasisSHA256 {
+		t.Fatal("draft на историческом run", historical.ReviewID)
+	}
+	if _, err := os.Stat(filepath.Join(base, "runs/blind-v1/dispatch")); !os.IsNotExist(err) {
+		t.Fatal("dispatch/ не создаётся задним числом")
+	}
+}

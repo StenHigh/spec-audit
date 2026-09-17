@@ -130,7 +130,7 @@ func TestHostDecisionMirror(t *testing.T) {
 		return strings.TrimRight(text[start+1:end], "\n") + "\n"
 	}
 	// The delivered mirror carries §14 and §23 verbatim: the host decision contract and its light form.
-	want := section("\n## 14. ", "\n## 15. ") + "\n" + section("\n## 23. ", "\n## См. также")
+	want := section("\n## 14. ", "\n## 15. ") + "\n" + section("\n## 23. ", "\n## 24. ")
 	mirror, err := os.ReadFile(filepath.Join("..", skillSourceDir, "references", "host-decision.md"))
 	if err != nil {
 		t.Fatal(err)
