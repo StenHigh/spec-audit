@@ -88,7 +88,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (`valida
   - Logging: нет нового.
   - REQ: REQ-SA-037, REQ-SA-047, 27.1, 27.2
 
-- [ ] Task 5: релиз `v0.1.14`, обновление хоста/пилота/синтетики, read-only проверка на пилоте
+- [x] Task 5: релиз `v0.1.14`, обновление хоста/пилота/синтетики, read-only проверка на пилоте
   - Deliverable: merge в `codex/bootstrap` (по подтверждению владельца), тег `v0.1.14`, approve deployment; `spec-audit update` → 0.1.14; `skill update --host both` в синтетике и пилоте (коммиты — по запросу); read-only на пилоте: `review CONFIG finance-2026-09-18-01` → `only_here` по REQ-AI-023 (цитаты только redteam), `previous_host.statement` из run 04; `validate CONFIG finance-2026-09-18-01 host <dispatch/host/host-review-001.decision.json>` → `valid:true, duplicate:true`; журнал и `tool-versions.json` прежние. README «Приёмка и ограничения» — строка релиза 0.1.14.
   - Files: `README.md`; (пилот и синтетика — вне репозитория)
   - Depends: 4
