@@ -85,7 +85,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (§7 Ass
 <!-- Commit checkpoint: task 3 -->
 
 ### Phase 3: Документация и поставка
-- [ ] Task 4: launcher SKILL.md; README, ROADMAP, документ применения
+- [x] Task 4: launcher SKILL.md; README, ROADMAP, документ применения
   - Deliverable: `skills/spec-audit/SKILL.md` шаг 6: DECISION `version: 3` (draft печатает v3): «fill … ; for a norm whose verdict rests on lines no role cited, add the host's own `spec`/`code`/`tests` citations under the same rules as a role's and keep `concur`; leave them `[]` otherwise — never fall back to version 1 for that. `outcomes[]` also lists each role's `limitations` (read them: a supported verdict with a limitation about another branch is a signal) and `previous_host` — the last host verdict on the same norm for the same snapshot and accepted head from an earlier run: a reading aid, never copy it as your verdict»; ограничения `TestSkillFiles`. README «Первый запуск» — v3, `limitations`, `previous_host`; «Приёмка и ограничения» — строка §25 (реализовано; регрессии; не проверено до релиза: живой цикл). ROADMAP «Уроки пятого прогона» — 1, 2, 3 `[x]` с датой и свидетельствами; строка таблицы этапов. docs/smsplace-adoption.md «Обычный рабочий цикл» п.5 — с 0.1.11 `version: 3` с собственными цитатами; «четвёртый цикл» — сноска. AGENTS.md — если не сделано в Task 1.
   - Files: `skills/spec-audit/SKILL.md`, `README.md`, `.ai-factory/ROADMAP.md`, `docs/smsplace-adoption.md`
   - Depends: 2, 3
