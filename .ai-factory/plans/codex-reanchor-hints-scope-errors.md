@@ -89,7 +89,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (§6 sco
 <!-- Commit checkpoint: tasks 3-4 -->
 
 ### Phase 3: Документация и поставка
-- [ ] Task 5: launcher SKILL.md; README, ROADMAP, документ применения
+- [x] Task 5: launcher SKILL.md; README, ROADMAP, документ применения
   - Deliverable: `skills/spec-audit/SKILL.md` абзац accepted: `reanchor` (когда подсказка `check` указывает на существующую норму, чья принятая формулировка по-прежнему верна — сохранить содержание/ID/revision, переместить только цитаты; `revise` — только при смене смысла; `unique_shared: 0` — подсказка держится на строках, общих с другими нормами, проверить перед reanchor); после ошибки `index` со списком ID — обновить `scopes`. Ограничения `TestSkillFiles` (без `#<цифры>`, `smsplace`, `/Users/`). README: accepted-абзац — `reanchor`, `unique_shared`, лимит 4, `base_index_current`, новые ошибки `index`; «Приёмка и ограничения» — строка §22 (реализовано; регрессии; не проверено до релиза: подсказки на пилоте и `reanchor` в живом цикле). ROADMAP: пункт «Уроки третьего прогона» — подпункты 1–4 `[x]` с датой и свидетельствами, 5–7 остаются `[ ]`; строка таблицы этапов. docs/smsplace-adoption.md «Обычный рабочий цикл» п.2 — `reanchor` при переприёмке.
   - Files: `skills/spec-audit/SKILL.md`, `README.md`, `.ai-factory/ROADMAP.md`, `docs/smsplace-adoption.md`
   - Depends: 2, 4
