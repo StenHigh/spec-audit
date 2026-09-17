@@ -82,7 +82,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (отв�
 <!-- Commit checkpoint: task 3 -->
 
 ### Phase 3: Документация и поставка
-- [ ] Task 4: launcher SKILL.md; README, ROADMAP, документ применения
+- [x] Task 4: launcher SKILL.md; README, ROADMAP, документ применения
   - Deliverable: `skills/spec-audit/SKILL.md` шаг 3 (общий `dispatch/files.json` + `task.json` в каталоге) и шаг приёмки/индекса («`check`/`index`/`reconcile` list `advisories`; an anchor named in a norm (`§N.N`, `A-NNN`) with no definition in the snapshot's spec files means the norm may rest on a section outside scope — read that section before judging or add its file to `references`; an anchor the norm does not name is not detected»); README «Первый запуск» — `freshness` в `index`, advisories о якорях, `dispatch/files.json`; «Приёмка и ограничения» — строка §26 (реализовано; регрессии; ограничение подсказки; не проверено до релиза: пилот). ROADMAP «Уроки пятого прогона» — 4, 5, 7 `[x]`; строка таблицы этапов. docs/smsplace-adoption.md «четвёртый цикл»/«рабочий цикл» — сноска о 0.1.12 и о том, что случай 060 (якорь не назван в норме) подсказкой не покрывается.
   - Files: `skills/spec-audit/SKILL.md`, `README.md`, `.ai-factory/ROADMAP.md`, `docs/smsplace-adoption.md`
   - Depends: 2, 3
