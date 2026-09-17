@@ -12,7 +12,7 @@
 | --- | --- |
 | [tool/main.go](../tool/main.go) | CLI, CONFIG (группы specs/references/code/tests), snapshot, задания/результаты, проверки источников (в т.ч. `validate` без записи), журнал версий `tool-versions.json` и безопасная запись состояния |
 | [tool/specs.go](../tool/specs.go) | Markdown, объявленные требования, распределение по scope и `advisories` о большом scope |
-| [tool/accepted.go](../tool/accepted.go), [tool/legacy.go](../tool/legacy.go) | Принятие кандидатов, ID/редакции, reconcile (единый view для чтения и apply, справочные источники и guard нормативной цитаты) и проверка извлечения |
+| [tool/accepted.go](../tool/accepted.go), [tool/legacy.go](../tool/legacy.go) | Принятие кандидатов, ID/редакции, reconcile (единый view для чтения и apply, справочные источники и guard нормативной цитаты), общий `stageAcceptance` для apply и `check` (проверка приёмки без записи, подсказки сопоставления) и проверка извлечения |
 | [tool/review.go](../tool/review.go) | Согласование хоста, привязка к текущим результатам и сохранение истории |
 | [tool/runtime.go](../tool/runtime.go) | Контролируемый запуск процессов, timeout, результаты тестов и receipts |
 | [tool/php.go](../tool/php.go), [tool/sdk.php](../tool/sdk.php), [tool/sdk-typed.php](../tool/sdk-typed.php) | Docker-boundary; `php-facts` (syntax-only) и `php-typed` (PHPStan/Larastan-экспортёр, neon-обёртка, проверка envelope `sdk/3` и основания анализа) |
