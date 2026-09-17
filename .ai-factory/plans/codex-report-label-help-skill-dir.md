@@ -75,7 +75,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (поз�
   - Logging: нет нового.
   - REQ: REQ-SA-037, 24.3–24.5
 
-- [ ] Task 4: релиз `v0.1.10`, обновление хоста/пилота/синтетики, проверка на пилоте
+- [x] Task 4: релиз `v0.1.10`, обновление хоста/пилота/синтетики, проверка на пилоте
   - Deliverable: merge в `codex/bootstrap` (по подтверждению владельца), тег `v0.1.10`, approve deployment; `spec-audit update` → 0.1.10; `spec-audit --help`/`-V` на хосте; `skill update --dir .spec-audit --host both` из корня пилота и синтетики → `dir` = корень, `updated:true` (коммиты — по запросу); README «Приёмка и ограничения» — строка релиза 0.1.10 с фактами; журнал пилота не трогается.
   - Files: `README.md`; (пилот и синтетика — вне репозитория)
   - Depends: 3
