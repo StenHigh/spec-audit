@@ -40,7 +40,21 @@ type RequirementNavigation struct {
 	Basis          string          `json:"basis"`
 	Flags          []string        `json:"flags"`
 	Host           *Assessment     `json:"-"`
+	HostConcur     string          `json:"host_concur,omitempty"`
 	HostExecutions []TestExecution `json:"host_executions"`
+}
+
+// hostConcurLabel names whose evidence a version 2 verdict adopted (tool-spec §23).
+func hostConcurLabel(concur string) string {
+	switch concur {
+	case "mapper":
+		return "по mapper"
+	case "redteam":
+		return "по redteam"
+	case "both":
+		return "по обеим ролям"
+	}
+	return ""
 }
 
 type NavigationLink struct {
@@ -303,6 +317,9 @@ func buildNavigation(report *Report, m Manifest) {
 		row := &report.Requirements[i]
 		req := row.Requirement
 		row.Navigation = RequirementNavigation{Section: req.Source.Path, Basis: "roles", Flags: []string{}, Host: host[req.ID], HostExecutions: []TestExecution{}}
+		if report.HostReview != nil && host[req.ID] != nil {
+			row.Navigation.HostConcur = hostConcurLabel(report.HostReview.Concur[req.ID])
+		}
 		flags := map[string]bool{"unreviewed": !currentHost}
 		if !fresh {
 			row.Navigation.Basis = "history"
@@ -389,6 +406,9 @@ func buildNavigation(report *Report, m Manifest) {
 	}
 	if referenceSections > 0 {
 		slog.Debug("карта отчёта: справочные секции", "count", referenceSections)
+	}
+	if report.HostReview != nil && report.HostReview.Latest != nil {
+		slog.Debug("карта отчёта: решение хоста", "form", report.HostReview.Form, "concur_count", len(report.HostReview.Concur))
 	}
 	if report.SDK != nil {
 		hints, stale := 0, 0
