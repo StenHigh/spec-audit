@@ -100,7 +100,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (§6 с�
   - Logging: нет нового.
   - REQ: REQ-SA-042, 21.1, 21.2
 
-- [ ] Task 6: релиз `v0.1.6`, обновление хоста, пилота и синтетики, `check` на живых артефактах
+- [x] Task 6: релиз `v0.1.6`, обновление хоста, пилота и синтетики, `check` на живых артефактах
   - Deliverable: merge в `codex/bootstrap` (по подтверждению владельца), тег `v0.1.6`, approve deployment `release`; `spec-audit update` на хосте → 0.1.6; `skill update --host both` в `spec-audit-synthetic` и пилоте (коммиты — по запросу). Read-only приёмка на пилоте: сначала сравнить sha256 файлов `reconcile/extract-2026-09-17-01.raw.json` и `decision-accept-002.json` со строками `commits[1].raw`/`.decision` журнала (`jq -r`); затем `check CONFIG RAW DECISION` → `duplicate:true` при совпадении байтов, иначе честный отказ «decision_id уже принят с другими байтами» — фиксировать любой исход, файлы не подгонять; `check CONFIG reconcile/extract-2026-09-17-01.raw.json` → 51 кандидат, `normative:true` у всех; оценка подсказок 21.1 на временной копии: скопировать `reports/` пилота в scratchpad, усечь копию журнала до `commits[0]` (состояние accept-001), временный CONFIG (`project_root` → checkout пилота, `reports_dir` → копия); `check CONFIG extract-2026-09-17-01.raw.json` → сравнить `matches` с `previous` из `decision-accept-002.json`: зафиксировать top-1 и hit@3 (офлайн-ожидание 48/49 и 49/49); sha256 `._accepted-index.json` и `git status` пилота неизменны, в README — только агрегаты. README «Приёмка и ограничения» — строка релиза 0.1.6 с этими цифрами.
   - Files: `README.md`; (пилот и синтетический проект — вне репозитория)
   - Depends: 5
