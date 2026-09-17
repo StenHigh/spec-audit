@@ -163,7 +163,7 @@ type TaskBatch struct {
 	Runtime     Runtime      `json:"runtime"`
 	Tasks       []Task       `json:"tasks"`
 	Files       []SourceFile `json:"files"`
-	SDK         []SDKRecord  `json:"sdk,omitempty"`
+	SDK         []SDKRecord  `json:"sdk"`
 }
 
 type Status struct {

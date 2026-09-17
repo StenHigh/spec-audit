@@ -235,10 +235,8 @@ func indexConfig(cfg Config) (any, error) {
 		// tool-spec §26.1: snapshot refuses a stale accepted index, so a successful index is fresh by construction.
 		index["freshness"] = "fresh"
 	}
-	advisories := append(scopeAdvisories(m), anchorAdvisories(cfg.ProjectRoot, m.Files, requirementAnchorSources(m.Requirements))...)
-	if len(advisories) > 0 {
-		index["advisories"] = advisories
-	}
+	// tool-spec §28.1: the list is always present, empty when nothing is advised.
+	index["advisories"] = append(scopeAdvisories(m), anchorAdvisories(cfg.ProjectRoot, m.Files, requirementAnchorSources(m.Requirements))...)
 	return index, nil
 }
 

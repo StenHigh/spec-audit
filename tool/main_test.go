@@ -779,6 +779,10 @@ func TestPrepareDispatch(t *testing.T) {
 			t.Fatal("files.json не копируется в каталог задания (§26.3)")
 		}
 	}
+	// tool-spec §28.1: sdk is an empty list, not a missing key, when no facts were imported.
+	if raw, err := json.Marshal(batch); err != nil || !bytes.Contains(raw, []byte(`"sdk":[]`)) {
+		t.Fatal("prepare должен отдавать sdk: []", err)
+	}
 	sharedPath := filepath.Join(base, "runs/review/dispatch/files.json")
 	var files []SourceFile
 	if err := json.Unmarshal(readFixture(t, sharedPath), &files); err != nil || !reflect.DeepEqual(files, batch.Files) {

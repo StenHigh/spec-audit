@@ -53,11 +53,11 @@ func TestScopeAdvisories(t *testing.T) {
 		t.Fatal("25 норм в scope all должны дать одну рекомендацию", got)
 	}
 	setup(scopeAdvisoryRequirements, "scopes: []\n")
-	if got := advisories(); got != nil {
+	if got := advisories(); len(got) != 0 {
 		t.Fatal("24 нормы не требуют рекомендации", got)
 	}
 	setup(25, scopesYAML(13, 12))
-	if got := advisories(); got != nil {
+	if got := advisories(); len(got) != 0 {
 		t.Fatal("явные scope в пределах рекомендации", got)
 	}
 	setup(25, scopesYAML(25))

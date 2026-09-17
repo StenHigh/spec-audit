@@ -609,6 +609,9 @@ func validateReviewV3(data []byte, runID string, m Manifest, state *State, check
 	return validateVerdicts(record, decision.Verdicts, decision.Counts, m, state, checkSources)
 }
 
+// agreedStatement replaces an empty verdict statement when the host merely concurs with both roles (tool-spec §28.3).
+const agreedStatement = "Совпадает с оценками обеих ролей."
+
 // validateVerdicts is the shared version 2/3 body: form, counts, the host's own citations, then the adopted evidence.
 func validateVerdicts(record reviewRecord, verdicts []ReviewVerdictV3, counts ReviewCounts, m Manifest, state *State, checkSources bool) (reviewRecord, error) {
 	if strings.TrimSpace(record.Summary) == "" || len(verdicts) != len(m.Requirements) {
@@ -686,6 +689,13 @@ func validateVerdicts(record reviewRecord, verdicts []ReviewVerdictV3, counts Re
 			assessment.Tests = []TestCitation{}
 		}
 		if state != nil {
+			if strings.TrimSpace(verdict.Statement) == "" {
+				if verdict.Concur != "both" || !rolesAgreeWith(verdict.base(), *state) {
+					return reviewRecord{}, fmt.Errorf("%s: пустой statement допустим только при concur both и совпадении с оценками обеих ролей", verdict.RequirementID)
+				}
+				assessment.Statement = agreedStatement
+				slog.Debug("review: стандартный statement", "requirement_id", verdict.RequirementID)
+			}
 			adopted, err := adoptEvidence(verdict.base(), m, *state)
 			if err != nil {
 				return reviewRecord{}, err
@@ -708,6 +718,22 @@ func validateVerdicts(record reviewRecord, verdicts []ReviewVerdictV3, counts Re
 		record.Own = nil
 	}
 	return record, nil
+}
+
+// rolesAgreeWith reports whether both mapper and redteam currently assess the norm exactly as the verdict does.
+func rolesAgreeWith(verdict ReviewVerdict, state State) bool {
+	matched := map[string]bool{}
+	for _, entry := range state.Entries {
+		if entry.Result == nil {
+			continue
+		}
+		for _, assessment := range entry.Result.Assessments {
+			if assessment.RequirementID == verdict.RequirementID {
+				matched[entry.Task.Role] = assessment.Specification == verdict.Specification && assessment.Implementation == verdict.Implementation && assessment.Assertion == verdict.Assertion
+			}
+		}
+	}
+	return matched["mapper"] && matched["redteam"]
 }
 
 // mergeCitations appends the host's own citations after the roles' ones, dropping duplicates by value.
@@ -753,9 +779,6 @@ func checkVerdict(verdict ReviewVerdict, req Requirement) error {
 	}
 	if !oneOf(verdict.Concur, "mapper", "redteam", "both") {
 		return errors.New("concur допускает только mapper, redteam или both")
-	}
-	if strings.TrimSpace(verdict.Statement) == "" {
-		return errors.New("пустой statement вердикта")
 	}
 	for _, limitation := range verdict.Limitations {
 		if strings.TrimSpace(limitation) == "" {

@@ -772,7 +772,7 @@ func verifySDKRecords(run *os.Root, records []SDKRecord) error {
 // sdkRecordsFor отдаёт хосту записи с абсолютными путями артефактов.
 func sdkRecordsFor(reportsDir, runID string, records []SDKRecord) []SDKRecord {
 	if len(records) == 0 {
-		return nil
+		return []SDKRecord{} // tool-spec §28.1: an empty list, never a missing key
 	}
 	out := make([]SDKRecord, len(records))
 	for i, record := range records {

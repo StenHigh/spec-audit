@@ -996,3 +996,51 @@ func TestReviewValidateHost(t *testing.T) {
 		t.Fatal("host — псевдо-задание только у validate", err)
 	}
 }
+
+// tool-spec §28.3: an empty verdict statement is accepted only when the host merely concurs with both roles.
+func TestReviewAgreedStatement(t *testing.T) {
+	config, base := fixture(t)
+	batch := runOK(t, "prepare", config, "review").(TaskBatch)
+	for _, task := range batch.Tasks {
+		result := sampleResult(t, task, filepath.Join(base, "source"))
+		if task.Role == "redteam" {
+			result.Assessments[1].Assertion, result.Assessments[1].Tests = "unknown", []TestCitation{} // the second norm disagrees between the roles
+		}
+		path := filepath.Join(base, task.TaskID+".json")
+		writeFixture(t, path, legacyMarshal(t, result))
+		runOK(t, "submit", config, "review", task.TaskID, path)
+	}
+	write := func(d ReviewDecisionV3, name string) string {
+		path := filepath.Join(base, name+".json")
+		writeFixture(t, path, legacyMarshal(t, d))
+		return path
+	}
+	agreed := reviewV3Input(t, config, "agreed", "both")
+	agreed.Verdicts[0].Statement = ""
+	if checked := runOK(t, "validate", config, "review", "host", write(agreed, "agreed")).(map[string]any); checked["valid"] != true {
+		t.Fatal("пустой statement при both и совпадении", checked)
+	}
+	runOK(t, "review", config, "review", filepath.Join(base, "agreed.json"))
+	view := runOK(t, "review", config, "review").(ReviewContext)
+	if view.Latest.Assessments[0].Statement != agreedStatement || view.Latest.Assessments[1].Statement == agreedStatement {
+		t.Fatal("стандартный текст только у согласной нормы", view.Latest.Assessments[0].Statement, view.Latest.Assessments[1].Statement)
+	}
+	runOK(t, "report", config, "review")
+	if html := readFixture(t, filepath.Join(base, "runs/review/report.html")); !bytes.Contains(html, []byte(agreedStatement)) {
+		t.Fatal("HTML без стандартного statement")
+	}
+	journalBefore := readFixture(t, filepath.Join(base, "runs/review/host-reviews.json"))
+	refuse := func(name string, mutate func(d *ReviewDecisionV3)) {
+		t.Helper()
+		d := reviewV3Input(t, config, "bad-"+name, "both")
+		mutate(&d)
+		if _, err := execute([]string{"review", config, "review", write(d, name)}); err == nil || !strings.Contains(err.Error(), "пустой statement допустим только") {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	refuse("disagree", func(d *ReviewDecisionV3) { d.Verdicts[1].Statement = "" })                               // redteam said weak, verdict relevant
+	refuse("concur", func(d *ReviewDecisionV3) { d.Verdicts[0].Statement, d.Verdicts[0].Concur = "", "mapper" }) // not both
+	if !bytes.Equal(journalBefore, readFixture(t, filepath.Join(base, "runs/review/host-reviews.json"))) {
+		t.Fatal("отказы изменили журнал")
+	}
+}
