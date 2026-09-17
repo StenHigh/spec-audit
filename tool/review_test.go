@@ -599,9 +599,15 @@ func TestReviewOutcomes(t *testing.T) {
 	if first.Agree || first.Roles["mapper"].Assertion == "weak" || first.Roles["redteam"].Assertion != "weak" || first.Roles["redteam"].TaskID != batch.Tasks[1].TaskID || first.Roles["redteam"].Attempt != 1 {
 		t.Fatal("расхождение по assertion должно давать agree:false с обеими тройками", first)
 	}
+	// tool-spec §27.2: identical citations leave only_here empty; the counts describe each role's evidence.
 	for _, row := range view.Outcomes[1:] {
 		if !row.Agree || len(row.Roles) != 2 {
 			t.Fatal("совпадающие роли должны давать agree:true", row)
+		}
+		for role, outcome := range row.Roles {
+			if len(outcome.OnlyHere.Spec)+len(outcome.OnlyHere.Code)+len(outcome.OnlyHere.Tests) != 0 || outcome.Citations.Spec != 1 || outcome.Citations.Code != 1 {
+				t.Fatal("общие цитаты не попадают в only_here", role, outcome)
+			}
 		}
 	}
 	runOK(t, "retry", config, "review", batch.Tasks[0].TaskID)
@@ -609,6 +615,9 @@ func TestReviewOutcomes(t *testing.T) {
 	for _, row := range after.Outcomes {
 		if _, ok := row.Roles["mapper"]; ok || row.Agree || row.Scope != "all" {
 			t.Fatal("после retry роль без результата отсутствует и agree:false", row)
+		}
+		if redteam := row.Roles["redteam"]; len(redteam.OnlyHere.Code) != redteam.Citations.Code || len(redteam.OnlyHere.Spec) != redteam.Citations.Spec {
+			t.Fatal("без другой роли only_here — все цитаты", redteam)
 		}
 	}
 	if after.Roles[0].Submitted || !reflect.DeepEqual(after.Entries[1], view.Entries[1]) {
@@ -731,6 +740,10 @@ func TestReviewV3(t *testing.T) {
 	if view.State != "current" || view.Form != "verdicts" || view.Own != nil || view.Latest.Version != 3 || len(view.History) != 3 || len(view.Latest.Assessments[0].Tests) != 1 {
 		t.Fatal("version 3 без собственных цитат должна равняться version 2", view.State, view.Form, view.Own, len(view.History))
 	}
+	// §27.2: the test citation only the mapper gave for the first norm shows up as its only_here.
+	if mapper, redteam := view.Outcomes[0].Roles["mapper"], view.Outcomes[0].Roles["redteam"]; len(mapper.OnlyHere.Tests) != 1 || mapper.OnlyHere.Tests[0].Path != "source_test.go" || mapper.OnlyHere.Tests[0].TestID == "" || redteam.Citations.Tests != 0 || len(redteam.OnlyHere.Tests) != 0 {
+		t.Fatal("разность цитат по tests", mapper.OnlyHere, redteam.Citations)
+	}
 	// The host's own citations: a sub-range of source.go no role cites and a test citation for a norm the redteam left without tests.
 	source := readFixture(t, filepath.Join(base, "source/source.go"))
 	ownQuote, err := lineQuote(source, 1, 2)
@@ -836,7 +849,7 @@ func TestReviewPreviousHost(t *testing.T) {
 	writeFixture(t, filepath.Join(base, "runs/broken/manifest.json"), []byte("{not json"))
 	view := runOK(t, "review", config, "b").(ReviewContext)
 	prior := view.Outcomes[0].PreviousHost
-	if prior == nil || prior.RunID != "a" || prior.ReviewID != "host-review-001" || prior.Implementation != "contradicted" || prior.Assertion != "contradicts" || view.Outcomes[1].PreviousHost == nil || view.Outcomes[1].PreviousHost.Implementation != "supported" {
+	if prior == nil || prior.RunID != "a" || prior.ReviewID != "host-review-001" || prior.Implementation != "contradicted" || prior.Assertion != "contradicts" || prior.Statement != "host" || prior.Limitations == nil || len(prior.Limitations) != 0 || view.Outcomes[1].PreviousHost == nil || view.Outcomes[1].PreviousHost.Implementation != "supported" {
 		t.Fatal("previous_host должен показать последний вердикт run a", prior)
 	}
 	if draft := runOK(t, "draft", config, "b").(ReviewDecisionV3); draft.Verdicts[0].Implementation != "" {

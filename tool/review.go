@@ -178,22 +178,53 @@ func roleEntries(state State) []RoleEntry {
 
 // RoleOutcome is one role's current states for a norm (tool-spec §24.1); citations stay in entries.
 type RoleOutcome struct {
-	TaskID         string   `json:"task_id"`
-	Attempt        int      `json:"attempt"`
-	Specification  string   `json:"specification"`
-	Implementation string   `json:"implementation"`
-	Assertion      string   `json:"assertion"`
-	Limitations    []string `json:"limitations"`
+	TaskID         string         `json:"task_id"`
+	Attempt        int            `json:"attempt"`
+	Specification  string         `json:"specification"`
+	Implementation string         `json:"implementation"`
+	Assertion      string         `json:"assertion"`
+	Limitations    []string       `json:"limitations"`
+	Citations      CitationCounts `json:"citations"`
+	OnlyHere       CitationDiff   `json:"only_here"`
+}
+
+// CitationRef points at a cited range without its quote (tool-spec §27.2); entries keep the full citation.
+type CitationRef struct {
+	Path      string `json:"path"`
+	LineStart int    `json:"line_start"`
+	LineEnd   int    `json:"line_end"`
+}
+
+type TestRef struct {
+	TestID    string `json:"test_id"`
+	Path      string `json:"path"`
+	LineStart int    `json:"line_start"`
+	LineEnd   int    `json:"line_end"`
+}
+
+type CitationCounts struct {
+	Spec  int `json:"spec"`
+	Code  int `json:"code"`
+	Tests int `json:"tests"`
+}
+
+// CitationDiff lists what only this role cites for the norm, compared with the other role's current result.
+type CitationDiff struct {
+	Spec  []CitationRef `json:"spec"`
+	Code  []CitationRef `json:"code"`
+	Tests []TestRef     `json:"tests"`
 }
 
 // PreviousHost is the last host verdict on the same norm from an earlier run with the same snapshot and accepted head
 // (tool-spec §25.2): a reading aid the binary never carries over.
 type PreviousHost struct {
-	RunID          string `json:"run_id"`
-	ReviewID       string `json:"review_id"`
-	Specification  string `json:"specification"`
-	Implementation string `json:"implementation"`
-	Assertion      string `json:"assertion"`
+	RunID          string   `json:"run_id"`
+	ReviewID       string   `json:"review_id"`
+	Specification  string   `json:"specification"`
+	Implementation string   `json:"implementation"`
+	Assertion      string   `json:"assertion"`
+	Statement      string   `json:"statement"`
+	Limitations    []string `json:"limitations"`
 }
 
 // Outcome is the derived per-norm row of the review context: both roles side by side and whether they agree.
@@ -208,8 +239,10 @@ type Outcome struct {
 func outcomes(m Manifest, state State, previous map[string]PreviousHost) []Outcome {
 	rows := []Outcome{}
 	disagree := 0
+	differing := map[string]bool{}
 	for _, req := range m.Requirements {
 		row := Outcome{RequirementID: req.ID, Roles: map[string]RoleOutcome{}}
+		cited := map[string]Assessment{}
 		if prior, ok := previous[req.ID]; ok {
 			row.PreviousHost = &prior
 		}
@@ -236,9 +269,24 @@ func outcomes(m Manifest, state State, previous map[string]PreviousHost) []Outco
 					if limitations == nil {
 						limitations = []string{}
 					}
-					row.Roles[entry.Task.Role] = RoleOutcome{entry.Task.TaskID, entry.Task.Attempt, assessment.Specification, assessment.Implementation, assessment.Assertion, limitations}
+					cited[entry.Task.Role] = assessment
+					row.Roles[entry.Task.Role] = RoleOutcome{TaskID: entry.Task.TaskID, Attempt: entry.Task.Attempt, Specification: assessment.Specification, Implementation: assessment.Implementation, Assertion: assessment.Assertion, Limitations: limitations,
+						Citations: CitationCounts{len(assessment.Spec), len(assessment.Code), len(assessment.Tests)}}
 				}
 			}
+		}
+		for role, outcome := range row.Roles {
+			other := Assessment{}
+			for name, assessment := range cited {
+				if name != role {
+					other = assessment
+				}
+			}
+			outcome.OnlyHere = citationDiff(cited[role], other)
+			if len(outcome.OnlyHere.Spec)+len(outcome.OnlyHere.Code)+len(outcome.OnlyHere.Tests) > 0 {
+				differing[req.ID] = true
+			}
+			row.Roles[role] = outcome
 		}
 		mapper, redteam := row.Roles["mapper"], row.Roles["redteam"]
 		_, hasMapper := row.Roles["mapper"]
@@ -250,7 +298,40 @@ func outcomes(m Manifest, state State, previous map[string]PreviousHost) []Outco
 		rows = append(rows, row)
 	}
 	slog.Debug("review: расхождения ролей", "requirements", len(rows), "disagree", disagree)
+	slog.Debug("review: разность цитат", "requirements", len(rows), "only_here", len(differing))
 	return rows
+}
+
+// citationDiff keeps the citations of mine that the other role does not cite, compared by path and line range.
+func citationDiff(mine, other Assessment) CitationDiff {
+	key := func(c Citation) string { return fmt.Sprintf("%s:%d-%d", c.Path, c.LineStart, c.LineEnd) }
+	seenSpec, seenCode, seenTest := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for _, c := range other.Spec {
+		seenSpec[key(c)] = true
+	}
+	for _, c := range other.Code {
+		seenCode[key(c)] = true
+	}
+	for _, t := range other.Tests {
+		seenTest[t.TestID+"|"+key(t.Citation)] = true
+	}
+	diff := CitationDiff{Spec: []CitationRef{}, Code: []CitationRef{}, Tests: []TestRef{}}
+	for _, c := range mine.Spec {
+		if !seenSpec[key(c)] {
+			diff.Spec = append(diff.Spec, CitationRef{c.Path, c.LineStart, c.LineEnd})
+		}
+	}
+	for _, c := range mine.Code {
+		if !seenCode[key(c)] {
+			diff.Code = append(diff.Code, CitationRef{c.Path, c.LineStart, c.LineEnd})
+		}
+	}
+	for _, t := range mine.Tests {
+		if !seenTest[t.TestID+"|"+key(t.Citation)] {
+			diff.Tests = append(diff.Tests, TestRef{t.TestID, t.Citation.Path, t.Citation.LineStart, t.Citation.LineEnd})
+		}
+	}
+	return diff
 }
 
 // previousHost scans the sibling runs of reports_dir for the latest host decision on the same snapshot and accepted
@@ -341,10 +422,12 @@ func previousHostRun(reports *os.Root, other, snapshotID, head string) (map[stri
 		return nil, "", "", nil
 	}
 	type row struct {
-		RequirementID  string `json:"requirement_id"`
-		Specification  string `json:"specification"`
-		Implementation string `json:"implementation"`
-		Assertion      string `json:"assertion"`
+		RequirementID  string   `json:"requirement_id"`
+		Specification  string   `json:"specification"`
+		Implementation string   `json:"implementation"`
+		Assertion      string   `json:"assertion"`
+		Statement      string   `json:"statement"`
+		Limitations    []string `json:"limitations"`
 	}
 	var last struct {
 		ReviewID    string `json:"review_id"`
@@ -356,7 +439,11 @@ func previousHostRun(reports *os.Root, other, snapshotID, head string) (map[stri
 	}
 	states := map[string]PreviousHost{}
 	for _, r := range append(last.Assessments, last.Verdicts...) {
-		states[r.RequirementID] = PreviousHost{Specification: r.Specification, Implementation: r.Implementation, Assertion: r.Assertion}
+		limitations := r.Limitations
+		if limitations == nil {
+			limitations = []string{}
+		}
+		states[r.RequirementID] = PreviousHost{Specification: r.Specification, Implementation: r.Implementation, Assertion: r.Assertion, Statement: r.Statement, Limitations: limitations}
 	}
 	recordedAt := ""
 	if versions, err := readToolVersions(run); err == nil {
