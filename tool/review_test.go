@@ -599,9 +599,15 @@ func TestReviewOutcomes(t *testing.T) {
 	if first.Agree || first.Roles["mapper"].Assertion == "weak" || first.Roles["redteam"].Assertion != "weak" || first.Roles["redteam"].TaskID != batch.Tasks[1].TaskID || first.Roles["redteam"].Attempt != 1 {
 		t.Fatal("расхождение по assertion должно давать agree:false с обеими тройками", first)
 	}
+	// tool-spec §27.2: identical citations leave only_here empty; the counts describe each role's evidence.
 	for _, row := range view.Outcomes[1:] {
 		if !row.Agree || len(row.Roles) != 2 {
 			t.Fatal("совпадающие роли должны давать agree:true", row)
+		}
+		for role, outcome := range row.Roles {
+			if len(outcome.OnlyHere.Spec)+len(outcome.OnlyHere.Code)+len(outcome.OnlyHere.Tests) != 0 || outcome.Citations.Spec != 1 || outcome.Citations.Code != 1 {
+				t.Fatal("общие цитаты не попадают в only_here", role, outcome)
+			}
 		}
 	}
 	runOK(t, "retry", config, "review", batch.Tasks[0].TaskID)
@@ -609,6 +615,9 @@ func TestReviewOutcomes(t *testing.T) {
 	for _, row := range after.Outcomes {
 		if _, ok := row.Roles["mapper"]; ok || row.Agree || row.Scope != "all" {
 			t.Fatal("после retry роль без результата отсутствует и agree:false", row)
+		}
+		if redteam := row.Roles["redteam"]; len(redteam.OnlyHere.Code) != redteam.Citations.Code || len(redteam.OnlyHere.Spec) != redteam.Citations.Spec {
+			t.Fatal("без другой роли only_here — все цитаты", redteam)
 		}
 	}
 	if after.Roles[0].Submitted || !reflect.DeepEqual(after.Entries[1], view.Entries[1]) {
@@ -731,6 +740,10 @@ func TestReviewV3(t *testing.T) {
 	if view.State != "current" || view.Form != "verdicts" || view.Own != nil || view.Latest.Version != 3 || len(view.History) != 3 || len(view.Latest.Assessments[0].Tests) != 1 {
 		t.Fatal("version 3 без собственных цитат должна равняться version 2", view.State, view.Form, view.Own, len(view.History))
 	}
+	// §27.2: the test citation only the mapper gave for the first norm shows up as its only_here.
+	if mapper, redteam := view.Outcomes[0].Roles["mapper"], view.Outcomes[0].Roles["redteam"]; len(mapper.OnlyHere.Tests) != 1 || mapper.OnlyHere.Tests[0].Path != "source_test.go" || mapper.OnlyHere.Tests[0].TestID == "" || redteam.Citations.Tests != 0 || len(redteam.OnlyHere.Tests) != 0 {
+		t.Fatal("разность цитат по tests", mapper.OnlyHere, redteam.Citations)
+	}
 	// The host's own citations: a sub-range of source.go no role cites and a test citation for a norm the redteam left without tests.
 	source := readFixture(t, filepath.Join(base, "source/source.go"))
 	ownQuote, err := lineQuote(source, 1, 2)
@@ -836,7 +849,7 @@ func TestReviewPreviousHost(t *testing.T) {
 	writeFixture(t, filepath.Join(base, "runs/broken/manifest.json"), []byte("{not json"))
 	view := runOK(t, "review", config, "b").(ReviewContext)
 	prior := view.Outcomes[0].PreviousHost
-	if prior == nil || prior.RunID != "a" || prior.ReviewID != "host-review-001" || prior.Implementation != "contradicted" || prior.Assertion != "contradicts" || view.Outcomes[1].PreviousHost == nil || view.Outcomes[1].PreviousHost.Implementation != "supported" {
+	if prior == nil || prior.RunID != "a" || prior.ReviewID != "host-review-001" || prior.Implementation != "contradicted" || prior.Assertion != "contradicts" || prior.Statement != "host" || prior.Limitations == nil || len(prior.Limitations) != 0 || view.Outcomes[1].PreviousHost == nil || view.Outcomes[1].PreviousHost.Implementation != "supported" {
 		t.Fatal("previous_host должен показать последний вердикт run a", prior)
 	}
 	if draft := runOK(t, "draft", config, "b").(ReviewDecisionV3); draft.Verdicts[0].Implementation != "" {
@@ -900,5 +913,86 @@ func TestReviewPreviousHostAccepted(t *testing.T) {
 	submitAll("c")
 	if view := runOK(t, "review", config, "c").(ReviewContext); view.Outcomes[0].PreviousHost != nil {
 		t.Fatal("другой accepted head — previous_host отсутствует", view.Outcomes[0].PreviousHost)
+	}
+}
+
+// tool-spec §27 / REQ-SA-047: validate … host runs review's checks without writing anything.
+func TestReviewValidateHost(t *testing.T) {
+	config, base := fixture(t)
+	batch := runOK(t, "prepare", config, "review").(TaskBatch)
+	first := batch.Tasks[0]
+	firstPath := filepath.Join(base, first.TaskID+".json")
+	writeFixture(t, firstPath, legacyMarshal(t, sampleResult(t, first, filepath.Join(base, "source"))))
+	runOK(t, "submit", config, "review", first.TaskID, firstPath)
+	// Before full delivery the answer is review's refusal, not a false valid.
+	early := reviewV2Input(t, config, "early", "mapper")
+	earlyPath := filepath.Join(base, "early.json")
+	writeFixture(t, earlyPath, legacyMarshal(t, early))
+	if _, err := execute([]string{"validate", config, "review", "host", earlyPath}); err == nil || !strings.Contains(err.Error(), "нужны все ответы ролей") {
+		t.Fatal("validate host до полной доставки", err)
+	}
+	for _, task := range batch.Tasks[1:] {
+		path := filepath.Join(base, task.TaskID+".json")
+		writeFixture(t, path, legacyMarshal(t, sampleResult(t, task, filepath.Join(base, "source"))))
+		runOK(t, "submit", config, "review", task.TaskID, path)
+	}
+	source := readFixture(t, filepath.Join(base, "source/source.go"))
+	ownQuote, err := lineQuote(source, 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := reviewV3Input(t, config, "v3-checked", "both")
+	decision.Verdicts[0].Code = []Citation{{"source.go", 1, 2, ownQuote}}
+	write := func(d ReviewDecisionV3, name string) string {
+		path := filepath.Join(base, name+".json")
+		writeFixture(t, path, legacyMarshal(t, d))
+		return path
+	}
+	journalPath := filepath.Join(base, "runs/review/host-reviews.json")
+	versionsPath := filepath.Join(base, "runs/review/tool-versions.json")
+	versionsBefore := readFixture(t, versionsPath)
+	checked := runOK(t, "validate", config, "review", "host", write(decision, "ok")).(map[string]any)
+	if checked["valid"] != true || checked["duplicate"] != false || checked["review_state"] != "current" || checked["version"] != 3 || checked["requirements"] != len(batch.Tasks[0].Requirements) || !reflect.DeepEqual(checked["own_citations"], []string{"REQ-DEMO-001"}) {
+		t.Fatal("validate host должен обещать запись", checked)
+	}
+	if _, err := os.Stat(journalPath); !os.IsNotExist(err) {
+		t.Fatal("validate host не должен создавать журнал")
+	}
+	if !bytes.Equal(versionsBefore, readFixture(t, versionsPath)) {
+		t.Fatal("validate host не должен писать провенанс")
+	}
+	// The same refusals as review, none of them writing.
+	refuse := func(name string, mutate func(d *ReviewDecisionV3), fragment string) {
+		t.Helper()
+		d := reviewV3Input(t, config, "v3-"+name, "both")
+		d.Verdicts[0].Code = []Citation{{"source.go", 1, 2, ownQuote}}
+		mutate(&d)
+		path := write(d, name)
+		_, verr := execute([]string{"validate", config, "review", "host", path})
+		_, rerr := execute([]string{"review", config, "review", path})
+		if verr == nil || rerr == nil || verr.Error() != rerr.Error() || !strings.Contains(verr.Error(), fragment) {
+			t.Fatalf("%s: validate=%v review=%v", name, verr, rerr)
+		}
+	}
+	refuse("counts", func(d *ReviewDecisionV3) { d.Counts.Relevant++ }, "counts.relevant")
+	refuse("quote", func(d *ReviewDecisionV3) { d.Verdicts[0].Code[0].Quote = "nope" }, "цитата не совпадает")
+	refuse("stale", func(d *ReviewDecisionV3) { d.BasisSHA256 = strings.Repeat("0", 64) }, "текущая база")
+	if _, err := os.Stat(journalPath); !os.IsNotExist(err) {
+		t.Fatal("отказы не должны создавать журнал")
+	}
+	// review accepts the validated bytes; afterwards validate reports a duplicate, and a changed body a conflict.
+	okPath := filepath.Join(base, "ok.json")
+	if accepted := runOK(t, "review", config, "review", okPath).(map[string]any); accepted["accepted"] != true || accepted["review_state"] != "current" {
+		t.Fatal("проверенное решение должно записаться", accepted)
+	}
+	if again := runOK(t, "validate", config, "review", "host", okPath).(map[string]any); again["valid"] != true || again["duplicate"] != true || again["review_state"] != "current" {
+		t.Fatal("те же байты после записи — duplicate", again)
+	}
+	decision.Summary = "другие байты"
+	if _, err := execute([]string{"validate", config, "review", "host", write(decision, "conflict")}); err == nil || !strings.Contains(err.Error(), "конфликт review_id") {
+		t.Fatal("тот же review_id с другими байтами — конфликт", err)
+	}
+	if _, err := execute([]string{"submit", config, "review", "host", okPath}); err == nil || !strings.Contains(err.Error(), "неизвестный TASK_ID") {
+		t.Fatal("host — псевдо-задание только у validate", err)
 	}
 }
