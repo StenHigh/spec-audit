@@ -124,6 +124,7 @@ type ReviewContext struct {
 	ReviewSummary
 	Requirements []Requirement `json:"requirements"`
 	Roles        []RoleEntry   `json:"roles"`
+	Outcomes     []Outcome     `json:"outcomes"`
 	Entries      []Entry       `json:"entries"`
 	Executions   []Receipt     `json:"executions"`
 }
@@ -139,6 +140,82 @@ func roleEntries(state State) []RoleEntry {
 	}
 	slog.Debug("review: контекст", "roles", len(roles), "submitted", submitted)
 	return roles
+}
+
+// RoleOutcome is one role's current states for a norm (tool-spec §24.1); citations stay in entries.
+type RoleOutcome struct {
+	TaskID         string `json:"task_id"`
+	Attempt        int    `json:"attempt"`
+	Specification  string `json:"specification"`
+	Implementation string `json:"implementation"`
+	Assertion      string `json:"assertion"`
+}
+
+// Outcome is the derived per-norm row of the review context: both roles side by side and whether they agree.
+type Outcome struct {
+	RequirementID string                 `json:"requirement_id"`
+	Scope         string                 `json:"scope"`
+	Roles         map[string]RoleOutcome `json:"roles"`
+	Agree         bool                   `json:"agree"`
+}
+
+func outcomes(m Manifest, state State) []Outcome {
+	rows := []Outcome{}
+	disagree := 0
+	for _, req := range m.Requirements {
+		row := Outcome{RequirementID: req.ID, Roles: map[string]RoleOutcome{}}
+		for _, entry := range state.Entries {
+			assigned := false
+			for _, task := range entry.Task.Requirements {
+				if task.ID == req.ID {
+					assigned = true
+					break
+				}
+			}
+			if !assigned {
+				continue
+			}
+			if row.Scope == "" {
+				row.Scope = entry.Task.Scope
+			}
+			if entry.Result == nil {
+				continue
+			}
+			for _, assessment := range entry.Result.Assessments {
+				if assessment.RequirementID == req.ID {
+					row.Roles[entry.Task.Role] = RoleOutcome{entry.Task.TaskID, entry.Task.Attempt, assessment.Specification, assessment.Implementation, assessment.Assertion}
+				}
+			}
+		}
+		mapper, redteam := row.Roles["mapper"], row.Roles["redteam"]
+		_, hasMapper := row.Roles["mapper"]
+		_, hasRedteam := row.Roles["redteam"]
+		row.Agree = hasMapper && hasRedteam && mapper.Specification == redteam.Specification && mapper.Implementation == redteam.Implementation && mapper.Assertion == redteam.Assertion
+		if !row.Agree {
+			disagree++
+		}
+		rows = append(rows, row)
+	}
+	slog.Debug("review: расхождения ролей", "requirements", len(rows), "disagree", disagree)
+	return rows
+}
+
+// draftDecision prints an empty version 2 decision for the current basis (REQ-SA-045); states stay the host's call.
+func draftDecision(runID string, m Manifest, state State, journal reviewJournal) (ReviewDecisionV2, error) {
+	if len(pending(state)) != 0 {
+		return ReviewDecisionV2{}, errors.New("нужны все ответы ролей; перечитайте review")
+	}
+	previous := ""
+	if n := len(journal.Records); n > 0 {
+		previous = journal.Records[n-1]
+	}
+	draft := ReviewDecisionV2{Version: 2, ReviewID: fmt.Sprintf("host-review-%03d", len(journal.Records)+1), RunID: runID, SnapshotID: m.SnapshotID,
+		BasisSHA256: reviewBasis(m.SnapshotID, state, previous), Verdicts: []ReviewVerdict{}, Limitations: []string{}}
+	for _, req := range m.Requirements {
+		draft.Verdicts = append(draft.Verdicts, ReviewVerdict{RequirementID: req.ID, Limitations: []string{}})
+	}
+	slog.Info("черновик решения", "run_id", runID, "review_id", draft.ReviewID, "requirements", len(draft.Verdicts))
+	return draft, nil
 }
 
 type RawProvenance struct {
@@ -424,7 +501,7 @@ func reviewContext(run *os.Root, runID string, m Manifest, state State, fresh bo
 		return ReviewContext{}, err
 	}
 	status := makeStatus(runID, m, state, fresh)
-	return ReviewContext{runID, m.SnapshotID, status.DeliveryComplete, status.Freshness, summarizeReviews(runID, m, state, fresh, journal), m.Requirements, roleEntries(state), state.Entries, state.Executions}, nil
+	return ReviewContext{runID, m.SnapshotID, status.DeliveryComplete, status.Freshness, summarizeReviews(runID, m, state, fresh, journal), m.Requirements, roleEntries(state), outcomes(m, state), state.Entries, state.Executions}, nil
 }
 func submitReview(run *os.Root, runID string, m Manifest, state State, path string, versions []byte) (any, error) {
 	slog.Debug("проверка согласования", "run_id", runID)

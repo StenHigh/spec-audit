@@ -764,3 +764,35 @@ func TestToolVersions(t *testing.T) {
 		}
 	})
 }
+
+// tool-spec §24.2: prepare materializes each role's directory; retry rewrites only task.json.
+func TestPrepareDispatch(t *testing.T) {
+	config, base := fixture(t)
+	batch := runOK(t, "prepare", config, "review").(TaskBatch)
+	for _, task := range batch.Tasks {
+		dir := filepath.Join(base, "runs/review/dispatch", task.TaskID)
+		var stored Task
+		if err := json.Unmarshal(readFixture(t, filepath.Join(dir, "task.json")), &stored); err != nil || !reflect.DeepEqual(stored, task) {
+			t.Fatalf("task.json должен равняться заданию prepare: %v", err)
+		}
+		var files []SourceFile
+		if err := json.Unmarshal(readFixture(t, filepath.Join(dir, "files.json")), &files); err != nil || !reflect.DeepEqual(files, batch.Files) {
+			t.Fatalf("files.json должен равняться списку файлов prepare: %v", err)
+		}
+	}
+	first := batch.Tasks[0]
+	dir := filepath.Join(base, "runs/review/dispatch", first.TaskID)
+	writeFixture(t, filepath.Join(dir, "prompt.md"), []byte("launcher prompt\n"))
+	filesBefore := readFixture(t, filepath.Join(dir, "files.json"))
+	retried := runOK(t, "retry", config, "review", first.TaskID).(Task)
+	var stored Task
+	if err := json.Unmarshal(readFixture(t, filepath.Join(dir, "task.json")), &stored); err != nil || stored.Attempt != 2 || !reflect.DeepEqual(stored, retried) {
+		t.Fatal("retry должен перезаписать task.json новой попыткой", stored.Attempt)
+	}
+	if string(readFixture(t, filepath.Join(dir, "prompt.md"))) != "launcher prompt\n" || !bytes.Equal(filesBefore, readFixture(t, filepath.Join(dir, "files.json"))) {
+		t.Fatal("retry не должен трогать остальные файлы каталога")
+	}
+	if tasks := runOK(t, "tasks", config, "review").(TaskBatch); !reflect.DeepEqual(tasks.Tasks[0], stored) {
+		t.Fatal("tasks после retry должен совпадать с task.json", tasks.Tasks[0])
+	}
+}

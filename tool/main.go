@@ -867,6 +867,24 @@ func publishPreparedFile(root *os.Root, tmp, path string, dir *os.File) error {
 	return nil
 }
 
+// writeDispatch materializes the role's directory (tool-spec §24.2): task.json always, files.json only on prepare.
+func writeDispatch(run *os.Root, task Task, files []SourceFile) error {
+	dir := "dispatch/" + task.TaskID
+	if err := run.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	if err := writeJSON(run, dir+"/task.json", task, 0600); err != nil {
+		return err
+	}
+	if files != nil {
+		if err := writeJSON(run, dir+"/files.json", files, 0600); err != nil {
+			return err
+		}
+	}
+	slog.Debug("dispatch: каталог задания", "task_id", task.TaskID, "files", len(files))
+	return nil
+}
+
 func writeJSON(root *os.Root, path string, value any, mode os.FileMode) error {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
@@ -1071,10 +1089,10 @@ func execute(args []string) (any, error) {
 		return runUpdate(&http.Client{Timeout: releaseTimeout}, releaseBaseURL, exe, version, releasePublicKeyHex)
 	}
 	if len(args) < 3 {
-		return nil, errors.New("команды: init/index CONFIG; reconcile CONFIG [RAW DECISION]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION]; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]")
+		return nil, errors.New("команды: init/index CONFIG; reconcile CONFIG [RAW DECISION]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]")
 	}
 	command, runID := args[0], args[2]
-	argc := map[string]int{"prepare": 3, "tasks": 3, "status": 3, "report": 3, "review": -2, "submit": 5, "validate": 5, "retry": 4, "test": 4, "php-facts": -1, "php-typed": -1}
+	argc := map[string]int{"prepare": 3, "tasks": 3, "status": 3, "report": 3, "review": -2, "draft": 3, "submit": 5, "validate": 5, "retry": 4, "test": 4, "php-facts": -1, "php-typed": -1}
 	if count, ok := argc[command]; !ok || (count >= 0 && len(args) != count) || (count == -1 && len(args) < 4) || (count == -2 && len(args) != 3 && len(args) != 4) || !slugRE.MatchString(runID) {
 		return nil, errors.New("неизвестная команда, неверные аргументы или недопустимый RUN_ID")
 	}
@@ -1143,7 +1161,7 @@ func execute(args []string) (any, error) {
 	// read-only commands and validate only check it, so corruption is never hidden as absence.
 	var journal []byte
 	var toolVersions toolVersionJournal
-	if readOnly || oneOf(command, "validate", "tasks", "php-facts") {
+	if readOnly || oneOf(command, "validate", "tasks", "draft", "php-facts") {
 		if toolVersions, err = readToolVersions(run); err != nil {
 			return nil, err
 		}
@@ -1161,6 +1179,11 @@ func execute(args []string) (any, error) {
 		}
 		if err := saveState(run, state, journal); err != nil {
 			return nil, err
+		}
+		for _, entry := range state.Entries {
+			if err := writeDispatch(run, entry.Task, m.Files); err != nil {
+				return nil, err
+			}
 		}
 	} else {
 		data, err := readRoot(run, "manifest.json", maxState)
@@ -1230,6 +1253,12 @@ func execute(args []string) (any, error) {
 			return submitReview(run, runID, m, state, args[3], journal)
 		}
 		return reviewContext(run, runID, m, state, fresh)
+	case "draft":
+		reviews, err := readReviews(run, runID, m)
+		if err != nil {
+			return nil, err
+		}
+		return draftDecision(runID, m, state, reviews)
 	case "report":
 		report := makeReport(runID, m, state, fresh)
 		view, err := reviewContext(run, runID, m, state, fresh)
@@ -1331,6 +1360,9 @@ func execute(args []string) (any, error) {
 		entry.Result = nil
 		entry.RawSHA256 = ""
 		if err := saveState(run, state, journal); err != nil {
+			return nil, err
+		}
+		if err := writeDispatch(run, entry.Task, nil); err != nil {
 			return nil, err
 		}
 		return entry.Task, nil
