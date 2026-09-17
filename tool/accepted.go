@@ -136,7 +136,7 @@ func applyAccepted(state acceptedState, raw legacyRaw, decision AcceptedDecision
 		switch operation.Action {
 		case "accept", "reject", "defer":
 			valid = p == 0 && n == 1
-		case "rebind", "revise":
+		case "rebind", "revise", "reanchor":
 			valid = p == 1 && n == 1
 		case "split":
 			valid = p == 1 && n >= 2 && n <= 64
@@ -166,6 +166,21 @@ func applyAccepted(state acceptedState, raw legacyRaw, decision AcceptedDecision
 				if target.Title != "" || target.Verification != "" {
 					return state, errors.New("reject/defer не задают title/verification")
 				}
+				continue
+			}
+			if operation.Action == "reanchor" {
+				// REQ-SA-043: the accepted content, ID, revision and hash stay; only the citations follow the candidate.
+				if target.Title != "" || target.Verification != "" {
+					return state, errors.New("reanchor сохраняет прежние title/verification; поля должны быть пустыми")
+				}
+				position := active[operation.Previous[0]]
+				req := state.Records[position].Requirement
+				meta := *req.Accepted
+				meta.Citations = append([]Citation{}, candidate.Citations...)
+				req.Accepted, req.Source = &meta, candidate.Citations[0]
+				state.Records[position] = acceptedRecord(req, "active", operation.Reason)
+				history.Assignments = append(history.Assignments, AcceptedAssignment{candidate.ID, req.ID})
+				slog.Debug("reconcile: reanchor", "id", req.ID, "candidate", candidate.ID)
 				continue
 			}
 			if strings.TrimSpace(target.Title) == "" || strings.TrimSpace(target.Verification) == "" {
@@ -292,7 +307,7 @@ func normativeAnchor(raw legacyRaw, decision AcceptedDecision, reference map[str
 	}
 	checked := 0
 	for _, operation := range decision.Operations {
-		if !oneOf(operation.Action, "accept", "rebind", "revise", "split", "merge") {
+		if !oneOf(operation.Action, "accept", "rebind", "revise", "reanchor", "split", "merge") {
 			continue
 		}
 		for _, target := range operation.Targets {
