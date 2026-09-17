@@ -57,6 +57,9 @@ func TestCheckAcceptance(t *testing.T) {
 		if _, err := os.Stat(reports); !os.IsNotExist(err) {
 			t.Fatal("check не должен создавать reports_dir")
 		}
+		if _, has := view["base_index_current"]; has {
+			t.Fatal("без DECISION признака base_index_current нет")
+		}
 		candidates := view["candidates"].([]checkedCandidate)
 		if len(candidates) != 2 || !candidates[0].Normative || candidates[1].Normative || len(candidates[0].Matches) != 0 {
 			t.Fatal("признак normative и пустые подсказки", candidates)
@@ -132,7 +135,7 @@ func TestCheckAcceptance(t *testing.T) {
 			t.Fatal("правка ТЗ должна давать stale", view["freshness"])
 		}
 		candidates := view["candidates"].([]checkedCandidate)
-		want := matchHint{"REQ-AI-001", 1, 1, 1, true}
+		want := matchHint{"REQ-AI-001", 1, 1, 1, 1, true}
 		if len(candidates[0].Matches) != 1 || candidates[0].Matches[0] != want {
 			t.Fatal("сдвиг строк не должен мешать подсказке", candidates[0].Matches)
 		}
@@ -152,17 +155,47 @@ func TestCheckAcceptance(t *testing.T) {
 	t.Run("hint_limit", func(t *testing.T) {
 		config, base := acceptedFixture(t)
 		candidates, ops := []legacyCandidate{}, []AcceptedOperation{}
-		for i, statement := range []string{"Первая", "Вторая", "Третья", "Четвёртая"} {
+		for i, statement := range []string{"Первая", "Вторая", "Третья", "Четвёртая", "Пятая"} {
 			id := "C00" + string(rune('1'+i))
 			candidates = append(candidates, candidateAt(t, base, "rules.md", id, statement, 2, 3))
 			ops = append(ops, acceptOperation("accept", []string{}, id))
 		}
-		raw, decision := acceptedInputs(t, config, "four", candidates, ops...)
+		raw, decision := acceptedInputs(t, config, "five", candidates, ops...)
 		runOK(t, "reconcile", config, raw, decision)
 		view := checkView(t, config, rawFile(t, config, "probe", []legacyCandidate{candidateAt(t, base, "rules.md", "C001", "Первая", 2, 3)}))
 		matches := view["candidates"].([]checkedCandidate)[0].Matches
-		if len(matches) != matchHintLimit || matches[0].ID != "REQ-AI-001" || !matches[0].FieldsEqual || matches[1].FieldsEqual {
-			t.Fatal("лимит подсказок и порядок по ID при равном overlap", matches)
+		if len(matches) != matchHintLimit || matchHintLimit != 4 || matches[0].ID != "REQ-AI-001" || !matches[0].FieldsEqual || matches[1].FieldsEqual || matches[0].UniqueShared != 0 {
+			t.Fatal("лимит подсказок, порядок по ID при равном overlap, общие строки не уникальны", matches)
+		}
+	})
+	t.Run("unique_shared", func(t *testing.T) {
+		config, base := acceptedFixture(t)
+		// Two norms share line 2; line 3 belongs to the first norm alone.
+		wide := candidateAt(t, base, "rules.md", "C001", "Лимит и название", 2, 3)
+		narrow := candidateAt(t, base, "rules.md", "C002", "Только лимит", 2, 2)
+		raw, decision := acceptedInputs(t, config, "pair", []legacyCandidate{wide, narrow}, acceptOperation("accept", []string{}, "C001"), acceptOperation("accept", []string{}, "C002"))
+		runOK(t, "reconcile", config, raw, decision)
+		view := checkView(t, config, rawFile(t, config, "probe", []legacyCandidate{
+			candidateAt(t, base, "rules.md", "C001", "Лимит и название", 2, 3),
+			candidateAt(t, base, "rules.md", "C002", "Только лимит", 2, 2)}))
+		candidates := view["candidates"].([]checkedCandidate)
+		byID := func(matches []matchHint, id string) matchHint {
+			for _, match := range matches {
+				if match.ID == id {
+					return match
+				}
+			}
+			t.Fatal("нет подсказки", id, matches)
+			return matchHint{}
+		}
+		if first := byID(candidates[0].Matches, "REQ-AI-001"); first.SharedLines != 2 || first.UniqueShared != 1 {
+			t.Fatal("уникальная строка 3 должна учитываться один раз", first)
+		}
+		if second := byID(candidates[0].Matches, "REQ-AI-002"); second.SharedLines != 1 || second.UniqueShared != 0 {
+			t.Fatal("общая строка 2 не уникальна", second)
+		}
+		if only := byID(candidates[1].Matches, "REQ-AI-002"); only.UniqueShared != 0 || only.Overlap != 1 {
+			t.Fatal("кандидат из одной общей строки", only)
 		}
 	})
 	t.Run("decision", func(t *testing.T) {
@@ -174,7 +207,7 @@ func TestCheckAcceptance(t *testing.T) {
 		raw, decision := acceptedInputs(t, config, "accept", []legacyCandidate{first}, acceptOperation("accept", []string{}, "C001"))
 		view := checkView(t, config, raw, decision)
 		want := []checkedAssignment{{"C001", "REQ-AI-001", "accept", 1, []string{}}}
-		if view["valid"] != true || view["duplicate"] != false || !reflect.DeepEqual(assignmentsOf(view), want) || len(view["retired"].([]string)) != 0 || view["next_head"] == view["base_index"] {
+		if view["valid"] != true || view["duplicate"] != false || view["base_index_current"] != true || !reflect.DeepEqual(assignmentsOf(view), want) || len(view["retired"].([]string)) != 0 || view["next_head"] == view["base_index"] {
 			t.Fatal("dry-run accept", view)
 		}
 		if _, err := os.Stat(reports); !os.IsNotExist(err) {
@@ -196,6 +229,9 @@ func TestCheckAcceptance(t *testing.T) {
 		}
 		if _, has := replay["freshness"]; has {
 			t.Fatal("duplicate не подтверждает свежесть")
+		}
+		if _, has := replay["base_index_current"]; has {
+			t.Fatal("duplicate не утверждает актуальность base_index")
 		}
 		again := runOK(t, "reconcile", config, raw, decision).(map[string]any)
 		if _, has := again["freshness"]; has || again["duplicate"] != true {

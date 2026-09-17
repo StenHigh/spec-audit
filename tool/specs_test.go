@@ -97,3 +97,30 @@ func TestScopeAdvisories(t *testing.T) {
 		t.Fatal("LOG_LEVEL=error должен молчать", stderr)
 	}
 }
+
+// tool-spec §22.2: stale scopes name the scope and the IDs instead of a bare refusal.
+func TestScopeAssignmentErrors(t *testing.T) {
+	config, _ := fixture(t)
+	plain := readFixture(t, config)
+	check := func(scopes string, fragments ...string) {
+		t.Helper()
+		writeFixture(t, config, bytes.Replace(plain, []byte("scopes: []\n"), []byte(scopes), 1))
+		_, err := execute([]string{"index", config})
+		if err == nil {
+			t.Fatal("устаревшие scopes должны быть отклонены", scopes)
+		}
+		for _, fragment := range fragments {
+			if !strings.Contains(err.Error(), fragment) {
+				t.Fatalf("ошибка %q не называет %q", err, fragment)
+			}
+		}
+	}
+	writeFixture(t, config, bytes.Replace(plain, []byte("scopes: []\n"), []byte(scopesYAML(5)), 1))
+	runOK(t, "index", config)
+	check("scopes: [{id: stale, focus: 'A', requirements: [REQ-DEMO-001, REQ-DEMO-009]}, {id: rest, focus: 'B', requirements: [REQ-DEMO-002, REQ-DEMO-003, REQ-DEMO-004, REQ-DEMO-005]}]\n",
+		"scope stale", "неизвестные ID [REQ-DEMO-009]", "повторно назначенные []")
+	check("scopes: [{id: a, focus: 'A', requirements: [REQ-DEMO-001, REQ-DEMO-002]}, {id: b, focus: 'B', requirements: [REQ-DEMO-001, REQ-DEMO-003, REQ-DEMO-004, REQ-DEMO-005]}]\n",
+		"scope b", "неизвестные ID []", "повторно назначенные [REQ-DEMO-001]")
+	check("scopes: [{id: part, focus: 'A', requirements: [REQ-DEMO-001, REQ-DEMO-002]}]\n",
+		"не распределены по scope: [REQ-DEMO-003 REQ-DEMO-004 REQ-DEMO-005]")
+}

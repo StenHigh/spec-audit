@@ -949,3 +949,82 @@ func TestReferenceSources(t *testing.T) {
 		runFail(t, "index", config)
 	})
 }
+
+// tool-spec §22 / REQ-SA-043: reanchor keeps the accepted content, ID, revision and hash; only citations follow the candidate.
+func TestReanchor(t *testing.T) {
+	config, base := acceptedFixture(t)
+	rules := filepath.Join(base, "source/rules.md")
+	first := candidateAt(t, base, "rules.md", "C001", "Лимит 8 МиБ", 2, 2)
+	raw, decision := acceptedInputs(t, config, "first", []legacyCandidate{first}, acceptOperation("accept", []string{}, "C001"))
+	runOK(t, "reconcile", config, raw, decision)
+	before := acceptedRead(t, config).Records[0]
+	reanchor := func(previous string, candidate string) AcceptedOperation {
+		return AcceptedOperation{"reanchor", []string{previous}, []AcceptedTarget{{candidate, "", ""}}, "Та же норма в новой редакции текста"}
+	}
+	// The text moves and the extractor rephrases the norm; the host keeps the accepted wording.
+	writeFixture(t, rules, append([]byte("Вводная строка.\n"), readFixture(t, rules)...))
+	moved := candidateAt(t, base, "rules.md", "C001", "Ограничение размера 8 МиБ", 3, 3)
+	raw, decision = acceptedInputs(t, config, "reanchor", []legacyCandidate{moved}, reanchor("REQ-AI-001", "C001"))
+	preview := checkView(t, config, raw, decision)
+	if got := preview["assignments"].([]checkedAssignment); !reflect.DeepEqual(got, []checkedAssignment{{"C001", "REQ-AI-001", "reanchor", 1, []string{"REQ-AI-001"}}}) || len(preview["retired"].([]string)) != 0 {
+		t.Fatal("dry-run reanchor", preview)
+	}
+	runOK(t, "reconcile", config, raw, decision)
+	state := acceptedRead(t, config)
+	after := state.Records[0]
+	if after.Requirement.ID != "REQ-AI-001" || after.Revision != 1 || after.Requirement.ContentHash != before.Requirement.ContentHash ||
+		after.Requirement.Title != before.Requirement.Title || after.Requirement.Statement != before.Requirement.Statement ||
+		after.Requirement.Verification != before.Requirement.Verification || after.Clarity != before.Clarity ||
+		!reflect.DeepEqual(after.Requirement.Accepted.Unresolved, before.Requirement.Accepted.Unresolved) {
+		t.Fatal("reanchor изменил принятое содержание", before, after)
+	}
+	if !reflect.DeepEqual(after.Requirement.Accepted.Citations, moved.Citations) || after.Requirement.Source != moved.Citations[0] || after.Reason != "Та же норма в новой редакции текста" {
+		t.Fatal("reanchor должен взять цитаты кандидата", after.Requirement.Accepted.Citations)
+	}
+	if !reflect.DeepEqual(state.History[1].Assignments, []AcceptedAssignment{{"C001", "REQ-AI-001"}}) || !reflect.DeepEqual(acceptedRead(t, config).Records, state.Records) {
+		t.Fatal("история и повторное чтение журнала", state.History[1])
+	}
+	// Refusals: filled title/verification, unknown previous; the ledger stays as applied.
+	ledgerBytes := readFixture(t, filepath.Join(base, "runs", acceptedFile))
+	titled := reanchor("REQ-AI-001", "C001")
+	titled.Targets[0].Title = "Норма"
+	raw, decision = acceptedInputs(t, config, "titled", []legacyCandidate{moved}, titled)
+	if _, err := execute([]string{"reconcile", config, raw, decision}); err == nil || !strings.Contains(err.Error(), "reanchor сохраняет") {
+		t.Fatal("непустой title", err)
+	}
+	raw, decision = acceptedInputs(t, config, "unknown", []legacyCandidate{moved}, reanchor("REQ-AI-009", "C001"))
+	if _, err := execute([]string{"reconcile", config, raw, decision}); err == nil || !strings.Contains(err.Error(), "previous") {
+		t.Fatal("неизвестный previous", err)
+	}
+	if !bytes.Equal(ledgerBytes, readFixture(t, filepath.Join(base, "runs", acceptedFile))) {
+		t.Fatal("отказы изменили журнал")
+	}
+	// Roles receive the new citations; the old range is no longer an accepted range.
+	batch := runOK(t, "prepare", config, "re-run").(TaskBatch)
+	task := batch.Tasks[0]
+	if task.Requirements[0].Accepted.Citations[0].LineStart != 3 || task.Requirements[0].Accepted.Revision != 1 {
+		t.Fatal("задание должно нести новые цитаты и прежнюю редакцию", task.Requirements[0])
+	}
+	result := func(spec Citation) string {
+		path := filepath.Join(t.TempDir(), "result.json")
+		writeFixture(t, path, legacyMarshal(t, Result{TaskID: task.TaskID, Attempt: task.Attempt, SnapshotID: task.SnapshotID, Role: task.Role, Scope: task.Scope,
+			Summary: "Проверка после reanchor", Limitations: []string{}, Assessments: []Assessment{{RequirementID: "REQ-AI-001", Specification: "clear", Implementation: "unknown", Assertion: "unknown",
+				Statement: "Реализация не найдена", Spec: []Citation{spec}, Code: []Citation{}, Tests: []TestCitation{}, Limitations: []string{}}}}))
+		return path
+	}
+	runOK(t, "validate", config, "re-run", task.TaskID, result(moved.Citations[0]))
+	if _, err := execute([]string{"validate", config, "re-run", task.TaskID, result(candidateAt(t, base, "rules.md", "C009", "", 2, 2).Citations[0])}); err == nil || !strings.Contains(err.Error(), "вне блока") {
+		t.Fatal("старый диапазон больше не принят", err)
+	}
+	// Reference-only candidate cannot reanchor a norm (REQ-SA-041 guard).
+	config, base = referenceFixture(t)
+	mixed := candidateAt(t, base, "rules.md", "C001", "Уведомить при задержке", 4, 4)
+	mixed.Citations = append(mixed.Citations, candidateAt(t, base, "clarification.md", "C001", "", 3, 3).Citations[0])
+	raw, decision = acceptedInputs(t, config, "mixed", []legacyCandidate{mixed}, acceptOperation("accept", []string{}, "C001"))
+	runOK(t, "reconcile", config, raw, decision)
+	only := candidateAt(t, base, "clarification.md", "C001", "Срок по договору", 3, 3)
+	raw, decision = acceptedInputs(t, config, "guard", []legacyCandidate{only}, reanchor("REQ-AI-001", "C001"))
+	if _, err := execute([]string{"reconcile", config, raw, decision}); err == nil || !strings.Contains(err.Error(), "C001") {
+		t.Fatal("guard нормативной цитаты", err)
+	}
+}
