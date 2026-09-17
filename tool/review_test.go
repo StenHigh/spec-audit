@@ -537,13 +537,24 @@ func TestReviewV2(t *testing.T) {
 	if report.HostReview.State != "current" || report.HostReview.Form != "verdicts" || report.HostReview.Latest == nil || len(report.HostReview.Latest.Assessments) != 5 || len(report.HostReview.Latest.Assessments[1].Code) != 1 || report.HostReview.Concur["REQ-DEMO-003"] != "redteam" {
 		t.Fatalf("отчёт должен показать решение version 2 с принятыми свидетельствами: state=%s form=%s", report.HostReview.State, report.HostReview.Form)
 	}
-	if html := readFixture(t, filepath.Join(base, "runs/review/report.html")); !bytes.Contains(html, []byte("Решение хоста")) {
-		t.Fatal("HTML без блока решения хоста")
+	if report.Requirements[0].Navigation.HostConcur != "по redteam" || report.Requirements[4].Navigation.HostConcur != "по redteam" {
+		t.Fatal("навигация должна называть принятые свидетельства", report.Requirements[0].Navigation.HostConcur)
+	}
+	if html := readFixture(t, filepath.Join(base, "runs/review/report.html")); !bytes.Contains(html, []byte("Свидетельства решения хоста — по redteam")) || !bytes.Contains(html, []byte("Форма решения — вердикты (version 2)")) {
+		t.Fatal("HTML без подписи concur/формы решения")
+	}
+	// §23.1: the derived role list mirrors entries without repeating their bodies.
+	roles := view.Roles
+	if len(roles) != 2 || roles[0].TaskID != batch.Tasks[0].TaskID || roles[0].Role != batch.Tasks[0].Role || roles[0].Scope != "all" || roles[0].Attempt != 1 || !roles[0].Submitted || roles[0].RawSHA256 == "" {
+		t.Fatal("roles[] должен описывать задания", roles)
 	}
 	runOK(t, "retry", config, "review", batch.Tasks[0].TaskID)
 	after := runOK(t, "review", config, "review").(ReviewContext)
 	if after.State != "outdated" || len(after.History) != 2 || after.Latest == nil {
 		t.Fatal("retry должен сделать решение outdated, сохранив историю", after.State, len(after.History))
+	}
+	if after.Roles[0].Submitted || after.Roles[0].Attempt != 2 || after.Roles[0].RawSHA256 != "" || !after.Roles[1].Submitted {
+		t.Fatal("roles[] после retry", after.Roles)
 	}
 	runOK(t, "report", config, "review")
 }

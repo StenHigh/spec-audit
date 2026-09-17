@@ -106,6 +106,16 @@ func (record reviewRecord) decision() *ReviewDecision {
 	return &ReviewDecision{record.Version, record.ReviewID, record.RunID, record.SnapshotID, record.BasisSHA256, record.Reviewer, record.Summary, record.Assessments, record.Limitations}
 }
 
+// RoleEntry is the derived per-task line of the review context (tool-spec §23.1); entries stay as they are.
+type RoleEntry struct {
+	TaskID    string `json:"task_id"`
+	Role      string `json:"role"`
+	Scope     string `json:"scope"`
+	Attempt   int    `json:"attempt"`
+	Submitted bool   `json:"submitted"`
+	RawSHA256 string `json:"raw_sha256,omitempty"`
+}
+
 type ReviewContext struct {
 	RunID            string `json:"run_id"`
 	SnapshotID       string `json:"snapshot_id"`
@@ -113,9 +123,24 @@ type ReviewContext struct {
 	Freshness        string `json:"freshness"`
 	ReviewSummary
 	Requirements []Requirement `json:"requirements"`
+	Roles        []RoleEntry   `json:"roles"`
 	Entries      []Entry       `json:"entries"`
 	Executions   []Receipt     `json:"executions"`
 }
+
+func roleEntries(state State) []RoleEntry {
+	roles := []RoleEntry{}
+	submitted := 0
+	for _, entry := range state.Entries {
+		if entry.Result != nil {
+			submitted++
+		}
+		roles = append(roles, RoleEntry{entry.Task.TaskID, entry.Task.Role, entry.Task.Scope, entry.Task.Attempt, entry.Result != nil, entry.RawSHA256})
+	}
+	slog.Debug("review: контекст", "roles", len(roles), "submitted", submitted)
+	return roles
+}
+
 type RawProvenance struct {
 	TaskID  string `json:"task_id"`
 	Attempt int    `json:"attempt"`
@@ -399,7 +424,7 @@ func reviewContext(run *os.Root, runID string, m Manifest, state State, fresh bo
 		return ReviewContext{}, err
 	}
 	status := makeStatus(runID, m, state, fresh)
-	return ReviewContext{runID, m.SnapshotID, status.DeliveryComplete, status.Freshness, summarizeReviews(runID, m, state, fresh, journal), m.Requirements, state.Entries, state.Executions}, nil
+	return ReviewContext{runID, m.SnapshotID, status.DeliveryComplete, status.Freshness, summarizeReviews(runID, m, state, fresh, journal), m.Requirements, roleEntries(state), state.Entries, state.Executions}, nil
 }
 func submitReview(run *os.Root, runID string, m Manifest, state State, path string, versions []byte) (any, error) {
 	slog.Debug("проверка согласования", "run_id", runID)

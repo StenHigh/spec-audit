@@ -71,7 +71,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (§7 к�
 <!-- Commit checkpoint: tasks 1-2 -->
 
 ### Phase 2: Отчёт, HTML и список ролей
-- [ ] Task 3: `roles[]` в `review CONFIG RUN_ID`; `concur`/`form` в `ReviewSummary`
+- [x] Task 3: `roles[]` в `review CONFIG RUN_ID`; `concur`/`form` в `ReviewSummary`
   - Deliverable: `tool/review.go`: `type RoleEntry struct{TaskID, Role, Scope string; Attempt int; Submitted bool; RawSHA256 string}` (json snake_case, `raw_sha256,omitempty`); `ReviewContext.Roles []RoleEntry json:"roles"` — из `state.Entries` в порядке entries; `ReviewSummary` получает `Form string json:"form,omitempty"` (`assessments`|`verdicts` для latest) и `Concur map[string]string json:"concur,omitempty"`; `summarizeReviews` заполняет их из нормализованной записи; `ReviewHistory` без изменений. Тесты: `TestReviewV2/roles` — `review CONFIG RUN_ID` до и после submit одной роли: `roles[i].submitted` меняется, `entries` прежние; `form`/`concur` после v2.
   - Files: `tool/review.go`, `tool/review_test.go`
   - Depends: 2
@@ -79,7 +79,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (§7 к�
   - Logging: DEBUG «review: контекст» {roles, submitted}.
   - REQ: 23.1, REQ-SA-013
 
-- [ ] Task 4: отчёт и HTML — подпись «по mapper/redteam/обеим ролям» у решения хоста
+- [x] Task 4: отчёт и HTML — подпись «по mapper/redteam/обеим ролям» у решения хоста
   - Deliverable: `tool/report.go`: `RequirementNavigation.HostConcur string json:"host_concur,omitempty"` из `report.HostReview.Concur[req.ID]`; `assess(...)` для host без изменений (синтезированные цитаты дают ссылки). `tool/report.html`: в карточке «Решение хоста» — `{{if .Navigation.HostConcur}}<small class="metric">свидетельства: {{…}}</small>{{end}}` с подписью «по mapper» / «по redteam» / «по обеим ролям»; в блоке «Согласование хоста» — форма решения (`verdicts`/`assessments`). Тесты: `TestReviewV2/report` — `report.json`: `navigation.host_concur == "both"`, host-цитаты присутствуют и ведут к файлам (`navigation.files[].evidence[].links` с origin `host · …`); HTML содержит «по обеим ролям»; для v1-решения `host_concur` отсутствует.
   - Files: `tool/report.go`, `tool/report.html`, `tool/review_test.go`
   - Depends: 3
