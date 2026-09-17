@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"syscall"
 )
@@ -379,56 +380,96 @@ func reconcile(cfg Config, paths []string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	for i, history := range state.History {
-		if history.Decision.DecisionID == decision.DecisionID {
-			commit := ledger.Commits[i]
-			if commit.Raw != string(rawBytes) || commit.Decision != string(decisionBytes) {
-				return nil, errors.New("decision_id уже принят с другими байтами")
-			}
-			return map[string]any{"accepted": true, "duplicate": true, "base_index": state.Head, "freshness_checked": false}, nil
-		}
-	}
-	if len(ledger.Commits) >= 128 {
-		return nil, errors.New("лимит 128 пакетов; история не усекается")
-	}
-	_, sources, reference, err := acceptedSources(cfg)
+	staged, err := stageAcceptance(cfg, ledger, state, &decision, rawBytes, decisionBytes)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := legacyValidate(rawBytes, sources)
-	if err != nil {
-		return nil, err
+	if staged.duplicate {
+		return map[string]any{"accepted": true, "duplicate": true, "base_index": state.Head, "freshness_checked": false}, nil
 	}
-	if err := normativeAnchor(raw, decision, reference); err != nil {
-		return nil, err
-	}
-	if len(reference) > 0 {
-		slog.Info("reconcile: справочные источники", "reference_files", len(reference))
-	}
-	state, err = applyAccepted(state, raw, decision, rawBytes, decisionBytes)
-	if err != nil {
-		return nil, err
-	}
-	ledger.Commits = append(ledger.Commits, acceptedCommit{string(rawBytes), string(decisionBytes)})
-	data, err := json.MarshalIndent(ledger, "", "  ")
-	if err != nil || len(data)+1 > maxState {
-		return nil, errors.New("журнал превышает 32 MiB; индекс не опубликован")
-	}
-	_, sources, _, err = acceptedSources(cfg)
+	_, sources, _, err := acceptedSources(cfg)
 	if err != nil {
 		return nil, err
 	}
 	if _, err := legacyValidate(rawBytes, sources); err != nil {
 		return nil, err
 	}
-	if err := atomicWrite(reports, acceptedFile, append(data, '\n'), 0600); err != nil {
+	if err := atomicWrite(reports, acceptedFile, append(staged.data, '\n'), 0600); err != nil {
 		return nil, err
 	}
 	// Same view as the read-only call; freshness is measured again under the held lock, not assumed.
-	view := acceptedView(cfg, ledger, state)
+	view := acceptedView(cfg, staged.ledger, staged.state)
 	view["accepted"], view["duplicate"] = true, false
-	slog.Debug("reconcile: view после apply", "freshness", view["freshness"], "records", len(state.Records))
+	slog.Debug("reconcile: view после apply", "freshness", view["freshness"], "records", len(staged.state.Records))
 	return view, nil
+}
+
+// stagedAcceptance is everything apply would publish, computed without touching the ledger (REQ-SA-042).
+type stagedAcceptance struct {
+	raw       legacyRaw
+	state     acceptedState
+	ledger    acceptedLedger
+	data      []byte
+	files     []SourceFile
+	reference map[string]bool
+	duplicate bool
+}
+
+// stageAcceptance runs the apply checks in apply order; decision == nil checks the raw alone (check CONFIG RAW).
+// The decision is decoded by the caller before the ledger is read, so error order matches apply.
+func stageAcceptance(cfg Config, ledger acceptedLedger, state acceptedState, decision *AcceptedDecision, rawBytes, decisionBytes []byte) (stagedAcceptance, error) {
+	staged := stagedAcceptance{state: state, ledger: ledger}
+	if decision != nil {
+		// An exact replay answers before any source is read: a historical duplicate proves nothing about freshness.
+		for i, history := range state.History {
+			if history.Decision.DecisionID == decision.DecisionID {
+				commit := ledger.Commits[i]
+				if commit.Raw != string(rawBytes) || commit.Decision != string(decisionBytes) {
+					return staged, errors.New("decision_id уже принят с другими байтами")
+				}
+				staged.duplicate = true
+				return staged, nil
+			}
+		}
+		if len(ledger.Commits) >= 128 {
+			return staged, errors.New("лимит 128 пакетов; история не усекается")
+		}
+	}
+	set, sources, reference, err := acceptedSources(cfg)
+	if err != nil {
+		return staged, err
+	}
+	raw, err := legacyValidate(rawBytes, sources)
+	if err != nil {
+		return staged, err
+	}
+	staged.raw, staged.reference = raw, reference
+	for _, source := range set {
+		staged.files = append(staged.files, SourceFile{Path: source.Path, Kind: "spec", SHA256: source.SHA256, Reference: reference[source.Path]})
+	}
+	if decision == nil {
+		return staged, nil
+	}
+	if err := normativeAnchor(raw, *decision, reference); err != nil {
+		return staged, err
+	}
+	if len(reference) > 0 {
+		slog.Info("reconcile: справочные источники", "reference_files", len(reference))
+	}
+	next, err := applyAccepted(state, raw, *decision, rawBytes, decisionBytes)
+	if err != nil {
+		return staged, err
+	}
+	// A copied commit list: the caller's ledger keeps its backing array untouched.
+	commits := append(append([]acceptedCommit{}, ledger.Commits...), acceptedCommit{string(rawBytes), string(decisionBytes)})
+	staged.ledger = acceptedLedger{Version: ledger.Version, Commits: commits}
+	data, err := json.MarshalIndent(staged.ledger, "", "  ")
+	if err != nil || len(data)+1 > maxState {
+		return staged, errors.New("журнал превышает 32 MiB; индекс не опубликован")
+	}
+	staged.state, staged.data = next, data
+	slog.Debug("reconcile: staging", "operations", len(decision.Operations), "records_after", len(next.Records))
+	return staged, nil
 }
 
 // acceptedSource is the view form of a source_set entry; the raw format (legacySource) stays unchanged.
@@ -438,23 +479,218 @@ type acceptedSource struct {
 	Reference bool   `json:"reference,omitempty"`
 }
 
+// acceptedFreshness is the single derivation shared by the read view and check (tool-spec §21).
+func acceptedFreshness(ledger acceptedLedger, state acceptedState, files []SourceFile) string {
+	if len(ledger.Commits) == 0 {
+		return "uninitialized"
+	}
+	if acceptedFresh(state, files) {
+		return "fresh"
+	}
+	return "stale"
+}
+
+func sourcesView(files []SourceFile) []acceptedSource {
+	set := []acceptedSource{}
+	for _, file := range files {
+		if file.Kind == "spec" {
+			set = append(set, acceptedSource{file.Path, file.SHA256, file.Reference})
+		}
+	}
+	return set
+}
+
 func acceptedView(cfg Config, ledger acceptedLedger, state acceptedState) map[string]any {
 	freshness := "unavailable"
 	m, scanErr := scanSnapshot(cfg)
 	set := []acceptedSource{}
 	if scanErr == nil {
-		freshness = "stale"
-		if len(ledger.Commits) == 0 {
-			freshness = "uninitialized"
-		} else if acceptedFresh(state, m.Files) {
-			freshness = "fresh"
-		}
-		for _, file := range m.Files {
-			if file.Kind == "spec" {
-				set = append(set, acceptedSource{file.Path, file.SHA256, file.Reference})
-			}
-		}
+		freshness = acceptedFreshness(ledger, state, m.Files)
+		set = sourcesView(m.Files)
 	}
 	return map[string]any{"base_index": state.Head, "source_set": set, "freshness": freshness,
 		"records": state.Records, "history": state.History, "journal": ledger, "semantic_completeness_proven": false}
+}
+
+// tool-spec §21.1: hints pair a candidate with previous active records by shared exact citation lines.
+// Threshold and limit come from the pilot replay accept-001→accept-002 (49 mapped candidates): Jaccard ranking put the
+// true ID first in 48/49; at 0.1 the truth was within three hints in 49/49, at 0.5 in only 28/49 because added
+// reference citations dilute the overlap. A hint is never semantic equivalence and never a decision.
+const (
+	matchHintThreshold = 0.1
+	matchHintLimit     = 3
+)
+
+type matchHint struct {
+	ID          string  `json:"id"`
+	Revision    int     `json:"revision"`
+	Overlap     float64 `json:"overlap"`
+	SharedLines int     `json:"shared_lines"`
+	FieldsEqual bool    `json:"fields_equal"`
+}
+
+type checkedCandidate struct {
+	ID        string      `json:"id"`
+	Clarity   string      `json:"clarity"`
+	Normative bool        `json:"normative"`
+	Matches   []matchHint `json:"matches"`
+}
+
+func quoteLines(citations []Citation) map[string]bool {
+	lines := map[string]bool{}
+	for _, cite := range citations {
+		for _, line := range strings.Split(cite.Quote, "\n") {
+			lines[line] = true
+		}
+	}
+	return lines
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// fieldsEqual: with the record's title/verification the candidate would hash to the same content (rebind possible).
+func fieldsEqual(candidate legacyCandidate, req Requirement) bool {
+	return req.Accepted != nil && candidate.Condition == req.Condition && candidate.Statement == req.Statement &&
+		candidate.Clarity == req.Accepted.Clarity && sameStrings(candidate.Exceptions, req.Accepted.Exceptions) &&
+		sameStrings(candidate.Unresolved, req.Accepted.Unresolved)
+}
+
+func matchHints(candidate legacyCandidate, records []AcceptedRecord) []matchHint {
+	lines := quoteLines(candidate.Citations)
+	hints := []matchHint{}
+	for _, record := range records {
+		if record.Status != "active" || record.Requirement.Accepted == nil {
+			continue
+		}
+		other := quoteLines(record.Requirement.Accepted.Citations)
+		shared := 0
+		for line := range lines {
+			if other[line] {
+				shared++
+			}
+		}
+		union := len(lines) + len(other) - shared
+		if shared == 0 || union == 0 {
+			continue
+		}
+		overlap := float64(shared) / float64(union)
+		if overlap < matchHintThreshold {
+			continue
+		}
+		hints = append(hints, matchHint{record.Requirement.ID, record.Revision, overlap, shared, fieldsEqual(candidate, record.Requirement)})
+	}
+	sort.Slice(hints, func(i, j int) bool {
+		if hints[i].Overlap != hints[j].Overlap {
+			return hints[i].Overlap > hints[j].Overlap
+		}
+		return hints[i].ID < hints[j].ID
+	})
+	if len(hints) > matchHintLimit {
+		hints = hints[:matchHintLimit]
+	}
+	return hints
+}
+
+func checkedCandidates(raw legacyRaw, state acceptedState, reference map[string]bool) []checkedCandidate {
+	result := []checkedCandidate{}
+	hinted := 0
+	for _, candidate := range raw.Candidates {
+		normative := false
+		for _, cite := range candidate.Citations {
+			if !reference[cite.Path] {
+				normative = true
+				break
+			}
+		}
+		matches := matchHints(candidate, state.Records)
+		if len(matches) > 0 {
+			hinted++
+		}
+		slog.Debug("check: подсказки сопоставления", "candidate", candidate.ID, "matches", len(matches))
+		result = append(result, checkedCandidate{candidate.ID, candidate.Clarity, normative, matches})
+	}
+	slog.Debug("check: кандидаты с подсказками", "hinted", hinted, "candidates", len(result))
+	return result
+}
+
+type checkedAssignment struct {
+	Candidate     string   `json:"candidate"`
+	RequirementID string   `json:"requirement_id"`
+	Action        string   `json:"action"`
+	Revision      int      `json:"revision"`
+	Previous      []string `json:"previous"`
+}
+
+// checkAcceptance is the write-free twin of the apply path: the same checks in the same order, no lock, no files (REQ-SA-042).
+func checkAcceptance(cfg Config, paths []string) (any, error) {
+	if cfg.IndexMode != "accepted" {
+		return nil, errors.New("check требует index_mode: accepted")
+	}
+	rawBytes, err := readPath(paths[0], maxResult)
+	if err != nil {
+		return nil, err
+	}
+	var decision *AcceptedDecision
+	var decisionBytes []byte
+	if len(paths) == 2 {
+		if decisionBytes, err = readPath(paths[1], maxResult); err != nil {
+			return nil, err
+		}
+		decision = &AcceptedDecision{}
+		if err := legacyDecode(decisionBytes, decision); err != nil {
+			return nil, err
+		}
+	}
+	ledger, state, err := readAccepted(cfg.ReportsDir)
+	if err != nil {
+		return nil, err
+	}
+	staged, err := stageAcceptance(cfg, ledger, state, decision, rawBytes, decisionBytes)
+	if err != nil {
+		return nil, err
+	}
+	if staged.duplicate {
+		slog.Info("check: приёмка проверена", "candidates", 0, "decision", true, "duplicate", true)
+		return map[string]any{"valid": true, "duplicate": true, "base_index": state.Head}, nil
+	}
+	candidates := checkedCandidates(staged.raw, state, staged.reference)
+	view := map[string]any{"valid": true, "base_index": state.Head, "freshness": acceptedFreshness(ledger, state, staged.files),
+		"source_set": sourcesView(staged.files), "candidates": candidates}
+	if decision == nil {
+		slog.Info("check: приёмка проверена", "candidates", len(candidates), "decision", false, "freshness", view["freshness"])
+		return view, nil
+	}
+	operations := map[string]AcceptedOperation{}
+	for _, operation := range decision.Operations {
+		for _, target := range operation.Targets {
+			operations[target.Candidate] = operation
+		}
+	}
+	revisions := map[string]int{}
+	retired := []string{}
+	for i, record := range staged.state.Records {
+		revisions[record.Requirement.ID] = record.Revision
+		if record.Status == "retired" && (i >= len(state.Records) || state.Records[i].Status == "active") {
+			retired = append(retired, record.Requirement.ID)
+		}
+	}
+	assignments := []checkedAssignment{}
+	for _, assignment := range staged.state.History[len(staged.state.History)-1].Assignments {
+		operation := operations[assignment.Candidate]
+		assignments = append(assignments, checkedAssignment{assignment.Candidate, assignment.RequirementID, operation.Action,
+			revisions[assignment.RequirementID], append([]string{}, operation.Previous...)})
+	}
+	view["duplicate"], view["next_head"], view["assignments"], view["retired"] = false, staged.state.Head, assignments, retired
+	slog.Info("check: приёмка проверена", "candidates", len(candidates), "decision", true, "assignments", len(assignments), "retired", len(retired), "duplicate", false)
+	return view, nil
 }
