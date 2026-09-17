@@ -56,7 +56,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (отв�
   - Logging: нет нового.
   - REQ: REQ-SA-037
 
-- [ ] Task 4: релиз `v0.1.15`, update хоста/пилота/синтетики (коммиты skill), read-only на пилоте
+- [x] Task 4: релиз `v0.1.15`, update хоста/пилота/синтетики (коммиты skill), read-only на пилоте
   - Deliverable: merge, тег, approve; `update`; `skill update` + коммиты; read-only на пилоте: `index CONFIG` → `advisories: []`; `prepare`-ответ не проверяется (создаёт run) — `tasks CONFIG finance-2026-09-18-01` → `sdk: []`; README — строка релиза.
   - Files: `README.md`
   - Depends: 3
