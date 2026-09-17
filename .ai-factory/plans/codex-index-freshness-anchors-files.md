@@ -90,7 +90,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (отв�
   - Logging: нет нового.
   - REQ: REQ-SA-037, 26.1–26.3
 
-- [ ] Task 5: релиз `v0.1.12`, обновление хоста/пилота/синтетики, read-only `index` на пилоте
+- [x] Task 5: релиз `v0.1.12`, обновление хоста/пилота/синтетики, read-only `index` на пилоте
   - Deliverable: merge в `codex/bootstrap` (по подтверждению владельца), тег `v0.1.12`, approve deployment; `spec-audit update` → 0.1.12; `skill update --host both` в синтетике и пилоте (коммиты — по запросу); read-only на пилоте: `index CONFIG` → `freshness: fresh`, `advisories` (какие из 6 якорей текста норм определены заголовками в snapshot, какие — нет); ledger не тронут. README «Приёмка и ограничения» — строка релиза 0.1.12.
   - Files: `README.md`; (пилот и синтетика — вне репозитория)
   - Depends: 4
