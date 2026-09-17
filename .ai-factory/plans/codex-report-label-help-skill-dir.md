@@ -67,7 +67,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (поз�
 <!-- Commit checkpoint: tasks 1-2 -->
 
 ### Phase 2: Документация и поставка
-- [ ] Task 3: README, ROADMAP, документ применения
+- [x] Task 3: README, ROADMAP, документ применения
   - Deliverable: README «Быстрый старт»/«Первый запуск»: `spec-audit help` (`--help`, `-h`) печатает список команд JSON, `--version` = `version`; `skill install|update --dir` — корень проекта, `.spec-audit` и `.spec-audit/skill` принимаются и нормализуются; абзац о `review`/HTML — подпись «свидетельства …». README «Приёмка и ограничения» — строка §24.3–24.5 (реализовано; регрессии `TestReviewV2`, `TestHelpVersion`, `TestSkillDirNormalization`; не проверено до релиза: пилот). ROADMAP «Уроки четвёртого прогона» — 6, 9, 10 `[x]` с датой и свидетельствами; строка таблицы этапов. docs/smsplace-adoption.md «третий цикл» — сноска, что ложный отказ `--dir` и подпись исправлены в 0.1.10.
   - Files: `README.md`, `.ai-factory/ROADMAP.md`, `docs/smsplace-adoption.md`
   - Depends: 2
