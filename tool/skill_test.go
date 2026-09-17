@@ -469,4 +469,38 @@ func TestSkillCommandFlags(t *testing.T) {
 	if err != nil || got["updated"] != true || got["version"] != "dev" {
 		t.Fatalf("%v %v", err, got)
 	}
+	// tool-spec §24.5: the skill directory itself names the same project root.
+	if again, err := runSkillCommand([]string{"update", "-dir", filepath.Join(dir, ".spec-audit"), "-host", "claude"}, "dev"); err != nil || again["dir"] != dir || again["updated"] != false {
+		t.Fatalf("нормализация --dir: %v %v", err, again)
+	}
+}
+
+// tool-spec §24.5: --dir accepts the project root, .spec-audit and .spec-audit/skill; a missing install names the full path.
+func TestSkillDirNormalization(t *testing.T) {
+	root := t.TempDir()
+	for _, given := range []string{root, filepath.Join(root, ".spec-audit"), filepath.Join(root, ".spec-audit", "skill")} {
+		if got := skillProjectRoot(given); got != root {
+			t.Fatalf("%s → %s", given, got)
+		}
+	}
+	other := filepath.Join(root, "skill")
+	if skillProjectRoot(other) != other || skillProjectRoot(filepath.Join(root, "x", ".spec-audit", "y")) != filepath.Join(root, "x", ".spec-audit", "y") {
+		t.Fatal("нормализация не должна трогать другие пути")
+	}
+	if _, err := runSkillCommand([]string{"update", "--dir", root, "--host", "both"}, "dev"); err == nil || !strings.Contains(err.Error(), filepath.Join(root, ".spec-audit", "skill")) || !strings.Contains(err.Error(), "корень проекта") {
+		t.Fatal("отказ должен назвать полный путь и семантику --dir", err)
+	}
+	if _, err := runSkillCommand([]string{"install", "--dir", root, "--host", "both"}, "dev"); err != nil {
+		t.Fatal(err)
+	}
+	before := treeSnapshot(t, root)
+	for _, given := range []string{filepath.Join(root, ".spec-audit"), filepath.Join(root, ".spec-audit", "skill")} {
+		got, err := runSkillCommand([]string{"update", "--dir", given, "--host", "both"}, "dev")
+		if err != nil || got["dir"] != root || got["updated"] != false || got["skill"] != filepath.Join(root, ".spec-audit", "skill") {
+			t.Fatalf("%s: %v %v", given, err, got)
+		}
+	}
+	if !sameTree(before, treeSnapshot(t, root)) {
+		t.Fatal("update через нормализованный --dir изменил дерево")
+	}
 }

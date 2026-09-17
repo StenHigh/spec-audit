@@ -542,10 +542,10 @@ func TestReviewV2(t *testing.T) {
 	if report.HostReview.State != "current" || report.HostReview.Form != "verdicts" || report.HostReview.Latest == nil || len(report.HostReview.Latest.Assessments) != 5 || len(report.HostReview.Latest.Assessments[1].Code) != 1 || report.HostReview.Concur["REQ-DEMO-003"] != "redteam" {
 		t.Fatalf("отчёт должен показать решение version 2 с принятыми свидетельствами: state=%s form=%s", report.HostReview.State, report.HostReview.Form)
 	}
-	if report.Requirements[0].Navigation.HostConcur != "по redteam" || report.Requirements[4].Navigation.HostConcur != "по redteam" {
+	if report.Requirements[0].Navigation.HostConcur != "свидетельства redteam" || report.Requirements[4].Navigation.HostConcur != "свидетельства redteam" {
 		t.Fatal("навигация должна называть принятые свидетельства", report.Requirements[0].Navigation.HostConcur)
 	}
-	if html := readFixture(t, filepath.Join(base, "runs/review/report.html")); !bytes.Contains(html, []byte("Свидетельства решения хоста — по redteam")) || !bytes.Contains(html, []byte("Форма решения — вердикты (version 2)")) {
+	if html := readFixture(t, filepath.Join(base, "runs/review/report.html")); !bytes.Contains(html, []byte("Решение хоста опирается на свидетельства redteam")) || !bytes.Contains(html, []byte("Форма решения — вердикты (version 2)")) || !bytes.Contains(html, []byte("не согласие роли с вердиктом")) {
 		t.Fatal("HTML без подписи concur/формы решения")
 	}
 	// §23.1: the derived role list mirrors entries without repeating their bodies.

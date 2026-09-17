@@ -48,11 +48,11 @@ type RequirementNavigation struct {
 func hostConcurLabel(concur string) string {
 	switch concur {
 	case "mapper":
-		return "по mapper"
+		return "свидетельства mapper"
 	case "redteam":
-		return "по redteam"
+		return "свидетельства redteam"
 	case "both":
-		return "по обеим ролям"
+		return "свидетельства обеих ролей"
 	}
 	return ""
 }

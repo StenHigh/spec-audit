@@ -796,3 +796,21 @@ func TestPrepareDispatch(t *testing.T) {
 		t.Fatal("tasks после retry должен совпадать с task.json", tasks.Tasks[0])
 	}
 }
+
+// tool-spec §24.4: help and version synonyms answer on stdout; unknown flags still refuse.
+func TestHelpVersion(t *testing.T) {
+	for _, arg := range []string{"help", "--help", "-h"} {
+		got := runOK(t, arg).(map[string]any)
+		text, _ := got["usage"].(string)
+		if !strings.Contains(text, "draft CONFIG RUN_ID") || !strings.Contains(text, "skill install|update") || !strings.Contains(text, "help") {
+			t.Fatalf("%s: %v", arg, got)
+		}
+	}
+	for _, arg := range []string{"--version", "-V"} {
+		if got := runOK(t, arg).(map[string]any); !reflect.DeepEqual(got, runVersion()) {
+			t.Fatalf("%s: %v", arg, got)
+		}
+	}
+	runFail(t, "--bogus")
+	runFail(t, "help", "extra")
+}
