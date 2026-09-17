@@ -97,7 +97,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (§7 к�
   - Logging: нет нового.
   - REQ: REQ-SA-037, REQ-SA-044, 23.1
 
-- [ ] Task 6: релиз `v0.1.8`, обновление хоста/пилота/синтетики, read-only `review` на пилоте
+- [x] Task 6: релиз `v0.1.8`, обновление хоста/пилота/синтетики, read-only `review` на пилоте
   - Deliverable: merge в `codex/bootstrap` (по подтверждению владельца), тег `v0.1.8`, approve deployment; `spec-audit update` → 0.1.8; `skill update --host both` в `spec-audit-synthetic` и пилоте (коммиты — по запросу); read-only `review CONFIG finance-2026-09-17-02` на пилоте → `roles[]` из 6 записей `submitted:true`, `host_review.state`, `form: assessments` (v1); журнал и `git status` пилота неизменны; v2 в живом цикле — следующий чистый прогон `sa-clean`. README «Приёмка и ограничения» — строка релиза 0.1.8.
   - Files: `README.md`; (пилот и синтетика — вне репозитория)
   - Depends: 5
