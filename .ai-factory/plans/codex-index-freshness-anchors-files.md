@@ -72,7 +72,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (отв�
 <!-- Commit checkpoint: tasks 1-2 -->
 
 ### Phase 2: Общий files.json
-- [ ] Task 3: `prepare` пишет `dispatch/files.json` один раз
+- [x] Task 3: `prepare` пишет `dispatch/files.json` один раз
   - Deliverable: `tool/main.go`: `writeDispatch(run *os.Root, task Task) error` (без `files`), `prepare`: `run.MkdirAll("dispatch", 0700)`, `writeJSON(run, "dispatch/files.json", m.Files, 0600)` + DEBUG «dispatch: список файлов» {files}, затем `writeDispatch` для каждого задания; `retry` — `writeDispatch(run, entry.Task)`. `tool/main_test.go` `TestPrepareDispatch`: `dispatch/files.json` разбирается в `[]SourceFile`, равный `batch.Files`; в каталогах заданий нет `files.json`; после `retry` общий файл байт-в-байт прежний.
   - Files: `tool/main.go`, `tool/main_test.go`
   - Depends: 1
