@@ -89,7 +89,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (§7 к�
 <!-- Commit checkpoint: tasks 3-4 -->
 
 ### Phase 3: Документация и поставка
-- [ ] Task 5: launcher SKILL.md; README, ROADMAP, документ применения
+- [x] Task 5: launcher SKILL.md; README, ROADMAP, документ применения
   - Deliverable: `skills/spec-audit/SKILL.md` шаг 6: «Save a DECISION `version: 2`: one verdict per norm with `concur: mapper|redteam|both` naming whose current evidence the host adopts, the host's statement (including disagreements), and `counts` the binary recomputes; use `version: 1` (full assessments with citations) only when the host cites evidence the roles did not. Read [the host decision contract](references/host-decision.md) — sections 14 and 23»; ограничения `TestSkillFiles` (без `#<цифры>`, `smsplace`, `/Users/`). README: «Первый запуск»/review-абзац — v2 и `roles[]`; «Приёмка и ограничения» — строка §23 (реализовано; регрессии; не проверено до релиза: v2 в живом цикле). ROADMAP: «Уроки третьего прогона» — 5–6 `[x]` с датой и свидетельствами, 7 остаётся `[ ]` (вне инструмента); строка таблицы этапов. docs/smsplace-adoption.md «Обычный рабочий цикл» п.5 — DECISION v2 в следующем цикле.
   - Files: `skills/spec-audit/SKILL.md`, `README.md`, `.ai-factory/ROADMAP.md`, `docs/smsplace-adoption.md`
   - Depends: 2, 4
