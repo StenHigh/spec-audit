@@ -1042,7 +1042,7 @@ func makeStatus(runID string, m Manifest, state State, fresh bool) Status {
 }
 
 // usage is the command list of tool-spec §1–10 with later extensions; help prints it, wrong arguments refuse with it (§24.4).
-const usage = "команды: help; init/index CONFIG; reconcile CONFIG [RAW DECISION]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]"
+const usage = "команды: help; init/index CONFIG; reconcile CONFIG [RAW DECISION]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; validate CONFIG RUN_ID host DECISION; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]"
 
 func execute(args []string) (any, error) {
 	if len(args) > 0 && args[0] == "reconcile" {
@@ -1357,6 +1357,9 @@ func execute(args []string) (any, error) {
 		}
 		slog.Info("php-typed: факты записаны", "run_id", runID, "artifact", artifact, "facts", len(typed.envelope.Facts), "diagnostics", typed.diagnostics)
 		return map[string]any{"snapshot_id": m.SnapshotID, "artifact": filepath.Join(cfg.ReportsDir, runID, artifact), "evidence_kind": typedEvidence, "facts": len(typed.envelope.Facts), "diagnostics": typed.diagnostics}, nil
+	}
+	if command == "validate" && args[3] == "host" {
+		return validateHostDecision(run, runID, m, state, args[4])
 	}
 	index := -1
 	for i := range state.Entries {

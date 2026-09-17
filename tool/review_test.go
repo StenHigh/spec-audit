@@ -902,3 +902,84 @@ func TestReviewPreviousHostAccepted(t *testing.T) {
 		t.Fatal("другой accepted head — previous_host отсутствует", view.Outcomes[0].PreviousHost)
 	}
 }
+
+// tool-spec §27 / REQ-SA-047: validate … host runs review's checks without writing anything.
+func TestReviewValidateHost(t *testing.T) {
+	config, base := fixture(t)
+	batch := runOK(t, "prepare", config, "review").(TaskBatch)
+	first := batch.Tasks[0]
+	firstPath := filepath.Join(base, first.TaskID+".json")
+	writeFixture(t, firstPath, legacyMarshal(t, sampleResult(t, first, filepath.Join(base, "source"))))
+	runOK(t, "submit", config, "review", first.TaskID, firstPath)
+	// Before full delivery the answer is review's refusal, not a false valid.
+	early := reviewV2Input(t, config, "early", "mapper")
+	earlyPath := filepath.Join(base, "early.json")
+	writeFixture(t, earlyPath, legacyMarshal(t, early))
+	if _, err := execute([]string{"validate", config, "review", "host", earlyPath}); err == nil || !strings.Contains(err.Error(), "нужны все ответы ролей") {
+		t.Fatal("validate host до полной доставки", err)
+	}
+	for _, task := range batch.Tasks[1:] {
+		path := filepath.Join(base, task.TaskID+".json")
+		writeFixture(t, path, legacyMarshal(t, sampleResult(t, task, filepath.Join(base, "source"))))
+		runOK(t, "submit", config, "review", task.TaskID, path)
+	}
+	source := readFixture(t, filepath.Join(base, "source/source.go"))
+	ownQuote, err := lineQuote(source, 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := reviewV3Input(t, config, "v3-checked", "both")
+	decision.Verdicts[0].Code = []Citation{{"source.go", 1, 2, ownQuote}}
+	write := func(d ReviewDecisionV3, name string) string {
+		path := filepath.Join(base, name+".json")
+		writeFixture(t, path, legacyMarshal(t, d))
+		return path
+	}
+	journalPath := filepath.Join(base, "runs/review/host-reviews.json")
+	versionsPath := filepath.Join(base, "runs/review/tool-versions.json")
+	versionsBefore := readFixture(t, versionsPath)
+	checked := runOK(t, "validate", config, "review", "host", write(decision, "ok")).(map[string]any)
+	if checked["valid"] != true || checked["duplicate"] != false || checked["review_state"] != "current" || checked["version"] != 3 || checked["requirements"] != len(batch.Tasks[0].Requirements) || !reflect.DeepEqual(checked["own_citations"], []string{"REQ-DEMO-001"}) {
+		t.Fatal("validate host должен обещать запись", checked)
+	}
+	if _, err := os.Stat(journalPath); !os.IsNotExist(err) {
+		t.Fatal("validate host не должен создавать журнал")
+	}
+	if !bytes.Equal(versionsBefore, readFixture(t, versionsPath)) {
+		t.Fatal("validate host не должен писать провенанс")
+	}
+	// The same refusals as review, none of them writing.
+	refuse := func(name string, mutate func(d *ReviewDecisionV3), fragment string) {
+		t.Helper()
+		d := reviewV3Input(t, config, "v3-"+name, "both")
+		d.Verdicts[0].Code = []Citation{{"source.go", 1, 2, ownQuote}}
+		mutate(&d)
+		path := write(d, name)
+		_, verr := execute([]string{"validate", config, "review", "host", path})
+		_, rerr := execute([]string{"review", config, "review", path})
+		if verr == nil || rerr == nil || verr.Error() != rerr.Error() || !strings.Contains(verr.Error(), fragment) {
+			t.Fatalf("%s: validate=%v review=%v", name, verr, rerr)
+		}
+	}
+	refuse("counts", func(d *ReviewDecisionV3) { d.Counts.Relevant++ }, "counts.relevant")
+	refuse("quote", func(d *ReviewDecisionV3) { d.Verdicts[0].Code[0].Quote = "nope" }, "цитата не совпадает")
+	refuse("stale", func(d *ReviewDecisionV3) { d.BasisSHA256 = strings.Repeat("0", 64) }, "текущая база")
+	if _, err := os.Stat(journalPath); !os.IsNotExist(err) {
+		t.Fatal("отказы не должны создавать журнал")
+	}
+	// review accepts the validated bytes; afterwards validate reports a duplicate, and a changed body a conflict.
+	okPath := filepath.Join(base, "ok.json")
+	if accepted := runOK(t, "review", config, "review", okPath).(map[string]any); accepted["accepted"] != true || accepted["review_state"] != "current" {
+		t.Fatal("проверенное решение должно записаться", accepted)
+	}
+	if again := runOK(t, "validate", config, "review", "host", okPath).(map[string]any); again["valid"] != true || again["duplicate"] != true || again["review_state"] != "current" {
+		t.Fatal("те же байты после записи — duplicate", again)
+	}
+	decision.Summary = "другие байты"
+	if _, err := execute([]string{"validate", config, "review", "host", write(decision, "conflict")}); err == nil || !strings.Contains(err.Error(), "конфликт review_id") {
+		t.Fatal("тот же review_id с другими байтами — конфликт", err)
+	}
+	if _, err := execute([]string{"submit", config, "review", "host", okPath}); err == nil || !strings.Contains(err.Error(), "неизвестный TASK_ID") {
+		t.Fatal("host — псевдо-задание только у validate", err)
+	}
+}

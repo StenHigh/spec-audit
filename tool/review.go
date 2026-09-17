@@ -783,20 +783,28 @@ func reviewContext(reports, run *os.Root, runID string, m Manifest, state State,
 	status := makeStatus(runID, m, state, fresh)
 	return ReviewContext{runID, m.SnapshotID, status.DeliveryComplete, status.Freshness, summarizeReviews(runID, m, state, fresh, journal), m.Requirements, roleEntries(state), outcomes(m, state, previousHost(reports, runID, m)), state.Entries, state.Executions}, nil
 }
-func submitReview(run *os.Root, runID string, m Manifest, state State, path string, versions []byte) (any, error) {
-	slog.Debug("проверка согласования", "run_id", runID)
+
+// stagedReview is everything review checks before it writes; validate … host stops here (tool-spec §27, REQ-SA-047).
+type stagedReview struct {
+	record    reviewRecord
+	view      ReviewSummary
+	body      []byte // the journal as it would be written
+	duplicate bool
+}
+
+func stageReview(run *os.Root, runID string, m Manifest, state State, path string) (stagedReview, error) {
 	journal, err := readReviews(run, runID, m)
 	if err != nil {
-		return nil, err
+		return stagedReview{}, err
 	}
 	data, err := readPath(path, maxResult)
 	if err != nil {
-		return nil, err
+		return stagedReview{}, err
 	}
 	// Form first: a duplicate or an incomplete delivery must answer as §14 says before any evidence is adopted.
 	decision, err := validateReview(data, runID, m, nil, true)
 	if err != nil {
-		return nil, err
+		return stagedReview{}, err
 	}
 	view := summarizeReviews(runID, m, state, true, journal)
 	for _, raw := range journal.Records {
@@ -808,37 +816,65 @@ func submitReview(run *os.Root, runID string, m Manifest, state State, path stri
 			continue
 		}
 		if raw != string(data) {
-			return nil, errors.New("конфликт review_id: исходные байты отличаются")
+			return stagedReview{}, errors.New("конфликт review_id: исходные байты отличаются")
 		}
-		return map[string]any{"accepted": true, "duplicate": true, "review_id": decision.ReviewID, "review_state": view.State, "latest_review_id": view.Latest.ReviewID}, nil
+		return stagedReview{record: decision, view: view, duplicate: true}, nil
 	}
 	if len(pending(state)) != 0 || decision.BasisSHA256 != view.BasisSHA256 {
-		return nil, errors.New("нужны все ответы ролей и текущая база review; перечитайте review")
+		return stagedReview{}, errors.New("нужны все ответы ролей и текущая база review; перечитайте review")
 	}
 	if decision.Version >= 2 {
 		if decision, err = validateReview(data, runID, m, &state, true); err != nil {
-			return nil, err
+			return stagedReview{}, err
 		}
 	}
 	if len(journal.Records) >= 64 {
-		return nil, errors.New("достигнут лимит 64 host reviews")
+		return stagedReview{}, errors.New("достигнут лимит 64 host reviews")
 	}
 	journal.Records = append(journal.Records, string(data))
 	body, err := json.MarshalIndent(journal, "", "  ")
 	if err != nil || len(body)+1 > maxState {
-		return nil, errors.New("журнал host review превышает 32 MiB")
+		return stagedReview{}, errors.New("журнал host review превышает 32 MiB")
 	}
 	current, err := snapshot(m.Config)
 	if err != nil || current.SnapshotID != m.SnapshotID {
-		return nil, errors.New("источники изменились во время review")
+		return stagedReview{}, errors.New("источники изменились во время review")
+	}
+	return stagedReview{record: decision, view: view, body: body}, nil
+}
+
+func submitReview(run *os.Root, runID string, m Manifest, state State, path string, versions []byte) (any, error) {
+	slog.Debug("проверка согласования", "run_id", runID)
+	staged, err := stageReview(run, runID, m, state, path)
+	if err != nil {
+		return nil, err
+	}
+	decision := staged.record
+	if staged.duplicate {
+		return map[string]any{"accepted": true, "duplicate": true, "review_id": decision.ReviewID, "review_state": staged.view.State, "latest_review_id": staged.view.Latest.ReviewID}, nil
 	}
 	if err := invalidateReports(run); err != nil {
 		return nil, err
 	}
-	if err := atomicWrite(run, "host-reviews.json", append(body, '\n'), 0600); err != nil {
+	if err := atomicWrite(run, "host-reviews.json", append(staged.body, '\n'), 0600); err != nil {
 		return nil, err
 	}
 	publishToolVersion(run, versions)
 	slog.Info("согласование сохранено", "run_id", runID, "review_id", decision.ReviewID, "requirements", len(decision.Assessments), "form", decision.form())
 	return map[string]any{"accepted": true, "duplicate": false, "review_id": decision.ReviewID, "review_state": "current"}, nil
+}
+
+// validateHostDecision answers what review would do with these bytes now, writing nothing (REQ-SA-047).
+func validateHostDecision(run *os.Root, runID string, m Manifest, state State, path string) (any, error) {
+	staged, err := stageReview(run, runID, m, state, path)
+	if err != nil {
+		return nil, err
+	}
+	reviewState := "current"
+	if staged.duplicate {
+		reviewState = staged.view.State
+	}
+	own := sortedKeys(staged.record.Own)
+	slog.Info("validate: решение хоста проверено", "run_id", runID, "review_id", staged.record.ReviewID, "version", staged.record.Version, "duplicate", staged.duplicate, "own_citations", len(own))
+	return map[string]any{"valid": true, "version": staged.record.Version, "review_id": staged.record.ReviewID, "duplicate": staged.duplicate, "review_state": reviewState, "requirements": len(staged.record.Assessments), "own_citations": own}, nil
 }
