@@ -97,7 +97,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (§6 sco
   - Logging: нет нового.
   - REQ: REQ-SA-037, REQ-SA-043, 22.1–22.3
 
-- [ ] Task 6: релиз `v0.1.7`, обновление хоста/пилота/синтетики, оценка подсказок на журнале пилота
+- [x] Task 6: релиз `v0.1.7`, обновление хоста/пилота/синтетики, оценка подсказок на журнале пилота
   - Deliverable: merge в `codex/bootstrap` (по подтверждению владельца), тег `v0.1.7`, approve deployment; `spec-audit update` → 0.1.7; `skill update --host both` в `spec-audit-synthetic` и пилоте (коммиты — по запросу). Read-only оценка на временной копии `reports/` пилота (scratchpad): журнал усечён до commits[0] и до commits[1], источники восстановлены из git пилота по хэшам raw (как в T6 прошлого плана) → `check CONFIG RAW` → сравнить `matches` с `previous` из decision-accept-002/003: зафиксировать top-1, hit@4, долю верных top-1 с `unique_shared > 0` и ложных с 0; sha256 живого журнала и `git status` пилота неизменны; `reanchor` на пилоте не выполняется (решение владельца, следующий цикл). README «Приёмка и ограничения» — строка релиза 0.1.7 с цифрами.
   - Files: `README.md`; (пилот и синтетика — вне репозитория)
   - Depends: 5
