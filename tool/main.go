@@ -1134,7 +1134,7 @@ func makeStatus(runID string, m Manifest, state State, fresh bool) Status {
 // requirementIDRE tells a norm ID from a DECISION path in `review CONFIG RUN_ID <arg>` (tool-spec §29.1).
 var requirementIDRE = regexp.MustCompile(`^REQ-[A-Z0-9]+-[0-9]+$`)
 
-// review CONFIG RUN_ID [DECISION|REQ-ID|citations [PATH]] (tool-spec §14, §29.1, §30.2).
+// review CONFIG RUN_ID [DECISION|REQ-ID|summary|citations [PATH]] (tool-spec §14, §29.1, §30.2, §32.2).
 func validReviewArgs(args []string) bool {
 	switch len(args) {
 	case 3, 4:
@@ -1146,7 +1146,7 @@ func validReviewArgs(args []string) bool {
 }
 
 // usage is the command list of tool-spec §1–10 with later extensions; help prints it, wrong arguments refuse with it (§24.4).
-const usage = "команды: help; init/index CONFIG; cite CONFIG PATH A B; reconcile CONFIG [RAW DECISION]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION|REQ-ID|citations [PATH]]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; validate CONFIG RUN_ID host DECISION; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]"
+const usage = "команды: help; init/index CONFIG; index CONFIG summary; cite CONFIG PATH A B; reconcile CONFIG [RAW DECISION]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION|REQ-ID|summary|citations [PATH]]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; validate CONFIG RUN_ID host DECISION; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]"
 
 func execute(args []string) (any, error) {
 	if len(args) > 0 && args[0] == "reconcile" {
@@ -1182,6 +1182,13 @@ func execute(args []string) (any, error) {
 		}
 		return map[string]bool{"created": true}, nil
 	}
+	if len(args) == 3 && args[0] == "index" && args[2] == "summary" {
+		cfg, err := loadConfig(args[1])
+		if err != nil {
+			return nil, err
+		}
+		return indexSummary(cfg)
+	}
 	if len(args) == 2 && args[0] == "index" {
 		cfg, err := loadConfig(args[1])
 		if err != nil {
@@ -1213,7 +1220,7 @@ func execute(args []string) (any, error) {
 	if count, ok := argc[command]; !ok || (count >= 0 && len(args) != count) || (count == -1 && len(args) < 4) || (count == -2 && !validReviewArgs(args)) || !slugRE.MatchString(runID) {
 		return nil, errors.New("неизвестная команда, неверные аргументы или недопустимый RUN_ID")
 	}
-	readOnly := oneOf(command, "status", "report") || (command == "review" && (len(args) == 3 || requirementIDRE.MatchString(args[3]) || args[3] == "citations"))
+	readOnly := oneOf(command, "status", "report") || (command == "review" && (len(args) == 3 || requirementIDRE.MatchString(args[3]) || oneOf(args[3], "citations", "summary")))
 	cfg, err := loadConfig(args[1], readOnly)
 	if err != nil {
 		return nil, err
@@ -1392,6 +1399,13 @@ func execute(args []string) (any, error) {
 		}
 		if len(args) == 4 && requirementIDRE.MatchString(args[3]) {
 			return requirementView(reports, run, runID, m, state, fresh, args[3])
+		}
+		if len(args) == 4 && args[3] == "summary" {
+			context, err := reviewContext(reports, run, runID, m, state, fresh)
+			if err != nil {
+				return nil, err
+			}
+			return reviewBrief(context), nil
 		}
 		if len(args) == 4 {
 			return submitReview(run, runID, m, state, args[3], journal)
