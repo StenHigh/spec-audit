@@ -78,6 +78,9 @@ type Config struct {
 	ReportsDir string   `yaml:"reports_dir" json:"reports_dir"`
 	Runtime    Runtime  `yaml:"runtime" json:"runtime"`
 	Scopes     []Scope  `yaml:"scopes" json:"scopes"`
+	// Related lists sibling scope CONFIGs (relative to this file) whose decided contradicted code lines are shown
+	// under this scope's norms (tool-spec §43.1). Not part of the manifest: it never changes snapshot_id.
+	Related []string `yaml:"related,omitempty" json:"-"`
 	// SDK включает типизированный PHP SDK (docs/php-sdk-contract.md); nil сохраняет прежний snapshot_id.
 	SDK *SDKConfig `yaml:"sdk,omitempty" json:"sdk,omitempty"`
 }
@@ -362,6 +365,14 @@ func loadConfig(path string, history ...bool) (Config, error) {
 	cfg.ReportsDir, err = canonicalPath(cfg.ReportsDir)
 	if err != nil {
 		return cfg, fmt.Errorf("reports_dir: %w", err)
+	}
+	for i, related := range cfg.Related {
+		if !filepath.IsAbs(related) {
+			related = filepath.Join(base, related)
+		}
+		if cfg.Related[i], err = canonicalPath(related); err != nil {
+			return cfg, fmt.Errorf("related: %w", err)
+		}
 	}
 	if within(cfg.ReportsDir, cfg.ProjectRoot) {
 		return cfg, errors.New("reports_dir не может содержать project_root")
@@ -1448,7 +1459,7 @@ func execute(args []string) (any, error) {
 		}
 		return batch, nil
 	case "status":
-		view, err := reviewContext(reports, run, runID, m, state, fresh)
+		view, err := reviewContext(reports, run, runID, m, state, fresh, cfg.Related)
 		if err != nil {
 			return nil, err
 		}
@@ -1460,14 +1471,14 @@ func execute(args []string) (any, error) {
 			return citationIndex(run, runID, m, state, args[4:])
 		}
 		if len(args) >= 4 && requirementIDRE.MatchString(args[3]) {
-			view, err := requirementView(reports, run, runID, m, state, fresh, args[3])
+			view, err := requirementView(reports, run, runID, m, state, fresh, cfg.Related, args[3])
 			if err != nil || len(args) == 4 {
 				return view, err
 			}
 			return map[string]string{"requirement_id": args[3], "text": requirementText(view, args[4] == "brief")}, nil
 		}
 		if len(args) == 4 && args[3] == "summary" {
-			context, err := reviewContext(reports, run, runID, m, state, fresh)
+			context, err := reviewContext(reports, run, runID, m, state, fresh, cfg.Related)
 			if err != nil {
 				return nil, err
 			}
@@ -1476,7 +1487,7 @@ func execute(args []string) (any, error) {
 		if len(args) == 4 {
 			return submitReview(run, runID, m, state, args[3], journal)
 		}
-		return reviewContext(reports, run, runID, m, state, fresh)
+		return reviewContext(reports, run, runID, m, state, fresh, cfg.Related)
 	case "draft":
 		reviews, err := readReviews(run, runID, m)
 		if err != nil {
@@ -1485,7 +1496,7 @@ func execute(args []string) (any, error) {
 		return draftDecision(runID, m, state, reviews)
 	case "report":
 		report := makeReport(runID, m, state, fresh)
-		view, err := reviewContext(reports, run, runID, m, state, fresh)
+		view, err := reviewContext(reports, run, runID, m, state, fresh, cfg.Related)
 		if err != nil {
 			return nil, err
 		}

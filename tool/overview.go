@@ -233,7 +233,7 @@ func runOverview(reports *os.Root, runID, current string) (RunOverview, []Contra
 		}
 	}
 	if view.DeliveryComplete {
-		for _, row := range outcomes(m, state, nil) {
+		for _, row := range outcomes(m, state, nil, nil) {
 			if !row.Agree {
 				view.Disagree = append(view.Disagree, row.RequirementID)
 			}
