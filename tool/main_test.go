@@ -1029,3 +1029,36 @@ func TestPrepareEmptyDirAndTypedJSONError(t *testing.T) {
 		t.Fatal("неизвестный ключ назван", err)
 	}
 }
+
+// tool-spec §45: corpus renders one static page over several scopes and links each decided run's report.
+func TestCorpus(t *testing.T) {
+	config, base := fixture(t)
+	batch := runOK(t, "prepare", config, "review").(TaskBatch)
+	for _, task := range batch.Tasks {
+		path := filepath.Join(base, task.TaskID+".json")
+		writeFixture(t, path, legacyMarshal(t, sampleResult(t, task, filepath.Join(base, "source"))))
+		runOK(t, "submit", config, "review", task.TaskID, path)
+	}
+	runOK(t, "review", config, "review", writeReviewInput(t, base, reviewInput(t, config)))
+	runOK(t, "report", config, "review")
+	out := filepath.Join(base, "site/corpus.html")
+	if err := os.MkdirAll(filepath.Dir(out), 0700); err != nil {
+		t.Fatal(err)
+	}
+	answer := runOK(t, "corpus", out, config).(map[string]any)
+	view := answer["overview"].(Overview)
+	page := string(readFixture(t, out))
+	decided := view.Scopes[0].Decided
+	if !strings.HasSuffix(answer["html"].(string), "/site/corpus.html") || decided == nil || decided.Report != "../runs/review/report.html" || !strings.Contains(page, decided.Report) {
+		t.Fatal("страница и относительная ссылка на report.html", answer["html"], decided)
+	}
+	for _, want := range []string{"карта корпуса", scopeName(config), decided.Contradicted[0], "Код под противоречиями", "source.go"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("страница не содержит %q", want)
+		}
+	}
+	if len(decided.Attention) == 0 || decided.Attention[0].Title == "" || !strings.Contains(page, decided.Attention[0].Title) {
+		t.Fatal("нормы внимания с заголовком и statement", decided.Attention)
+	}
+	runFail(t, "corpus", out)
+}

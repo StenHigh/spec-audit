@@ -3,11 +3,17 @@
 package main
 
 import (
+	"bytes"
+	_ "embed"
 	"fmt"
+	"html/template"
 	"io/fs"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
+	"time"
 )
 
 // Overview is `overview CONFIG...` (tool-spec §34): one read-only map of several scopes — the accepted set, its
@@ -51,6 +57,16 @@ type ScopeOverview struct {
 	Decided      *RunOverview `json:"decided"` // the most recent run with a host decision: verdict counts; totals come from here
 }
 
+// NormBrief is one norm of the decided run for the corpus page (tool-spec §45): the host's verdict in a sentence.
+type NormBrief struct {
+	ID             string `json:"id"`
+	Title          string `json:"title"`
+	Specification  string `json:"specification"`
+	Implementation string `json:"implementation"`
+	Assertion      string `json:"assertion"`
+	Statement      string `json:"statement"`
+}
+
 type RunOverview struct {
 	RunID            string         `json:"run_id"`
 	PreparedAt       string         `json:"prepared_at"`
@@ -61,11 +77,15 @@ type RunOverview struct {
 	Submitted        int            `json:"submitted"`
 	HostReviewState  string         `json:"host_review_state"`
 	ReviewID         string         `json:"review_id,omitempty"`
+	Report           string         `json:"report,omitempty"` // relative link to report.html, filled by corpus (§45)
 	Form             string         `json:"form,omitempty"`
 	Implementation   map[string]int `json:"implementation"`
 	Assertion        map[string]int `json:"assertion"`
 	Contradicted     []string       `json:"contradicted"` // norms the host found contradicted — the GAP list of the scope
 	Disagree         []string       `json:"disagree"`
+	// Attention lists the host verdicts that are not supported+relevant (contradicted, unknown, ambiguous, weak/missing/
+	// contradicts) with title and statement — what the corpus page shows per scope (§45).
+	Attention []NormBrief `json:"attention"`
 }
 
 func overview(paths []string) (Overview, error) {
@@ -207,7 +227,11 @@ func runOverview(reports *os.Root, runID, current string) (RunOverview, []Contra
 	if err != nil {
 		return RunOverview{}, nil, err
 	}
-	view := RunOverview{RunID: runID, SnapshotCurrent: current == m.SnapshotID, Implementation: map[string]int{}, Assertion: map[string]int{}, Contradicted: []string{}, Disagree: []string{}}
+	view := RunOverview{RunID: runID, SnapshotCurrent: current == m.SnapshotID, Implementation: map[string]int{}, Assertion: map[string]int{}, Contradicted: []string{}, Disagree: []string{}, Attention: []NormBrief{}}
+	titles := map[string]string{}
+	for _, req := range m.Requirements {
+		titles[req.ID] = req.Title
+	}
 	if len(versions.Records) > 0 {
 		view.PreparedAt, view.ToolVersion = versions.Records[0].RecordedAt, versions.Records[0].ToolVersion
 	}
@@ -235,6 +259,9 @@ func runOverview(reports *os.Root, runID, current string) (RunOverview, []Contra
 		for _, a := range summary.Latest.Assessments {
 			view.Implementation[a.Implementation]++
 			view.Assertion[a.Assertion]++
+			if a.Implementation != "supported" || a.Assertion != "relevant" || a.Specification != "clear" {
+				view.Attention = append(view.Attention, NormBrief{a.RequirementID, titles[a.RequirementID], a.Specification, a.Implementation, a.Assertion, a.Statement})
+			}
 			if a.Implementation != "contradicted" {
 				continue
 			}
@@ -273,4 +300,108 @@ func runOverview(reports *os.Root, runID, current string) (RunOverview, []Contra
 	}
 	sort.Strings(view.Disagree)
 	return view, code, nil
+}
+
+//go:embed corpus.html
+var corpusHTML string
+
+var corpusTemplate = template.Must(template.New("corpus").Funcs(template.FuncMap{
+	"scopeName": scopeName,
+	"join":      strings.Join,
+}).Parse(corpusHTML))
+
+// scopeName is the scope directory of a CONFIG path — what the pilot calls the scope.
+func scopeName(config string) string {
+	return filepath.Base(filepath.Dir(config))
+}
+
+// CorpusPage is the data of `corpus OUT_HTML CONFIG...` (tool-spec §45): the overview plus per-file counts and
+// relative links to each decided run's report.html.
+type CorpusPage struct {
+	Overview
+	GeneratedAt string
+	Files       []CorpusFile
+}
+
+type CorpusFile struct {
+	Path   string
+	Norms  int
+	Scopes []string
+}
+
+// corpus writes the static corpus page and answers the overview with the page path. OUT_HTML is the host's file:
+// it is written whole, never inside a run directory.
+func corpus(out string, paths []string) (any, error) {
+	view, err := overview(paths)
+	if err != nil {
+		return nil, err
+	}
+	absOut, err := filepath.Abs(out)
+	if err != nil {
+		return nil, err
+	}
+	// Links are computed from the canonical directory (reports_dir is canonical too), so /var vs /private/var never leaks in.
+	if dir, err := canonicalPath(filepath.Dir(absOut)); err == nil {
+		absOut = filepath.Join(dir, filepath.Base(absOut))
+	}
+	for i := range view.Scopes {
+		if d := view.Scopes[i].Decided; d != nil {
+			d.Report = reportLink(absOut, view.Scopes[i].Config, d.RunID)
+		}
+	}
+	page := CorpusPage{Overview: view, GeneratedAt: time.Now().UTC().Format(time.RFC3339), Files: corpusFiles(view.ContradictedCode)}
+	var html bytes.Buffer
+	if err := corpusTemplate.Execute(&html, page); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(absOut, html.Bytes(), 0600); err != nil {
+		return nil, err
+	}
+	slog.Info("карта корпуса записана", "path", absOut, "scopes", view.Totals.Scopes, "files", len(page.Files))
+	return map[string]any{"html": absOut, "overview": view}, nil
+}
+
+// reportLink is the relative path from the corpus page to a decided run's report.html; empty when it does not exist.
+func reportLink(absOut, config, runID string) string {
+	cfg, err := loadConfig(config, true)
+	if err != nil {
+		return ""
+	}
+	target := filepath.Join(cfg.ReportsDir, runID, "report.html")
+	if _, err := os.Stat(target); err != nil {
+		return ""
+	}
+	rel, err := filepath.Rel(filepath.Dir(absOut), target)
+	if err != nil {
+		return ""
+	}
+	return filepath.ToSlash(rel)
+}
+
+func corpusFiles(code []ContradictedCitation) []CorpusFile {
+	norms := map[string]map[string]bool{}
+	scopes := map[string]map[string]bool{}
+	for _, c := range code {
+		if norms[c.Path] == nil {
+			norms[c.Path], scopes[c.Path] = map[string]bool{}, map[string]bool{}
+		}
+		norms[c.Path][c.Config+"|"+c.RequirementID] = true
+		scopes[c.Path][scopeName(c.Config)] = true
+	}
+	files := []CorpusFile{}
+	for path, ids := range norms {
+		names := []string{}
+		for name := range scopes[path] {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		files = append(files, CorpusFile{path, len(ids), names})
+	}
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].Norms != files[j].Norms {
+			return files[i].Norms > files[j].Norms
+		}
+		return files[i].Path < files[j].Path
+	})
+	return files
 }
