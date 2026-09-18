@@ -788,20 +788,60 @@ func TestPrepareDispatch(t *testing.T) {
 	if err := json.Unmarshal(readFixture(t, sharedPath), &files); err != nil || !reflect.DeepEqual(files, batch.Files) {
 		t.Fatalf("dispatch/files.json должен равняться списку файлов prepare: %v", err)
 	}
+	// tool-spec §30.1: the protocol and each role's prompt come from the binary, with absolute paths and no state/manifest paths.
+	if !bytes.Equal(readFixture(t, filepath.Join(base, "runs/review/dispatch/protocol.txt")), readFixture(t, "../skills/spec-audit/references/protocol.txt")) {
+		t.Fatal("dispatch/protocol.txt должен побайтно равняться протоколу skill")
+	}
+	absConfig, _ := filepath.Abs(config)
+	for _, task := range batch.Tasks {
+		dir := filepath.Join(base, "runs/review/dispatch", task.TaskID)
+		prompt := string(readFixture(t, filepath.Join(dir, "prompt.md")))
+		for _, want := range []string{"Задание роли " + task.Role, "SOURCE_ROOT: " + batch.ProjectRoot, filepath.Join(dir, "task.json"), filepath.Join(base, "runs/review/dispatch/files.json"),
+			filepath.Join(base, "runs/review/dispatch/protocol.txt"), filepath.Join(dir, "result.json"), " validate " + absConfig + " review " + task.TaskID + " ", filepath.Join(dir, "sdk_hints.json")} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("prompt.md роли %s не содержит %q", task.TaskID, want)
+			}
+		}
+		if strings.Contains(prompt, "manifest.json") || strings.Contains(prompt, "state.json") {
+			t.Fatal("prompt.md не должен называть manifest/state")
+		}
+	}
+	// tool-spec §30.3: counters as in status.
+	if batch.Expected != len(batch.Tasks) || batch.Submitted != 0 || batch.DeliveryComplete {
+		t.Fatal("prepare: счётчики доставки", batch.Expected, batch.Submitted, batch.DeliveryComplete)
+	}
 	first := batch.Tasks[0]
 	dir := filepath.Join(base, "runs/review/dispatch", first.TaskID)
-	writeFixture(t, filepath.Join(dir, "prompt.md"), []byte("launcher prompt\n"))
+	promptBefore := readFixture(t, filepath.Join(dir, "prompt.md"))
+	writeFixture(t, filepath.Join(dir, "prompt.md"), []byte("host edit\n"))
+	writeFixture(t, filepath.Join(dir, "notes.txt"), []byte("role notes\n"))
 	filesBefore := readFixture(t, sharedPath)
 	retried := runOK(t, "retry", config, "review", first.TaskID).(Task)
 	var stored Task
 	if err := json.Unmarshal(readFixture(t, filepath.Join(dir, "task.json")), &stored); err != nil || stored.Attempt != 2 || !reflect.DeepEqual(stored, retried) {
 		t.Fatal("retry должен перезаписать task.json новой попыткой", stored.Attempt)
 	}
-	if string(readFixture(t, filepath.Join(dir, "prompt.md"))) != "launcher prompt\n" || !bytes.Equal(filesBefore, readFixture(t, sharedPath)) {
+	if !bytes.Equal(promptBefore, readFixture(t, filepath.Join(dir, "prompt.md"))) {
+		t.Fatal("retry должен восстановить prompt.md бинарника (§30.1)")
+	}
+	if string(readFixture(t, filepath.Join(dir, "notes.txt"))) != "role notes\n" || !bytes.Equal(filesBefore, readFixture(t, sharedPath)) {
 		t.Fatal("retry не должен трогать остальные файлы каталога")
 	}
-	if tasks := runOK(t, "tasks", config, "review").(TaskBatch); !reflect.DeepEqual(tasks.Tasks[0], stored) {
+	tasks := runOK(t, "tasks", config, "review").(TaskBatch)
+	if !reflect.DeepEqual(tasks.Tasks[0], stored) {
 		t.Fatal("tasks после retry должен совпадать с task.json", tasks.Tasks[0])
+	}
+	for _, task := range tasks.Tasks {
+		result := sampleResult(t, task, filepath.Join(base, "source"))
+		path := filepath.Join(base, task.TaskID+".json")
+		writeFixture(t, path, legacyMarshal(t, result))
+		runOK(t, "submit", config, "review", task.TaskID, path)
+	}
+	if done := runOK(t, "tasks", config, "review").(TaskBatch); len(done.Tasks) != 0 || done.Expected != len(batch.Tasks) || done.Submitted != done.Expected || !done.DeliveryComplete {
+		t.Fatal("tasks после полной доставки: tasks [] и счётчики", done.Expected, done.Submitted, done.DeliveryComplete)
+	}
+	if raw, err := json.Marshal(TaskBatch{Tasks: []Task{}}); err != nil || !bytes.Contains(raw, []byte(`"delivery_complete":false`)) {
+		t.Fatal("счётчики — обязательные ключи ответа", string(raw))
 	}
 }
 

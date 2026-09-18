@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -1088,5 +1089,75 @@ func TestReviewRequirementView(t *testing.T) {
 	}
 	if duplicate := runOK(t, "review", config, "review", path).(map[string]any); duplicate["duplicate"] != true || duplicate["version"] != 3 || !reflect.DeepEqual(duplicate["own_citations"], []string{"REQ-DEMO-001"}) {
 		t.Fatal("duplicate-ответ тоже симметричен", duplicate)
+	}
+}
+
+// tool-spec §30.2: the citation index says who cites which lines under which norm; the host part is its own citations only.
+func TestReviewCitations(t *testing.T) {
+	config, base := fixture(t)
+	batch := runOK(t, "prepare", config, "review").(TaskBatch)
+	if rows := runOK(t, "review", config, "review", "citations").([]CitationRow); len(rows) != 0 {
+		t.Fatal("до доставки индекс пуст, но отвечает", rows)
+	}
+	runFail(t, "review", config, "review", "citations", "a", "b")
+	for _, task := range batch.Tasks {
+		result := sampleResult(t, task, filepath.Join(base, "source"))
+		if task.Role == "redteam" {
+			result.Assessments[0].Assertion, result.Assessments[0].Tests = "unknown", []TestCitation{}
+		}
+		path := filepath.Join(base, task.TaskID+".json")
+		writeFixture(t, path, legacyMarshal(t, result))
+		runOK(t, "submit", config, "review", task.TaskID, path)
+	}
+	versionsPath := filepath.Join(base, "runs/review/tool-versions.json")
+	versionsBefore := readFixture(t, versionsPath)
+	all := runOK(t, "review", config, "review", "citations").([]CitationRow)
+	want := 0
+	for _, entry := range runOK(t, "review", config, "review").(ReviewContext).Entries {
+		for _, a := range entry.Result.Assessments {
+			want += len(a.Spec) + len(a.Code) + len(a.Tests)
+		}
+	}
+	if len(all) != want || !sort.SliceIsSorted(all, func(i, j int) bool {
+		a, b := all[i], all[j]
+		return a.Path < b.Path || a.Path == b.Path && (a.LineStart < b.LineStart || a.LineStart == b.LineStart && (a.LineEnd < b.LineEnd || a.LineEnd == b.LineEnd && (a.Role < b.Role || a.Role == b.Role && a.RequirementID < b.RequirementID)))
+	}) {
+		t.Fatal("индекс должен перечислить все цитаты ролей в заданном порядке", len(all), want)
+	}
+	if !bytes.Equal(versionsBefore, readFixture(t, versionsPath)) {
+		t.Fatal("индекс цитат не должен писать провенанс")
+	}
+	source := runOK(t, "review", config, "review", "citations", "source.go").([]CitationRow)
+	roles := map[string]int{}
+	for _, row := range source {
+		if row.Path != "source.go" || row.Kind != "code" || row.TestID != "" || row.TaskID == "" || row.RequirementID == "" {
+			t.Fatal("строка индекса по файлу", row)
+		}
+		roles[row.Role]++
+	}
+	if roles["mapper"] == 0 || roles["redteam"] == 0 || roles["host"] != 0 {
+		t.Fatal("по файлу — обе роли, хоста ещё нет", roles)
+	}
+	if rows := runOK(t, "review", config, "review", "citations", "nowhere.go").([]CitationRow); len(rows) != 0 {
+		t.Fatal("неизвестный путь даёт пустой список", rows)
+	}
+	quote, err := lineQuote(readFixture(t, filepath.Join(base, "source/source.go")), 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := reviewV3Input(t, config, "v3-cite", "redteam")
+	decision.Verdicts[0].Code = []Citation{{"source.go", 1, 2, quote}}
+	decision.Verdicts[0].Tests = runOK(t, "review", config, "review", "REQ-DEMO-001").(RequirementView).Roles["mapper"].Tests
+	path := filepath.Join(base, "v3-cite.json")
+	writeFixture(t, path, legacyMarshal(t, decision))
+	runOK(t, "review", config, "review", path)
+	host := []CitationRow{}
+	for _, row := range runOK(t, "review", config, "review", "citations").([]CitationRow) {
+		if row.Role == "host" {
+			host = append(host, row)
+		}
+	}
+	if len(host) != 2 || host[0].Path != "source.go" || host[0].LineStart != 1 || host[0].LineEnd != 2 || host[0].RequirementID != "REQ-DEMO-001" || host[0].TaskID != "" || host[1].Kind != "tests" || host[1].TestID == "" {
+		t.Fatal("хост в индексе — только собственные цитаты решения", host)
 	}
 }
