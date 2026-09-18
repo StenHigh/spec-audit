@@ -100,6 +100,7 @@
 | Сводная HTML-карта корпуса `corpus` (§45) | 2026-09-18 | tool-spec 1.25, `TestCorpus`; README «Приёмка и ограничения»; `.spec-audit/corpus.html` на пилоте |
 | Сужение statement при принятии — DECISION version 2 (§46, REQ-SA-049); GAP на карте корпуса (§45.1) | 2026-09-18 | tool-spec 1.27, `TestAcceptNarrowed`, `TestCorpus`; README «Приёмка и ограничения» |
 | Динамика GAP между решёнными run, `baseline_run` (§47) | 2026-09-18 | tool-spec 1.28, `TestCorpusDelta`; README «Приёмка и ограничения» |
+| Публикация для заказчика `publish` и история run на карте (§49) | 2026-09-18 | tool-spec 1.30, `TestPublish`; README «Приёмка и ограничения» |
 | Разбор внешнего review — подтверждённые дефекты (§48) | 2026-09-18 | tool-spec 1.29, `TestReviewV2`, `TestUpdate`, `TestInstallScript`; `ci.yml`; README «Приёмка и ограничения» |
 | Уроки третьего прогона: `reanchor`, `unique_shared`, диагностика scopes, `base_index_current` (§22, пункты 1–4) | 2026-09-17 | tool-spec §22, `TestReanchor`, `TestCheckAcceptance`, `TestScopeAssignmentErrors`; README «Приёмка и ограничения»; пункты 5–7 открыты |
 | Уроки второго прогона: `check`, подсказки сопоставления, изоляция ролей (§21, пункты 1–3) | 2026-09-17 | tool-spec §21, `TestCheckAcceptance`, `TestSkillFiles`; README «Приёмка и ограничения»; пункт 4 открыт |

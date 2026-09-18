@@ -14,7 +14,7 @@ spec-audit — самостоятельный, не привязанный к б
 
 1. [.ai-factory/config.yaml](.ai-factory/config.yaml), затем контекст из таблицы ниже: DESCRIPTION, ARCHITECTURE, ROADMAP, RULES и rules/base. В новой сессии это делает локальный `aif-warmup` (Codex: `$aif-warmup`; Claude Code: `/aif-warmup`). Не используй skills из соседнего бизнес-проекта.
 2. [README: состояние и следующие шаги](README.md#состояние-и-следующие-шаги) — реализованные возможности и ограничения; очередь развития теперь в ROADMAP.
-3. [Спецификация инструмента](docs/tool-spec.md) — источник норм: цели/границы и приёмка §12, текущие расширения §13–48, контракт CLI §1–10; PHP/Laravel SDK — §17 и [контракт расширения](docs/php-sdk-contract.md) (п.1–3 реализованы, п.4 выполнен с нейтральным результатом). Сначала уточняй изменяемое требование и проверку, затем меняй реализацию.
+3. [Спецификация инструмента](docs/tool-spec.md) — источник норм: цели/границы и приёмка §12, текущие расширения §13–49, контракт CLI §1–10; PHP/Laravel SDK — §17 и [контракт расширения](docs/php-sdk-contract.md) (п.1–3 реализованы, п.4 выполнен с нейтральным результатом). Сначала уточняй изменяемое требование и проверку, затем меняй реализацию.
 4. Остальное — по задаче из карты ниже. Не загружай всю историю `.local/`, прототипы или документацию пилота по умолчанию. Отсутствие RESEARCH, нового active-плана и необязательных каталогов из конфига нормально; не создавай пустые заглушки.
 
 Явные решения владельца имеют приоритет; конфликт спецификаций обозначай, не разрешай его молча кодом. README и планы не заменяют требования. Необоснованные требования и неизвестность нельзя превращать в PASS.
@@ -71,6 +71,7 @@ AI Factory нужен только для разработки spec-audit, не 
 | [DECISION приёмки version 2: §46](docs/tool-spec.md#46-decision-приёмки-version-2-сужение-statement-кандидата) | REQ-SA-049 — `narrowed_statement` у target: сужение statement кандидата словами оригинала при accept/revise/split/merge; multi-raw отклонён — `keep` остаётся |
 | [Динамика GAP: §47](docs/tool-spec.md#47-динамика-gap-delta-и-baseline_run) | `overview.scopes[].delta` — closed/opened/changed между решёнными run по одинаковым нормам, `baseline_run` в CONFIG закрепляет точку «до»; раздел «Динамика» на карте корпуса |
 | [Разбор внешнего review: §48](docs/tool-spec.md#48-разбор-внешнего-review-2026-09-18) | Полнота §7 и для version 2; права до commit point `update`; отмена процессов по SIGINT/SIGTERM; мелочи; перечень отложенного (ledger при смене группы, установка skill, PHP-фильтр трейтов, baseline-сравнение метода) |
+| [Публикация для заказчика: §49](docs/tool-spec.md#49-публикация-для-заказчика-publish-out_dir-config-история-run) | `publish OUT_DIR CONFIG...` — статический сайт: `index.html`, `overview.json`, копии `report.html` всех решённых run; `scopes[].history[]` и список run со временем на карте |
 | [docs/php-sdk-contract.md](docs/php-sdk-contract.md) | Контракт typed SDK: `php-typed`, формат `sdk/3`, изоляция bootstrap, подсказки в отчёте |
 | [docs/accepted-index.md](docs/accepted-index.md) | Принятие кандидатов, ID, редакции, reconcile |
 | [docs/legacy-extraction.md](docs/legacy-extraction.md) | Формат извлечения из обычного Markdown и ограничения эксперимента |

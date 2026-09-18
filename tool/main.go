@@ -1233,7 +1233,7 @@ func validReviewArgs(args []string) bool {
 }
 
 // usage is the command list of tool-spec §1–10 with later extensions; help prints it, wrong arguments refuse with it (§24.4).
-const usage = "команды: help; init/index CONFIG; index CONFIG summary; anchors CONFIG [PATH...]; overview CONFIG...; corpus OUT_HTML CONFIG...; cite CONFIG PATH A B; reconcile CONFIG [RAW DECISION]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION|REQ-ID [text|brief]|summary|citations [PATH|REQ-ID|ROLE]]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; validate CONFIG RUN_ID host DECISION; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]"
+const usage = "команды: help; init/index CONFIG; index CONFIG summary; anchors CONFIG [PATH...]; overview CONFIG...; corpus OUT_HTML CONFIG...; publish OUT_DIR CONFIG...; cite CONFIG PATH A B; reconcile CONFIG [RAW DECISION]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION|REQ-ID [text|brief]|summary|citations [PATH|REQ-ID|ROLE]]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; validate CONFIG RUN_ID host DECISION; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]"
 
 func execute(args []string) (any, error) {
 	if len(args) > 0 && args[0] == "reconcile" {
@@ -1261,6 +1261,9 @@ func execute(args []string) (any, error) {
 	}
 	if len(args) >= 3 && args[0] == "corpus" {
 		return corpus(args[1], args[2:])
+	}
+	if len(args) >= 3 && args[0] == "publish" {
+		return publish(args[1], args[2:])
 	}
 	if len(args) >= 2 && args[0] == "anchors" {
 		cfg, err := loadConfig(args[1], true)
