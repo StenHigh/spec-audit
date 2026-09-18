@@ -1067,10 +1067,17 @@ func citationIndex(run *os.Root, runID string, m Manifest, state State, filter [
 			hostRows++
 		}
 	}
+	// tool-spec §30.2, §33.2: one filter — a file path, a norm ID or a role.
 	if len(filter) == 1 {
+		match := func(row CitationRow) bool { return row.Path == filter[0] }
+		if requirementIDRE.MatchString(filter[0]) {
+			match = func(row CitationRow) bool { return row.RequirementID == filter[0] }
+		} else if oneOf(filter[0], "mapper", "redteam", "host") {
+			match = func(row CitationRow) bool { return row.Role == filter[0] }
+		}
 		kept := rows[:0]
 		for _, row := range rows {
-			if row.Path == filter[0] {
+			if match(row) {
 				kept = append(kept, row)
 			}
 		}
@@ -1094,6 +1101,66 @@ func citationIndex(run *os.Root, runID string, m Manifest, state State, filter [
 	})
 	slog.Debug("review: индекс цитат", "run_id", runID, "path", strings.Join(filter, ""), "citations", len(rows), "host_norms", hostRows)
 	return rows, nil
+}
+
+// requirementText renders a RequirementView as one readable text (tool-spec §33.4): the outcome row, each role's
+// states, statement, limitations and citations by location, then the host's verdict. JSON stays the answer envelope.
+func requirementText(view RequirementView) string {
+	var b strings.Builder
+	req := view.Requirement
+	fmt.Fprintf(&b, "%s — %s (run %s, %s)\n", req.ID, req.Title, view.RunID, view.Freshness)
+	fmt.Fprintf(&b, "Условие: %s\nТребование: %s\nПроверка: %s\n", req.Condition, req.Statement, req.Verification)
+	if req.Accepted != nil {
+		fmt.Fprintf(&b, "Принято: revision %d, clarity %s", req.Accepted.Revision, req.Accepted.Clarity)
+		if len(req.Accepted.Exceptions) > 0 {
+			fmt.Fprintf(&b, "; исключения: %s", strings.Join(req.Accepted.Exceptions, " | "))
+		}
+		if len(req.Accepted.Unresolved) > 0 {
+			fmt.Fprintf(&b, "; unresolved: %s", strings.Join(req.Accepted.Unresolved, " | "))
+		}
+		b.WriteString("\n")
+	}
+	fmt.Fprintf(&b, "\nИтог ролей: agree=%t", view.Outcome.Agree)
+	if view.Outcome.PreviousHost != nil {
+		p := view.Outcome.PreviousHost
+		fmt.Fprintf(&b, "; прошлый хост %s/%s: %s/%s/%s — %s", p.RunID, p.ReviewID, p.Specification, p.Implementation, p.Assertion, p.Statement)
+	}
+	b.WriteString("\n")
+	locate := func(c Citation) string { return fmt.Sprintf("%s:%d-%d", c.Path, c.LineStart, c.LineEnd) }
+	cite := func(spec, code []Citation, tests []TestCitation) {
+		for _, c := range spec {
+			fmt.Fprintf(&b, "  spec %s\n", locate(c))
+		}
+		for _, c := range code {
+			fmt.Fprintf(&b, "  code %s\n", locate(c))
+		}
+		for _, t := range tests {
+			fmt.Fprintf(&b, "  test %s %s\n", t.TestID, locate(t.Citation))
+		}
+	}
+	for _, role := range []string{"mapper", "redteam"} {
+		r, ok := view.Roles[role]
+		if !ok {
+			fmt.Fprintf(&b, "\n[%s] нет результата\n", role)
+			continue
+		}
+		o := view.Outcome.Roles[role]
+		fmt.Fprintf(&b, "\n[%s] %s/%s/%s (%s, попытка %d)\n%s\n", role, o.Specification, o.Implementation, o.Assertion, r.TaskID, r.Attempt, r.Statement)
+		for _, l := range r.Limitations {
+			fmt.Fprintf(&b, "  ограничение: %s\n", l)
+		}
+		cite(r.Spec, r.Code, r.Tests)
+	}
+	if h := view.Host; h != nil {
+		fmt.Fprintf(&b, "\n[host] %s/%s/%s (%s, %s, %s, own_citations=%t)\n%s\n", h.Specification, h.Implementation, h.Assertion, h.ReviewID, h.State, h.Form, h.OwnCitations, h.Statement)
+		cite(h.Spec, h.Code, h.Tests)
+	} else {
+		b.WriteString("\n[host] решения нет\n")
+	}
+	for _, e := range view.Executions {
+		fmt.Fprintf(&b, "  запуск %s: %s (%s)\n", e.TestID, e.State, e.ReceiptID)
+	}
+	return b.String()
 }
 
 // stagedReview is everything review checks before it writes; validate … host stops here (tool-spec §27, REQ-SA-047).

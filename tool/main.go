@@ -1022,6 +1022,18 @@ func readToolVersions(run *os.Root) (toolVersionJournal, error) {
 	return journal, nil
 }
 
+// warnVersionDrift names a run prepared by another binary version before a publishing command (tool-spec §33.3): the
+// journal records the fact anyway; the WARN makes it visible to the host at the moment it matters.
+func warnVersionDrift(run *os.Root, current string) {
+	journal, err := readToolVersions(run)
+	if err != nil || len(journal.Records) == 0 {
+		return
+	}
+	if prepared := journal.Records[0].ToolVersion; prepared != current {
+		slog.Warn("run подготовлен другой версией бинарника; журнал версий запишет обе", "prepared", prepared, "current", current)
+	}
+}
+
 // Runs before the authoritative write: a damaged or oversized journal refuses the command while the run is untouched.
 func prepareToolVersion(run *os.Root, command, toolVersion string) ([]byte, error) {
 	journal, err := readToolVersions(run)
@@ -1134,19 +1146,19 @@ func makeStatus(runID string, m Manifest, state State, fresh bool) Status {
 // requirementIDRE tells a norm ID from a DECISION path in `review CONFIG RUN_ID <arg>` (tool-spec §29.1).
 var requirementIDRE = regexp.MustCompile(`^REQ-[A-Z0-9]+-[0-9]+$`)
 
-// review CONFIG RUN_ID [DECISION|REQ-ID|summary|citations [PATH]] (tool-spec §14, §29.1, §30.2, §32.2).
+// review CONFIG RUN_ID [DECISION|REQ-ID [text]|summary|citations [PATH|REQ-ID|ROLE]] (tool-spec §14, §29.1, §30.2, §32.2, §33).
 func validReviewArgs(args []string) bool {
 	switch len(args) {
 	case 3, 4:
 		return true
 	case 5:
-		return args[3] == "citations"
+		return args[3] == "citations" || requirementIDRE.MatchString(args[3]) && args[4] == "text"
 	}
 	return false
 }
 
 // usage is the command list of tool-spec §1–10 with later extensions; help prints it, wrong arguments refuse with it (§24.4).
-const usage = "команды: help; init/index CONFIG; index CONFIG summary; cite CONFIG PATH A B; reconcile CONFIG [RAW DECISION]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION|REQ-ID|summary|citations [PATH]]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; validate CONFIG RUN_ID host DECISION; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]"
+const usage = "команды: help; init/index CONFIG; index CONFIG summary; anchors CONFIG; cite CONFIG PATH A B; reconcile CONFIG [RAW DECISION]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION|REQ-ID [text]|summary|citations [PATH|REQ-ID|ROLE]]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; validate CONFIG RUN_ID host DECISION; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]"
 
 func execute(args []string) (any, error) {
 	if len(args) > 0 && args[0] == "reconcile" {
@@ -1168,6 +1180,13 @@ func execute(args []string) (any, error) {
 			return nil, err
 		}
 		return checkAcceptance(cfg, args[2:])
+	}
+	if len(args) == 2 && args[0] == "anchors" {
+		cfg, err := loadConfig(args[1], true)
+		if err != nil {
+			return nil, err
+		}
+		return anchorIndex(cfg)
 	}
 	if len(args) == 5 && args[0] == "cite" {
 		cfg, err := loadConfig(args[1], true)
@@ -1292,6 +1311,9 @@ func execute(args []string) (any, error) {
 	} else if journal, err = prepareToolVersion(run, command, version); err != nil {
 		return nil, err
 	}
+	if journal != nil && command != "prepare" {
+		warnVersionDrift(run, version)
+	}
 	var state State
 	if command == "prepare" {
 		state = newState(m)
@@ -1397,8 +1419,12 @@ func execute(args []string) (any, error) {
 		if len(args) >= 4 && args[3] == "citations" {
 			return citationIndex(run, runID, m, state, args[4:])
 		}
-		if len(args) == 4 && requirementIDRE.MatchString(args[3]) {
-			return requirementView(reports, run, runID, m, state, fresh, args[3])
+		if len(args) >= 4 && requirementIDRE.MatchString(args[3]) {
+			view, err := requirementView(reports, run, runID, m, state, fresh, args[3])
+			if err != nil || len(args) == 4 {
+				return view, err
+			}
+			return map[string]string{"requirement_id": args[3], "text": requirementText(view)}, nil
 		}
 		if len(args) == 4 && args[3] == "summary" {
 			context, err := reviewContext(reports, run, runID, m, state, fresh)
