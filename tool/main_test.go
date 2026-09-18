@@ -808,7 +808,7 @@ func TestPrepareDispatch(t *testing.T) {
 		}
 	}
 	// tool-spec §30.3: counters as in status.
-	if batch.Expected != len(batch.Tasks) || batch.Submitted != 0 || batch.DeliveryComplete {
+	if batch.Expected != len(batch.Tasks) || batch.Submitted != 0 || batch.DeliveryComplete || len(batch.PendingIDs) != len(batch.Tasks) || batch.PendingIDs[0] != batch.Tasks[0].TaskID {
 		t.Fatal("prepare: счётчики доставки", batch.Expected, batch.Submitted, batch.DeliveryComplete)
 	}
 	first := batch.Tasks[0]
@@ -838,7 +838,7 @@ func TestPrepareDispatch(t *testing.T) {
 		writeFixture(t, path, legacyMarshal(t, result))
 		runOK(t, "submit", config, "review", task.TaskID, path)
 	}
-	if done := runOK(t, "tasks", config, "review").(TaskBatch); len(done.Tasks) != 0 || done.Expected != len(batch.Tasks) || done.Submitted != done.Expected || !done.DeliveryComplete {
+	if done := runOK(t, "tasks", config, "review").(TaskBatch); len(done.Tasks) != 0 || done.Expected != len(batch.Tasks) || done.Submitted != done.Expected || !done.DeliveryComplete || len(done.PendingIDs) != 0 {
 		t.Fatal("tasks после полной доставки: tasks [] и счётчики", done.Expected, done.Submitted, done.DeliveryComplete)
 	}
 	if raw, err := json.Marshal(TaskBatch{Tasks: []Task{}}); err != nil || !bytes.Contains(raw, []byte(`"delivery_complete":false`)) {

@@ -171,9 +171,10 @@ type TaskBatch struct {
 	Files       []SourceFile `json:"files"`
 	SDK         []SDKRecord  `json:"sdk"`
 	// Delivery counters as in Status (tool-spec §30.3): an empty tasks list after full delivery is explicit, not silent.
-	Expected         int  `json:"expected"`
-	Submitted        int  `json:"submitted"`
-	DeliveryComplete bool `json:"delivery_complete"`
+	Expected         int      `json:"expected"`
+	Submitted        int      `json:"submitted"`
+	DeliveryComplete bool     `json:"delivery_complete"`
+	PendingIDs       []string `json:"pending_ids"` // task IDs still to deliver (tool-spec §40.3) — the queue without the bodies
 }
 
 type Status struct {
@@ -956,7 +957,7 @@ func rolePrompt(task Task, p dispatchPrompt) []byte {
 	b.WriteString("2. Для КАЖДОГО requirement из TASK установи реализацию в коде по всем достижимым веткам, затем отдельно — тесты и их конкретные assertions. Spec-цитата обязана лежать целиком внутри source-блока нормы или одного из её `accepted.citations` (тот же path, диапазон внутри принятого, точные строки).\n")
 	b.WriteString("3. Собери ответ в OUTPUT_PATH (можно частями), один JSON без Markdown по форме из PROTOCOL: метаданные копируй из TASK; assessments — ровно по одной записи на каждый requirement id; все поля обязательны, null запрещён, пустые массивы — []. Состояния: specification clear|ambiguous (принятую ambiguous-норму нельзя объявлять clear), implementation supported|contradicted|unknown, assertion relevant|weak|contradicts|missing|unknown.\n")
 	b.WriteString("4. Citation = path, line_start, line_end, quote: путь относительный из FILES нужной категории; quote — ТОЧНЫЕ ПОЛНЫЕ строки, без завершающего перевода строки, отступы сохранены. Бери её из CITE, не собирай вручную. test_id для PHPUnit — полное имя класса с namespace и метод: `Tests\\Feature\\ExampleTest::test_name`; для Go — `import/path::TestName`.\n")
-	b.WriteString("5. Запусти VALIDATE (каждый вызов дописывается в validate.log — это твой журнал для хоста); исправляй только подтверждённые ошибки формы/цитат, не меняя суждений. Когда VALIDATE проходит — верни путь OUTPUT_PATH и сводку счётчиками по состояниям (supported/contradicted/unknown, relevant/weak/contradicts/missing/unknown, ambiguous), без PASS/сертификатов/приоритетов/usage.\n\n")
+	b.WriteString("5. Запусти VALIDATE ровно той командой, что дана выше, каждый раз (вызов без `tee` не попадает в validate.log — твой журнал для хоста); исправляй только подтверждённые ошибки формы/цитат, не меняя суждений. Когда VALIDATE проходит — верни путь OUTPUT_PATH и сводку счётчиками по состояниям (supported/contradicted/unknown, relevant/weak/contradicts/missing/unknown, ambiguous), без PASS/сертификатов/приоритетов/usage.\n\n")
 	fmt.Fprintf(&b, "SDK_HINTS: если хост положил файл %s — прочитай его как подсказки статического анализатора по правилам PROTOCOL; если файла нет, подсказки не передаются, и это не доказывает отсутствие кода или теста.\n", filepath.Join(own, "sdk_hints.json"))
 	return []byte(b.String())
 }
@@ -1411,7 +1412,10 @@ func execute(args []string) (any, error) {
 	case "prepare", "tasks":
 		batch := TaskBatch{RunID: runID, SnapshotID: m.SnapshotID, ProjectRoot: cfg.ProjectRoot, Runtime: cfg.Runtime, Tasks: pending(state), Files: m.Files, SDK: sdkRecordsFor(cfg.ReportsDir, runID, state.SDK)}
 		batch.Expected, batch.Submitted = len(state.Entries), len(state.Entries)-len(batch.Tasks)
-		batch.DeliveryComplete = len(batch.Tasks) == 0
+		batch.DeliveryComplete, batch.PendingIDs = len(batch.Tasks) == 0, []string{}
+		for _, task := range batch.Tasks {
+			batch.PendingIDs = append(batch.PendingIDs, task.TaskID)
+		}
 		return batch, nil
 	case "status":
 		view, err := reviewContext(reports, run, runID, m, state, fresh)
