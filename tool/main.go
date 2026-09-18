@@ -489,6 +489,19 @@ func cite(cfg Config, path, from, to string) (Citation, error) {
 	return Citation{path, start, end, quote}, nil
 }
 
+// sourceRanges lists a norm's citable spec ranges as path:A-B (tool-spec §42.3).
+func sourceRanges(req Requirement) []string {
+	sources := []Citation{req.Source}
+	if req.Accepted != nil {
+		sources = req.Accepted.Citations
+	}
+	ranges := []string{}
+	for _, c := range sources {
+		ranges = append(ranges, fmt.Sprintf("%s:%d-%d", c.Path, c.LineStart, c.LineEnd))
+	}
+	return ranges
+}
+
 func lineQuote(data []byte, start, end int) (string, error) {
 	if !utf8.Valid(data) {
 		return "", errors.New("цитируемый источник должен быть UTF-8")
@@ -861,7 +874,8 @@ func checkCitations(spec, code []Citation, testCitations []TestCitation, req Req
 				return errors.New("неверный диапазон цитаты")
 			}
 			if group.kind == "spec" && !req.containsSource(citation) {
-				return errors.New("цитата вне блока назначенного требования")
+				// tool-spec §42.3: name the accepted ranges (locations only, never quotes — REQ-SA-015) so the role fixes it once.
+				return fmt.Errorf("цитата вне блока назначенного требования; допустимые диапазоны: %s", strings.Join(sourceRanges(req), ", "))
 			}
 			if !checkSources {
 				continue

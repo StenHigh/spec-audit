@@ -135,19 +135,27 @@ func TestCheckAcceptance(t *testing.T) {
 			t.Fatal("правка ТЗ должна давать stale", view["freshness"])
 		}
 		candidates := view["candidates"].([]checkedCandidate)
-		want := matchHint{"REQ-AI-001", 1, 1, 1, 1, true, true}
+		want := matchHint{"REQ-AI-001", 1, 1, 1, 1, true, true, 1}
 		if len(candidates[0].Matches) != 1 || candidates[0].Matches[0] != want {
 			t.Fatal("сдвиг строк не должен мешать подсказке", candidates[0].Matches)
 		}
 		if len(candidates[1].Matches) != 1 || candidates[1].Matches[0].FieldsEqual || candidates[1].Matches[0].Overlap != 1 {
 			t.Fatal("иной statement — та же цитата, fields_equal=false", candidates[1].Matches)
 		}
-		// tool-spec §41.3: half the lines shared → likely the same text; a quarter → a hint only.
-		if len(candidates[2].Matches) != 1 || candidates[2].Matches[0].Overlap != 0.25 || candidates[2].Matches[0].SharedLines != 1 || candidates[2].Matches[0].LikelyDuplicate {
+		// tool-spec §41.3/§42.1: a quarter of the lines is a hint only by lines; the identical statement still marks a duplicate by words.
+		if len(candidates[2].Matches) != 1 || candidates[2].Matches[0].Overlap != 0.25 || candidates[2].Matches[0].SharedLines != 1 || !candidates[2].Matches[0].LikelyDuplicate || candidates[2].Matches[0].TextSimilarity != 1 {
 			t.Fatal("добавленный контекст снижает overlap, но подсказка остаётся", candidates[2].Matches)
 		}
 		if len(candidates[3].Matches) != 0 {
-			t.Fatal("без общих строк подсказок нет", candidates[3].Matches)
+			t.Fatal("без общих строк и слов подсказок нет", candidates[3].Matches)
+		}
+		// tool-spec §42.1: a restatement in its own lines shares no citation lines but most words → text hint.
+		restated := candidateAt(t, base, "rules.md", "C005", "Лимит одного файла 8 МиБ включительно", 5, 5)
+		restated.Condition = "В указанной области"
+		digest := checkView(t, config, rawFile(t, config, "digest", []legacyCandidate{restated}))
+		textual := digest["candidates"].([]checkedCandidate)[0].Matches
+		if len(textual) != 1 || textual[0].ID != "REQ-AI-001" || textual[0].SharedLines != 0 || !textual[0].LikelyDuplicate || textual[0].TextSimilarity < likelyDuplicateText {
+			t.Fatal("свод своими строками ловится по словам", textual)
 		}
 		if !bytes.Equal(ledgerBytes, readFixture(t, filepath.Join(base, "runs", acceptedFile))) {
 			t.Fatal("check изменил журнал")
