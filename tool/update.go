@@ -200,11 +200,8 @@ func runUpdate(client *http.Client, baseURL, exe, current, pubHex string) (map[s
 		return nil, err
 	}
 	defer dir.Close()
+	// atomicWrite sets the exact mode on the temporary file before the rename: a refusal here means the old bytes stay.
 	if err := atomicWrite(dir, binaryName, bin, 0755); err != nil {
-		return nil, err
-	}
-	// The create mode is masked by umask; the contract promises exactly 0755.
-	if err := dir.Chmod(binaryName, 0755); err != nil {
 		return nil, err
 	}
 	slog.Info("update: бинарник заменён", "from", current, "to", m.Version, "bytes", len(bin))

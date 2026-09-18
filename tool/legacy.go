@@ -30,6 +30,11 @@ type legacyRaw struct {
 	Limitations []string          `json:"limitations"`
 }
 
+var (
+	legacySHARE = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	legacyIDRE  = regexp.MustCompile(`^C[0-9]{3}$`)
+)
+
 func legacyDecode(data []byte, out any) error {
 	if len(data) > maxResult {
 		return errors.New("ответ больше 4 MiB")
@@ -75,17 +80,15 @@ func legacyShape(raw legacyRaw) error {
 		return errors.New("неверная версия или число кандидатов")
 	}
 	sources := map[string]bool{}
-	shaPattern := regexp.MustCompile(`^[0-9a-f]{64}$`)
 	for _, source := range raw.SourceSet {
-		if !localPath(source.Path) || sources[source.Path] || !shaPattern.MatchString(source.SHA256) {
+		if !localPath(source.Path) || sources[source.Path] || !legacySHARE.MatchString(source.SHA256) {
 			return errors.New("неверный путь, повторный источник или hash")
 		}
 		sources[source.Path] = true
 	}
 	seen := map[string]bool{}
-	idPattern := regexp.MustCompile(`^C[0-9]{3}$`)
 	for _, candidate := range raw.Candidates {
-		if !idPattern.MatchString(candidate.ID) || seen[candidate.ID] || strings.TrimSpace(candidate.Condition) == "" || strings.TrimSpace(candidate.Statement) == "" {
+		if !legacyIDRE.MatchString(candidate.ID) || seen[candidate.ID] || strings.TrimSpace(candidate.Condition) == "" || strings.TrimSpace(candidate.Statement) == "" {
 			return errors.New("неверный/повторный ID или пустая норма")
 		}
 		seen[candidate.ID] = true

@@ -501,8 +501,14 @@ func TestReviewV2(t *testing.T) {
 	if first.RequirementID != "REQ-DEMO-001" || len(first.Spec) != 1 || len(first.Code) != 1 || len(first.Tests) != 1 || first.Statement != "host: принимает свидетельства роли" {
 		t.Fatal("both должен объединить свидетельства ролей без повторов", first)
 	}
-	// concur: redteam adopts only the redteam evidence (no tests for the first norm).
+	// concur: redteam adopts only the redteam evidence (no tests for the first norm) — so a `relevant` verdict on it has
+	// no test evidence and is refused (§48.1, REVIEW 2026-09-18 §1); with the redteam's own `unknown` it is accepted.
 	redteam := reviewV2Input(t, config, "v2-redteam", "redteam")
+	if _, err := execute([]string{"review", config, "review", write(redteam)}); err == nil || !strings.Contains(err.Error(), "требует тестовый источник") {
+		t.Fatal("relevant без принятого тестового свидетельства — отказ и для version 2", err)
+	}
+	redteam.Verdicts[0].Assertion = "unknown"
+	redteam.Counts = countVerdicts(redteam.Verdicts)
 	runOK(t, "review", config, "review", write(redteam))
 	view = runOK(t, "review", config, "review").(ReviewContext)
 	if len(view.History) != 3 || len(view.Latest.Assessments[0].Tests) != 0 || len(view.Latest.Assessments[0].Code) != 1 || view.Concur["REQ-DEMO-002"] != "redteam" {

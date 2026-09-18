@@ -206,7 +206,7 @@ func phpFacts(cfg Config, m Manifest, paths []string) (any, error) {
 			return nil, errors.New("PHP facts: уникальные PHP-файлы выбранного snapshot")
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Runtime.TimeoutSeconds+5)*time.Second)
+	ctx, cancel := context.WithTimeout(processContext, time.Duration(cfg.Runtime.TimeoutSeconds+5)*time.Second)
 	defer cancel()
 	id, err := verifiedContainer(ctx, cfg)
 	if err != nil {
@@ -509,7 +509,7 @@ func phpTyped(cfg Config, m Manifest, paths []string) (typedResult, error) {
 		return result, err
 	}
 	result.phpstan, result.larastan = phpstan, larastan
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.SDK.TimeoutSeconds+20)*time.Second)
+	ctx, cancel := context.WithTimeout(processContext, time.Duration(cfg.SDK.TimeoutSeconds+20)*time.Second)
 	defer cancel()
 	id, err := verifiedContainer(ctx, cfg)
 	if err != nil {

@@ -6,6 +6,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -240,6 +242,9 @@ type Report struct {
 	Navigation                 ReportNavigation    `json:"navigation"`
 }
 
+// processContext is cancelled by SIGINT/SIGTERM; every child process derives its deadline from it.
+var processContext = context.Background()
+
 func main() {
 	level := new(slog.LevelVar)
 	if value := os.Getenv("LOG_LEVEL"); value != "" {
@@ -249,6 +254,10 @@ func main() {
 		}
 	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+	// SIGINT/SIGTERM cancel the process context: child processes (tests, containers) stop with the CLI (REVIEW 2.2).
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	processContext = ctx
 	slog.Debug("начало операции")
 	value, err := execute(os.Args[1:])
 	if err != nil {
@@ -940,7 +949,11 @@ func atomicWrite(root *os.Root, path string, data []byte, mode os.FileMode) erro
 		return err
 	}
 	defer root.Remove(tmp)
+	// The create mode is masked by umask; the final mode is set on the temporary file, before the commit point.
 	if _, err = f.Write(data); err == nil {
+		err = f.Chmod(mode)
+	}
+	if err == nil {
 		err = f.Sync()
 	}
 	closeErr := f.Close()

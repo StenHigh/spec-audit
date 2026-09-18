@@ -792,14 +792,13 @@ func validateVerdicts(record reviewRecord, verdicts []ReviewVerdictV3, counts Re
 				return reviewRecord{}, err
 			}
 			assessment.Spec, assessment.Code, assessment.Tests = mergeCitations(adopted, assessment)
-			// Version 3 promises §7 completeness on the union (REQ-SA-046); version 2 keeps its §23 contract unchanged.
-			if record.Version == 3 {
-				if len(assessment.Spec) == 0 || (assessment.Implementation != "unknown" && len(assessment.Code) == 0) {
-					return reviewRecord{}, fmt.Errorf("%s: нужна spec; supported/contradicted требуют code", verdict.RequirementID)
-				}
-				if oneOf(assessment.Assertion, "relevant", "weak", "contradicts") && len(assessment.Tests) == 0 {
-					return reviewRecord{}, fmt.Errorf("%s: оценка assertion требует тестовый источник", verdict.RequirementID)
-				}
+			// §7 completeness holds on the union for both verdict forms (REQ-SA-046, §48.1): a positive state needs the
+			// kind of evidence that backs it, whichever role the host adopted it from.
+			if len(assessment.Spec) == 0 || (assessment.Implementation != "unknown" && len(assessment.Code) == 0) {
+				return reviewRecord{}, fmt.Errorf("%s: нужна spec; supported/contradicted требуют code", verdict.RequirementID)
+			}
+			if oneOf(assessment.Assertion, "relevant", "weak", "contradicts") && len(assessment.Tests) == 0 {
+				return reviewRecord{}, fmt.Errorf("%s: оценка assertion требует тестовый источник", verdict.RequirementID)
 			}
 			slog.Debug("review: свидетельства по concur", "requirement_id", verdict.RequirementID, "concur", verdict.Concur, "spec", len(assessment.Spec), "code", len(assessment.Code), "tests", len(assessment.Tests), "own_spec", len(verdict.Spec), "own_code", len(verdict.Code), "own_tests", len(verdict.Tests))
 		}

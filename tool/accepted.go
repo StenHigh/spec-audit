@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -720,17 +721,7 @@ func quoteLines(citations []Citation) map[string]bool {
 	return lines
 }
 
-func sameStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
+func sameStrings(a, b []string) bool { return slices.Equal(a, b) }
 
 // fieldsEqual: with the record's title/verification the candidate would hash to the same content (rebind possible).
 func fieldsEqual(candidate legacyCandidate, req Requirement) bool {

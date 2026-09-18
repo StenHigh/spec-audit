@@ -36,13 +36,13 @@ staged=""
 cleanup() { rm -rf "$tmp" "$staged"; }
 trap cleanup 0 HUP INT TERM
 
-curl --fail --location --silent --show-error "$base/release-manifest.json" -o "$tmp/manifest.json" || fail "манифест релиза недоступен"
+curl --fail --location --silent --show-error --connect-timeout 20 --max-time 120 "$base/release-manifest.json" -o "$tmp/manifest.json" || fail "манифест релиза недоступен"
 # sha256 нашего ассета без jq: убрать пробелы, разрезать по объектам, взять объект с нашим file.
 expected=$(tr -d ' \n\r\t' <"$tmp/manifest.json" | tr '}' '\n' | grep "\"file\":\"$asset\"" | sed -n 's/.*"sha256":"\([0-9a-f]*\)".*/\1/p' | head -n 1)
 [ "${#expected}" -eq 64 ] || fail "в манифесте нет sha256 для $asset"
 case "$expected" in *[!0-9a-f]*) fail "sha256 в манифесте повреждён" ;; esac
 
-curl --fail --location --silent --show-error "$base/$asset" -o "$tmp/$asset" || fail "ассет $asset недоступен"
+curl --fail --location --silent --show-error --connect-timeout 20 --max-time 900 "$base/$asset" -o "$tmp/$asset" || fail "ассет $asset недоступен"
 actual=$(sha "$tmp/$asset")
 [ "$actual" = "$expected" ] || fail "sha256 скачанного файла не совпадает с манифестом; установка отменена"
 
