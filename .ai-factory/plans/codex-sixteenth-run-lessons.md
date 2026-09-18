@@ -18,4 +18,4 @@ Milestone: "Уроки шестнадцатого прогона 2026-09-18"
 - [x] Task 1: `runOverview` — цитаты только contradicted-ролей и хоста; `ElsewhereHit.RoleHere`; свёртка в `requirementText`; `strictJSON` — имя поля; `prepare` — существование по manifest; тесты
 - [x] Task 2: §44 tool-spec, AGENTS, SKILL.md, README, ROADMAP, adoption «пятнадцатый цикл»
 <!-- Commit checkpoint: tasks 1-2 -->
-- [ ] Task 3: релиз `v0.1.30`, update хоста, skill в синтетике и пилоте (push — как одобрено владельцем)
+- [x] Task 3: релиз `v0.1.30`, update хоста, skill в синтетике и пилоте (push — как одобрено владельцем)
