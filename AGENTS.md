@@ -26,6 +26,7 @@ spec-audit — самостоятельный, не привязанный к б
 | [.ai-factory/DESCRIPTION.md](.ai-factory/DESCRIPTION.md) | Назначение, стек и команды разработки |
 | [.ai-factory/ARCHITECTURE.md](.ai-factory/ARCHITECTURE.md) | Реальная структура и границы ответственности |
 | [.ai-factory/ROADMAP.md](.ai-factory/ROADMAP.md) | Единственная очередь развития и завершённые этапы |
+| [.ai-factory/LESSONS.md](.ai-factory/LESSONS.md) | Журнал уроков прогонов и решений владельца по каждому пункту (история, не очередь) |
 | [.ai-factory/RULES.md](.ai-factory/RULES.md) | Обязательные границы, сохранность и разрешения |
 | [.ai-factory/rules/base.md](.ai-factory/rules/base.md) | Соглашения кода и проверок |
 
