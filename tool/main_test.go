@@ -1067,3 +1067,63 @@ func TestCorpus(t *testing.T) {
 	}
 	runFail(t, "corpus", out)
 }
+
+// tool-spec §47: the corpus delta compares the two latest decided runs of a scope norm by norm; baseline_run pins it.
+func TestCorpusDelta(t *testing.T) {
+	config, base := fixture(t)
+	decide := func(runID string, mutate func(*[]Assessment)) {
+		batch := runOK(t, "prepare", config, runID).(TaskBatch)
+		for _, task := range batch.Tasks {
+			path := filepath.Join(base, runID+"-"+task.TaskID+".json")
+			writeFixture(t, path, legacyMarshal(t, sampleResult(t, task, filepath.Join(base, "source"))))
+			runOK(t, "submit", config, runID, task.TaskID, path)
+		}
+		view := runOK(t, "review", config, runID).(ReviewContext)
+		rows := append([]Assessment{}, view.Entries[0].Result.Assessments...)
+		mutate(&rows)
+		decision := ReviewDecision{1, "decision-" + runID, runID, view.SnapshotID, view.BasisSHA256, "host", "s", rows, []string{}}
+		path := filepath.Join(base, "host-"+runID+".json")
+		writeFixture(t, path, legacyMarshal(t, decision))
+		runOK(t, "review", config, runID, path)
+	}
+	decide("r1", func(rows *[]Assessment) {})
+	if view := runOK(t, "overview", config).(Overview); view.Scopes[0].Delta != nil {
+		t.Fatal("одно решение — динамики нет")
+	}
+	// r2: the host now finds the contradicted norm supported+relevant (closed) and a supported one weak (opened).
+	fixed := func(rows *[]Assessment) {
+		for i := range *rows {
+			switch (*rows)[i].Implementation {
+			case "contradicted":
+				(*rows)[i].Implementation, (*rows)[i].Assertion = "supported", "relevant"
+			case "supported":
+				if (*rows)[i].Assertion == "relevant" {
+					(*rows)[i].Assertion = "weak"
+				}
+			}
+		}
+	}
+	decide("r2", fixed)
+	view := runOK(t, "overview", config).(Overview)
+	d := view.Scopes[0].Delta
+	if d == nil || d.BaselineRun != "r1" || d.Pinned || len(d.Closed) != 1 || len(d.Opened) != 1 || len(d.Incomparable) != 0 || d.GapBefore.Total != d.GapAfter.Total || view.Totals.Closed != 1 || view.Totals.Opened != 1 {
+		t.Fatal("динамика r1 → r2", d, view.Totals)
+	}
+	if d.Closed[0].To != "clear/supported/relevant" || !strings.Contains(d.Closed[0].From, "contradicted") || d.Opened[0].To != "clear/supported/weak" {
+		t.Fatal("переходы состояний", d.Closed, d.Opened)
+	}
+	// r3 repeats r2; the pinned baseline keeps comparing against r1.
+	decide("r3", fixed)
+	if d := runOK(t, "overview", config).(Overview).Scopes[0].Delta; d.BaselineRun != "r2" || len(d.Closed) != 0 || len(d.Opened) != 0 {
+		t.Fatal("без baseline сравнение с предыдущим решённым", d.BaselineRun, len(d.Closed))
+	}
+	writeFixture(t, config, append(readFixture(t, config), []byte("baseline_run: r1\n")...))
+	if d := runOK(t, "overview", config).(Overview).Scopes[0].Delta; d.BaselineRun != "r1" || !d.Pinned || len(d.Closed) != 1 {
+		t.Fatal("baseline_run закрепляет точку сравнения", d.BaselineRun, d.Pinned)
+	}
+	out := filepath.Join(base, "corpus.html")
+	runOK(t, "corpus", out, config)
+	if page := string(readFixture(t, out)); !strings.Contains(page, "Динамика") || !strings.Contains(page, "r1 (baseline) → r3") || !strings.Contains(page, "Закрыто") {
+		t.Fatal("страница показывает динамику с закреплённым baseline")
+	}
+}

@@ -81,6 +81,9 @@ type Config struct {
 	// Related lists sibling scope CONFIGs (relative to this file) whose decided contradicted code lines are shown
 	// under this scope's norms (tool-spec §43.1). Not part of the manifest: it never changes snapshot_id.
 	Related []string `yaml:"related,omitempty" json:"-"`
+	// BaselineRun pins the decided run the corpus delta compares against (tool-spec §47) — the «before the fix» run;
+	// without it the delta uses the decided run just before the current one. Not part of the manifest.
+	BaselineRun string `yaml:"baseline_run,omitempty" json:"-"`
 	// SDK включает типизированный PHP SDK (docs/php-sdk-contract.md); nil сохраняет прежний snapshot_id.
 	SDK *SDKConfig `yaml:"sdk,omitempty" json:"sdk,omitempty"`
 }
