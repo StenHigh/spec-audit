@@ -32,7 +32,7 @@ func candidateAt(t *testing.T, base, path, id, statement string, start, end int)
 func acceptOperation(action string, previous []string, candidates ...string) AcceptedOperation {
 	targets := []AcceptedTarget{}
 	for _, id := range candidates {
-		target := AcceptedTarget{id, "Норма", "Проверить точный результат"}
+		target := AcceptedTarget{id, "Норма", "Проверить точный результат", ""}
 		if oneOf(action, "reject", "defer") {
 			target.Title, target.Verification = "", ""
 		}
@@ -439,7 +439,7 @@ func TestAcceptedExactHistory(t *testing.T) {
 	example := candidateAt(t, base, "rules.md", "C002", "Две минуты", 5, 5)
 	deferred := candidateAt(t, base, "rules.md", "C003", "Название", 3, 3)
 	ops := []AcceptedOperation{acceptOperation("accept", []string{}, c.ID), acceptOperation("reject", []string{}, example.ID), acceptOperation("defer", []string{}, deferred.ID)}
-	ops[0].Targets[0] = AcceptedTarget{c.ID, "Уведомление", "Проверить <срок>"}
+	ops[0].Targets[0] = AcceptedTarget{c.ID, "Уведомление", "Проверить <срок>", ""}
 	ops[0].Reason, ops[1].Reason, ops[2].Reason = "Принята известная часть", "Это пример", "Нужен отдельный разбор"
 	rawPath, decisionPath := acceptedInputs(t, config, "exact", []legacyCandidate{c, example, deferred}, ops...)
 	var pretty bytes.Buffer
@@ -959,7 +959,7 @@ func TestReanchor(t *testing.T) {
 	runOK(t, "reconcile", config, raw, decision)
 	before := acceptedRead(t, config).Records[0]
 	reanchor := func(previous string, candidate string) AcceptedOperation {
-		return AcceptedOperation{"reanchor", []string{previous}, []AcceptedTarget{{candidate, "", ""}}, "Та же норма в новой редакции текста"}
+		return AcceptedOperation{"reanchor", []string{previous}, []AcceptedTarget{{candidate, "", "", ""}}, "Та же норма в новой редакции текста"}
 	}
 	// The text moves and the extractor rephrases the norm; the host keeps the accepted wording.
 	writeFixture(t, rules, append([]byte("Вводная строка.\n"), readFixture(t, rules)...))
@@ -1065,4 +1065,47 @@ func TestKeepPackage(t *testing.T) {
 	if _, err := execute([]string{"check", config, raw, decision}); err == nil || !strings.Contains(err.Error(), "keep REQ-AI-001") || !strings.Contains(err.Error(), "rules.md") {
 		t.Fatal("keep после изменения источника — отказ с именем нормы и файла", err)
 	}
+}
+
+// tool-spec §46 / REQ-SA-049: a version 2 decision may narrow a candidate's statement — words removed, never added.
+func TestAcceptNarrowed(t *testing.T) {
+	config, base := acceptedFixture(t)
+	c := candidateAt(t, base, "rules.md", "C001", "Лимит одного файла — 8 МиБ включительно", 2, 2)
+	rawPath, _ := acceptedInputs(t, config, "probe", []legacyCandidate{c}, acceptOperation("accept", []string{}, "C001"))
+	raw := readFixture(t, rawPath)
+	write := func(id, narrowed, action string) string {
+		decision := acceptedDecisionV2{2, id, runOK(t, "reconcile", config).(map[string]any)["base_index"].(string), digest(raw), []acceptedOperationV2{{action, []string{}, []acceptedTargetV2{{"C001", "Лимит", "Проверить границу", narrowed}}, "Сужение по тексту ТЗ"}}}
+		path := filepath.Join(base, id+".json")
+		writeFixture(t, path, legacyMarshal(t, decision))
+		return path
+	}
+	if _, err := execute([]string{"check", config, rawPath, write("wider", "Лимит одного файла — 8 МиБ включительно для всех", "accept")}); err == nil || !strings.Contains(err.Error(), "добавляет слово") {
+		t.Fatal("добавление смысла — отказ", err)
+	}
+	if _, err := execute([]string{"check", config, rawPath, write("same", "Лимит одного файла — 8 МиБ включительно", "accept")}); err == nil || !strings.Contains(err.Error(), "отличаться") {
+		t.Fatal("тот же statement — отказ", err)
+	}
+	if _, err := execute([]string{"check", config, rawPath, write("defer", "Лимит одного файла", "defer")}); err == nil || !strings.Contains(err.Error(), "narrowed_statement допустим только") {
+		t.Fatal("defer не сужает", err)
+	}
+	narrowed := write("narrow", "Лимит одного файла — 8 МиБ", "accept")
+	if view := runOK(t, "check", config, rawPath, narrowed).(map[string]any); view["valid"] != true {
+		t.Fatal("сужение принимается dry-run", view)
+	}
+	applied := runOK(t, "reconcile", config, rawPath, narrowed).(map[string]any)
+	record := applied["records"].([]AcceptedRecord)[0]
+	if record.Requirement.Statement != "Лимит одного файла — 8 МиБ" || record.Requirement.Title != "Лимит" || record.Status != "active" {
+		t.Fatal("принятая норма несёт суженный statement", record.Requirement.Statement)
+	}
+	// The journal replays the version 2 decision; the raw still carries the original wording.
+	if again := runOK(t, "reconcile", config).(map[string]any); again["records"].([]AcceptedRecord)[0].Requirement.Statement != "Лимит одного файла — 8 МиБ" || !strings.Contains(again["journal"].(acceptedLedger).Commits[0].Raw, "включительно") {
+		t.Fatal("журнал воспроизводит сужение, raw хранит оригинал")
+	}
+	if index := runOK(t, "index", config).(map[string]any); index["requirements"].([]Requirement)[0].Statement != "Лимит одного файла — 8 МиБ" {
+		t.Fatal("snapshot несёт суженную норму")
+	}
+	// A version 3 decision is refused before anything is read.
+	bad := filepath.Join(base, "v3.json")
+	writeFixture(t, bad, []byte(`{"version":3,"decision_id":"x","base_index":"y","raw_sha256":"z","operations":[]}`))
+	runFail(t, "check", config, rawPath, bad)
 }

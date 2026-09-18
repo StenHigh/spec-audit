@@ -28,6 +28,75 @@ type AcceptedTarget struct {
 	Candidate    string `json:"candidate"`
 	Title        string `json:"title"`
 	Verification string `json:"verification"`
+	// Narrowed is the host's narrowed statement from a version 2 decision (REQ-SA-049): only words of the candidate's
+	// statement may remain. It lives in the journal's decision bytes, not in the derived state.
+	Narrowed string `json:"-"`
+}
+
+// Decision version 2 (tool-spec §46): version 1 plus narrowed_statement on every target ("" when unused).
+type acceptedTargetV2 struct {
+	Candidate         string `json:"candidate"`
+	Title             string `json:"title"`
+	Verification      string `json:"verification"`
+	NarrowedStatement string `json:"narrowed_statement"`
+}
+
+type acceptedOperationV2 struct {
+	Action   string             `json:"action"`
+	Previous []string           `json:"previous"`
+	Targets  []acceptedTargetV2 `json:"targets"`
+	Reason   string             `json:"reason"`
+}
+
+type acceptedDecisionV2 struct {
+	Version    int                   `json:"version"`
+	DecisionID string                `json:"decision_id"`
+	BaseIndex  string                `json:"base_index"`
+	RawSHA256  string                `json:"raw_sha256"`
+	Operations []acceptedOperationV2 `json:"operations"`
+}
+
+// decodeDecision reads a DECISION of version 1 or 2 into the internal form; other versions are refused before any
+// source is read. The version is peeked first so the strict field check matches the declared form.
+func decodeDecision(data []byte, out *AcceptedDecision) error {
+	var head struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &head); err != nil {
+		return errors.New("недопустимый JSON решения")
+	}
+	if head.Version != 2 {
+		return legacyDecode(data, out)
+	}
+	var v2 acceptedDecisionV2
+	if err := legacyDecode(data, &v2); err != nil {
+		return err
+	}
+	*out = AcceptedDecision{Version: 1, DecisionID: v2.DecisionID, BaseIndex: v2.BaseIndex, RawSHA256: v2.RawSHA256, Operations: []AcceptedOperation{}}
+	for _, op := range v2.Operations {
+		targets := []AcceptedTarget{}
+		for _, t := range op.Targets {
+			targets = append(targets, AcceptedTarget{t.Candidate, t.Title, t.Verification, t.NarrowedStatement})
+		}
+		out.Operations = append(out.Operations, AcceptedOperation{op.Action, op.Previous, targets, op.Reason})
+	}
+	return nil
+}
+
+// narrowable is the REQ-SA-049 guard: the narrowed statement is non-empty, differs from the candidate's and contains
+// only words (letters/digits, case-insensitive) that the candidate's statement contains — meaning can be removed,
+// never added; the exact original stays in the raw inside the journal.
+func narrowable(original, narrowed string) error {
+	if strings.TrimSpace(narrowed) == "" || narrowed == original {
+		return errors.New("narrowed_statement должен быть непустым и отличаться от statement кандидата")
+	}
+	allowed := textTokens("", original)
+	for token := range textTokens("", narrowed) {
+		if !allowed[token] {
+			return fmt.Errorf("narrowed_statement добавляет слово %q, которого нет в statement кандидата; сужение может только убирать смысл", token)
+		}
+	}
+	return nil
 }
 
 type AcceptedOperation struct {
@@ -102,7 +171,11 @@ func emptyAccepted() acceptedState {
 
 func acceptedRequirement(candidate legacyCandidate, target AcceptedTarget) Requirement {
 	meta := &AcceptedDetails{1, candidate.Exceptions, candidate.Clarity, candidate.Unresolved, candidate.Citations, []string{}}
-	req := Requirement{Title: target.Title, Condition: candidate.Condition, Statement: candidate.Statement,
+	statement := candidate.Statement
+	if target.Narrowed != "" {
+		statement = target.Narrowed
+	}
+	req := Requirement{Title: target.Title, Condition: candidate.Condition, Statement: statement,
 		Verification: target.Verification, Source: candidate.Citations[0], Accepted: meta}
 	content, _ := json.Marshal([]any{req.Title, req.Condition, req.Statement, req.Verification, meta.Exceptions, meta.Clarity, meta.Unresolved})
 	req.ContentHash = digest(content)
@@ -173,6 +246,9 @@ func applyAccepted(state acceptedState, raw legacyRaw, decision AcceptedDecision
 				return state, errors.New("неизвестный или повторно решённый кандидат")
 			}
 			seenCandidates[target.Candidate] = true
+			if oneOf(operation.Action, "reject", "defer", "reanchor") && target.Narrowed != "" {
+				return state, errors.New("narrowed_statement допустим только при accept/revise/split/merge")
+			}
 			if oneOf(operation.Action, "reject", "defer") {
 				if target.Title != "" || target.Verification != "" {
 					return state, errors.New("reject/defer не задают title/verification")
@@ -196,6 +272,12 @@ func applyAccepted(state acceptedState, raw legacyRaw, decision AcceptedDecision
 			}
 			if strings.TrimSpace(target.Title) == "" || strings.TrimSpace(target.Verification) == "" {
 				return state, errors.New("принятие требует title/verification")
+			}
+			if target.Narrowed != "" {
+				if err := narrowable(candidate.Statement, target.Narrowed); err != nil {
+					return state, fmt.Errorf("%s: %w", target.Candidate, err)
+				}
+				slog.Debug("reconcile: statement сужен хостом", "candidate", target.Candidate)
 			}
 			req := acceptedRequirement(candidate, target)
 			if oneOf(operation.Action, "rebind", "revise") {
@@ -263,7 +345,7 @@ func readAccepted(reportsDir string) (acceptedLedger, acceptedState, error) {
 		if err := legacyShape(raw); err != nil {
 			return ledger, state, err
 		}
-		if err := legacyDecode([]byte(commit.Decision), &decision); err != nil {
+		if err := decodeDecision([]byte(commit.Decision), &decision); err != nil {
 			return ledger, state, err
 		}
 		state, err = applyAccepted(state, raw, decision, []byte(commit.Raw), []byte(commit.Decision))
@@ -381,7 +463,7 @@ func reconcile(cfg Config, paths []string) (any, error) {
 		return nil, err
 	}
 	var decision AcceptedDecision
-	if err := legacyDecode(decisionBytes, &decision); err != nil {
+	if err := decodeDecision(decisionBytes, &decision); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(cfg.ReportsDir, 0700); err != nil {
@@ -771,7 +853,7 @@ func checkAcceptance(cfg Config, paths []string) (any, error) {
 			return nil, err
 		}
 		decision = &AcceptedDecision{}
-		if err := legacyDecode(decisionBytes, decision); err != nil {
+		if err := decodeDecision(decisionBytes, decision); err != nil {
 			return nil, err
 		}
 	}
