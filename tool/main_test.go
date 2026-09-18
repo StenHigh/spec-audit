@@ -925,3 +925,51 @@ func TestVersionDriftWarning(t *testing.T) {
 		t.Fatal("журнал версий пишет обе версии", journal.Records)
 	}
 }
+
+// tool-spec §34: overview maps several scopes read-only; a stale scope is reported, not fatal; totals come from decided runs.
+func TestOverview(t *testing.T) {
+	config, base := fixture(t)
+	if view := runOK(t, "overview", config).(Overview); view.Totals.Scopes != 1 || view.Scopes[0].Runs != 0 || view.Scopes[0].Latest != nil || view.Scopes[0].IndexMode != "declared" || view.Scopes[0].Freshness != "n/a" || view.Scopes[0].Requirements != 5 {
+		t.Fatal("scope без run", view.Scopes[0])
+	}
+	batch := runOK(t, "prepare", config, "review").(TaskBatch)
+	if view := runOK(t, "overview", config).(Overview); view.Scopes[0].Runs != 1 || view.Scopes[0].Latest == nil || view.Scopes[0].Latest.DeliveryComplete || view.Scopes[0].Decided != nil || len(view.Scopes[0].Latest.Disagree) != 0 || view.Scopes[0].Latest.ToolVersion != version {
+		t.Fatal("run без доставки", view.Scopes[0].Latest)
+	}
+	for _, task := range batch.Tasks {
+		result := sampleResult(t, task, filepath.Join(base, "source"))
+		if task.Role == "redteam" {
+			result.Assessments[0].Assertion = "weak"
+		}
+		path := filepath.Join(base, task.TaskID+".json")
+		writeFixture(t, path, legacyMarshal(t, result))
+		runOK(t, "submit", config, "review", task.TaskID, path)
+	}
+	runOK(t, "review", config, "review", writeReviewInput(t, base, reviewInput(t, config)))
+	accepted, acceptedBase := acceptedFixture(t)
+	c := candidateAt(t, acceptedBase, "rules.md", "C001", "Лимит 8 МиБ", 2, 2)
+	raw, decision := acceptedInputs(t, accepted, "initial", []legacyCandidate{c}, acceptOperation("accept", []string{}, "C001"))
+	runOK(t, "reconcile", accepted, raw, decision)
+	versionsPath := filepath.Join(base, "runs/review/tool-versions.json")
+	before := readFixture(t, versionsPath)
+	view := runOK(t, "overview", config, accepted).(Overview)
+	if view.Totals.Scopes != 2 || view.Totals.Requirements != 6 || view.Totals.Runs != 1 || view.Totals.Implementation["supported"] == 0 || view.Totals.Assertion["weak"] != 1 {
+		t.Fatal("итоги по двум scope", view.Totals)
+	}
+	first := view.Scopes[0]
+	if first.Decided == nil || first.Decided.RunID != "review" || first.Decided.HostReviewState != "current" || first.Decided.Form != "assessments" || !reflect.DeepEqual(first.Decided.Disagree, []string{"REQ-DEMO-001"}) || !first.Decided.SnapshotCurrent || first.Decided.Submitted != 2 {
+		t.Fatal("решённый run", first.Decided)
+	}
+	if second := view.Scopes[1]; second.IndexMode != "accepted" || second.Freshness != "fresh" || second.Requirements != 1 || second.Head == "" || second.Runs != 0 {
+		t.Fatal("accepted scope без run", second)
+	}
+	if !bytes.Equal(before, readFixture(t, versionsPath)) {
+		t.Fatal("overview не пишет провенанс")
+	}
+	rules := filepath.Join(acceptedBase, "source/rules.md")
+	writeFixture(t, rules, append(readFixture(t, rules), []byte("ещё строка\n")...))
+	if stale := runOK(t, "overview", accepted).(Overview).Scopes[0]; stale.Freshness != "stale" || stale.Error == "" || stale.Requirements != 1 {
+		t.Fatal("stale scope сообщается, а не роняет карту", stale)
+	}
+	runFail(t, "overview")
+}
