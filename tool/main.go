@@ -754,12 +754,19 @@ func requiredJSON(data json.RawMessage, typ reflect.Type) error {
 		if err := json.Unmarshal(data, &fields); err != nil {
 			return err
 		}
-		if len(fields) != typ.NumField() {
+		// Fields tagged "-" are internal (never part of the wire form) and take no part in the strict count.
+		wire := []reflect.StructField{}
+		for i := 0; i < typ.NumField(); i++ {
+			if field := typ.Field(i); field.Tag.Get("json") != "-" {
+				wire = append(wire, field)
+			}
+		}
+		if len(fields) != len(wire) {
 			// tool-spec §41.1: name what is missing or unknown instead of a bare count mismatch.
 			expected := map[string]bool{}
 			missing, unknown := []string{}, []string{}
-			for i := 0; i < typ.NumField(); i++ {
-				key := typ.Field(i).Tag.Get("json")
+			for _, field := range wire {
+				key := field.Tag.Get("json")
 				expected[key] = true
 				if _, ok := fields[key]; !ok {
 					missing = append(missing, key)
@@ -773,8 +780,7 @@ func requiredJSON(data json.RawMessage, typ reflect.Type) error {
 			sort.Strings(unknown)
 			return fmt.Errorf("неполный или неизвестный набор полей результата: нет %v, лишние %v", missing, unknown)
 		}
-		for i := 0; i < typ.NumField(); i++ {
-			field := typ.Field(i)
+		for _, field := range wire {
 			key := field.Tag.Get("json")
 			value, ok := fields[key]
 			if !ok {
