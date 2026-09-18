@@ -797,7 +797,8 @@ func TestPrepareDispatch(t *testing.T) {
 		dir := filepath.Join(base, "runs/review/dispatch", task.TaskID)
 		prompt := string(readFixture(t, filepath.Join(dir, "prompt.md")))
 		for _, want := range []string{"Задание роли " + task.Role, "SOURCE_ROOT: " + batch.ProjectRoot, filepath.Join(dir, "task.json"), filepath.Join(base, "runs/review/dispatch/files.json"),
-			filepath.Join(base, "runs/review/dispatch/protocol.txt"), filepath.Join(dir, "result.json"), " validate " + absConfig + " review " + task.TaskID + " ", filepath.Join(dir, "sdk_hints.json")} {
+			filepath.Join(base, "runs/review/dispatch/protocol.txt"), filepath.Join(dir, "result.json"), " validate " + absConfig + " review " + task.TaskID + " ", filepath.Join(dir, "sdk_hints.json"),
+			" cite " + absConfig + " PATH A B", filepath.Join(dir, "validate.log")} {
 			if !strings.Contains(prompt, want) {
 				t.Fatalf("prompt.md роли %s не содержит %q", task.TaskID, want)
 			}
@@ -861,4 +862,34 @@ func TestHelpVersion(t *testing.T) {
 	}
 	runFail(t, "--bogus")
 	runFail(t, "help", "extra")
+}
+
+// tool-spec §31.1: cite returns the exact quote validate expects; bad ranges and paths refuse; nothing is created.
+func TestCite(t *testing.T) {
+	config, base := fixture(t)
+	source := readFixture(t, filepath.Join(base, "source/source.go"))
+	want, err := lineQuote(source, 2, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := runOK(t, "cite", config, "source.go", "2", "4").(Citation)
+	if !reflect.DeepEqual(got, Citation{"source.go", 2, 4, want}) {
+		t.Fatal("cite должен вернуть точную цитату", got)
+	}
+	if _, err := os.Stat(filepath.Join(base, "runs")); !os.IsNotExist(err) {
+		t.Fatal("cite не создаёт каталог отчётов")
+	}
+	batch := runOK(t, "prepare", config, "review").(TaskBatch)
+	task := batch.Tasks[0]
+	result := sampleResult(t, task, filepath.Join(base, "source"))
+	result.Assessments[0].Code = []Citation{got}
+	path := filepath.Join(base, "cited.json")
+	writeFixture(t, path, legacyMarshal(t, result))
+	runOK(t, "validate", config, "review", task.TaskID, path)
+	if err := os.Symlink(filepath.Join(base, "source/source.go"), filepath.Join(base, "source/link.go")); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"source.go", "4", "2"}, {"source.go", "0", "1"}, {"source.go", "1", "100000"}, {"source.go", "x", "2"}, {".", "1", "1"}, {"../config.yaml", "1", "1"}, {filepath.Join(base, "source/source.go"), "1", "1"}, {"link.go", "1", "1"}, {"missing.go", "1", "1"}} {
+		runFail(t, append([]string{"cite", config}, args...)...)
+	}
 }
