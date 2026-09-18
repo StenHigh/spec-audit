@@ -1127,3 +1127,42 @@ func TestCorpusDelta(t *testing.T) {
 		t.Fatal("страница показывает динамику с закреплённым baseline")
 	}
 }
+
+// tool-spec §49: publish assembles a static site — index, overview.json and a copy of every decided run's report.
+func TestPublish(t *testing.T) {
+	config, base := fixture(t)
+	for _, runID := range []string{"p1", "p2"} {
+		batch := runOK(t, "prepare", config, runID).(TaskBatch)
+		for _, task := range batch.Tasks {
+			path := filepath.Join(base, runID+"-"+task.TaskID+".json")
+			writeFixture(t, path, legacyMarshal(t, sampleResult(t, task, filepath.Join(base, "source"))))
+			runOK(t, "submit", config, runID, task.TaskID, path)
+		}
+		view := runOK(t, "review", config, runID).(ReviewContext)
+		rows := append([]Assessment{}, view.Entries[0].Result.Assessments...)
+		path := filepath.Join(base, "host-"+runID+".json")
+		writeFixture(t, path, legacyMarshal(t, ReviewDecision{1, "decision-" + runID, runID, view.SnapshotID, view.BasisSHA256, "host", "s", rows, []string{}}))
+		runOK(t, "review", config, runID, path)
+		runOK(t, "report", config, runID)
+	}
+	site := filepath.Join(base, "site")
+	answer := runOK(t, "publish", site, config).(map[string]any)
+	scope := scopeName(config)
+	for _, rel := range []string{"index.html", "overview.json", scope + "/p1/report.html", scope + "/p2/report.html"} {
+		if _, err := os.Stat(filepath.Join(site, rel)); err != nil {
+			t.Fatal("сайт должен содержать", rel, err)
+		}
+	}
+	index := string(readFixture(t, filepath.Join(site, "index.html")))
+	if answer["reports"] != 2 || !strings.Contains(index, `href="`+scope+`/p2/report.html"`) || !strings.Contains(index, `href="`+scope+`/p1/report.html"`) || !strings.Contains(index, "2 решённых run") {
+		t.Fatal("index ссылается на копии отчётов и историю run", answer, strings.Contains(index, "решённых run"))
+	}
+	var view Overview
+	if err := json.Unmarshal(readFixture(t, filepath.Join(site, "overview.json")), &view); err != nil || len(view.Scopes[0].History) != 2 || view.Scopes[0].History[0].RunID != "p2" || view.Scopes[0].History[0].Report != scope+"/p2/report.html" {
+		t.Fatal("overview.json с историей (новые первыми) и ссылками сайта", err, view.Scopes[0].History)
+	}
+	if !bytes.Equal(readFixture(t, filepath.Join(site, scope, "p2", "report.html")), readFixture(t, filepath.Join(base, "runs/p2/report.html"))) {
+		t.Fatal("отчёт копируется байт-в-байт")
+	}
+	runFail(t, "publish", site)
+}

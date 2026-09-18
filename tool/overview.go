@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -74,16 +75,18 @@ func (g *Gap) add(a Assessment) {
 }
 
 type ScopeOverview struct {
-	Config       string       `json:"config"`
-	IndexMode    string       `json:"index_mode"`
-	Freshness    string       `json:"freshness"`
-	Error        string       `json:"error,omitempty"`
-	Requirements int          `json:"requirements_total"`
-	Head         string       `json:"accepted_head,omitempty"`
-	Runs         int          `json:"runs"`
-	Latest       *RunOverview `json:"latest"`  // the most recently prepared run: delivery progress
-	Decided      *RunOverview `json:"decided"` // the most recent run with a host decision: verdict counts; totals come from here
-	Delta        *Delta       `json:"delta"`   // decided vs the decided run before it (§47); nil with fewer than two
+	Config       string `json:"config"`
+	IndexMode    string `json:"index_mode"`
+	Freshness    string `json:"freshness"`
+	Error        string `json:"error,omitempty"`
+	Requirements int    `json:"requirements_total"`
+	Head         string `json:"accepted_head,omitempty"`
+	Runs         int    `json:"runs"`
+	// History lists every decided run of the scope, newest first (tool-spec §49): the time selector of the published site.
+	History []RunRef     `json:"history"`
+	Latest  *RunOverview `json:"latest"`  // the most recently prepared run: delivery progress
+	Decided *RunOverview `json:"decided"` // the most recent run with a host decision: verdict counts; totals come from here
+	Delta   *Delta       `json:"delta"`   // decided vs the decided run before it (§47); nil with fewer than two
 }
 
 // NormBrief is one norm of the decided run for the corpus page (tool-spec §45): the host's verdict in a sentence.
@@ -94,6 +97,15 @@ type NormBrief struct {
 	Implementation string `json:"implementation"`
 	Assertion      string `json:"assertion"`
 	Statement      string `json:"statement"`
+}
+
+type RunRef struct {
+	RunID           string `json:"run_id"`
+	PreparedAt      string `json:"prepared_at"`
+	ReviewID        string `json:"review_id"`
+	HostReviewState string `json:"host_review_state"`
+	Gap             int    `json:"gap"`
+	Report          string `json:"report,omitempty"`
 }
 
 type RunOverview struct {
@@ -231,7 +243,7 @@ func overview(paths []string) (Overview, error) {
 
 // scopeOverview never fails the whole map for one scope: a stale or missing index is reported as its freshness/error.
 func scopeOverview(path string, cfg Config) (ScopeOverview, []ContradictedCitation) {
-	scope := ScopeOverview{Config: path, IndexMode: "declared", Freshness: "n/a"}
+	scope := ScopeOverview{Config: path, IndexMode: "declared", Freshness: "n/a", History: []RunRef{}}
 	cited := []ContradictedCitation{}
 	if cfg.IndexMode == "accepted" {
 		scope.IndexMode = "accepted"
@@ -302,6 +314,10 @@ func scopeOverview(path string, cfg Config) (ScopeOverview, []ContradictedCitati
 		}
 	}
 	sort.Slice(decidedRuns, func(i, j int) bool { return newer(decidedRuns[j], &decidedRuns[i]) })
+	for i := len(decidedRuns) - 1; i >= 0; i-- {
+		r := decidedRuns[i]
+		scope.History = append(scope.History, RunRef{r.RunID, r.PreparedAt, r.ReviewID, r.HostReviewState, r.Gap.Total, ""})
+	}
 	if n := len(decidedRuns); n >= 2 {
 		baseline := decidedRuns[n-2]
 		if cfg.BaselineRun != "" {
@@ -475,17 +491,93 @@ func corpus(out string, paths []string) (any, error) {
 		if d := view.Scopes[i].Decided; d != nil {
 			d.Report = reportLink(absOut, view.Scopes[i].Config, d.RunID)
 		}
+		for j := range view.Scopes[i].History {
+			view.Scopes[i].History[j].Report = reportLink(absOut, view.Scopes[i].Config, view.Scopes[i].History[j].RunID)
+		}
 	}
+	html, err := renderCorpus(view)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(absOut, html, 0600); err != nil {
+		return nil, err
+	}
+	slog.Info("карта корпуса записана", "path", absOut, "scopes", view.Totals.Scopes)
+	return map[string]any{"html": absOut, "overview": view}, nil
+}
+
+func renderCorpus(view Overview) ([]byte, error) {
 	page := CorpusPage{Overview: view, GeneratedAt: time.Now().UTC().Format(time.RFC3339), Files: corpusFiles(view.ContradictedCode)}
 	var html bytes.Buffer
 	if err := corpusTemplate.Execute(&html, page); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(absOut, html.Bytes(), 0600); err != nil {
+	return html.Bytes(), nil
+}
+
+// publish assembles a self-contained static site for the customer (tool-spec §49): OUT_DIR/index.html — the corpus map,
+// OUT_DIR/overview.json — its data, OUT_DIR/<scope>/<run>/report.html — a copy of every decided run's report. Every
+// file is static and script-free except the run reports' own inline navigation; the tree can be served from any host.
+// The site is written whole on each publish; files of runs that no longer exist stay until the host removes OUT_DIR.
+func publish(out string, paths []string) (any, error) {
+	view, err := overview(paths)
+	if err != nil {
 		return nil, err
 	}
-	slog.Info("карта корпуса записана", "path", absOut, "scopes", view.Totals.Scopes, "files", len(page.Files))
-	return map[string]any{"html": absOut, "overview": view}, nil
+	absOut, err := filepath.Abs(out)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(absOut, 0755); err != nil {
+		return nil, err
+	}
+	copied := 0
+	for i := range view.Scopes {
+		scope := &view.Scopes[i]
+		cfg, err := loadConfig(scope.Config, true)
+		if err != nil {
+			return nil, err
+		}
+		name := scopeName(scope.Config)
+		for j := range scope.History {
+			runID := scope.History[j].RunID
+			source := filepath.Join(cfg.ReportsDir, runID, "report.html")
+			data, err := os.ReadFile(source)
+			if err != nil {
+				slog.Debug("publish: report.html отсутствует", "config", scope.Config, "run_id", runID)
+				continue
+			}
+			target := filepath.Join(absOut, name, runID)
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(filepath.Join(target, "report.html"), data, 0644); err != nil {
+				return nil, err
+			}
+			copied++
+			link := filepath.ToSlash(filepath.Join(name, runID, "report.html"))
+			scope.History[j].Report = link
+			if scope.Decided != nil && scope.Decided.RunID == runID {
+				scope.Decided.Report = link
+			}
+		}
+	}
+	html, err := renderCorpus(view)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(absOut, "index.html"), html, 0644); err != nil {
+		return nil, err
+	}
+	data, err := json.MarshalIndent(view, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(absOut, "overview.json"), append(data, '\n'), 0644); err != nil {
+		return nil, err
+	}
+	slog.Info("сайт опубликован", "dir", absOut, "scopes", view.Totals.Scopes, "reports", copied)
+	return map[string]any{"dir": absOut, "index": filepath.Join(absOut, "index.html"), "reports": copied, "scopes": view.Totals.Scopes}, nil
 }
 
 // reportLink is the relative path from the corpus page to a decided run's report.html; empty when it does not exist.
