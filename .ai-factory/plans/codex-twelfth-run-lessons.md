@@ -18,4 +18,4 @@ Milestone: "Уроки двенадцатого прогона 2026-09-18"
 - [x] Task 1: `previousHostRun(reports, other, m)` — `filesDigest` + `sameNorm`; `PendingIDs` в TaskBatch; п.5 промпта; тесты
 - [x] Task 2: §40 tool-spec, AGENTS, SKILL.md, README, ROADMAP, adoption «одиннадцатый цикл»
 <!-- Commit checkpoint: tasks 1-2 -->
-- [ ] Task 3: релиз `v0.1.26`, update хоста, skill в синтетике и пилоте, коммит scope `01-foundation` в пилоте локально
+- [x] Task 3: релиз `v0.1.26`, update хоста, skill в синтетике и пилоте, коммит scope `01-foundation` в пилоте локально
