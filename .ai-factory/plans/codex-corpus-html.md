@@ -18,4 +18,4 @@ Milestone: "Несколько разделов и обзор корпуса"
 - [x] Task 1: `NormBrief`, `RunOverview.Attention`/`Report`, `corpus.html`, `corpus()`, `reportLink`, `corpusFiles`, диспетчер и usage; `TestCorpus`
 - [x] Task 2: §45 tool-spec, AGENTS, ARCHITECTURE, SKILL.md, README, ROADMAP; страница на пилоте `.spec-audit/corpus.html`
 <!-- Commit checkpoint: tasks 1-2 -->
-- [ ] Task 3: релиз `v0.1.31`, update хоста, skill в синтетике и пилоте, `corpus` релизным бинарником на пилоте
+- [x] Task 3: релиз `v0.1.31`, update хоста, skill в синтетике и пилоте, `corpus` релизным бинарником на пилоте
