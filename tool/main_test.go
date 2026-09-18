@@ -798,12 +798,12 @@ func TestPrepareDispatch(t *testing.T) {
 		prompt := string(readFixture(t, filepath.Join(dir, "prompt.md")))
 		for _, want := range []string{"Задание роли " + task.Role, "SOURCE_ROOT: " + batch.ProjectRoot, filepath.Join(dir, "task.json"), filepath.Join(base, "runs/review/dispatch/files.json"),
 			filepath.Join(base, "runs/review/dispatch/protocol.txt"), filepath.Join(dir, "result.json"), " validate " + absConfig + " review " + task.TaskID + " ", filepath.Join(dir, "sdk_hints.json"),
-			" cite " + absConfig + " PATH A B", filepath.Join(dir, "validate.log")} {
+			" cite " + absConfig + " PATH A B", filepath.Join(dir, "validate.log"), "AGENTS.md, CLAUDE.md", "scratchpad", `Tests\Feature\ExampleTest::test_name`, "supported|contradicted|unknown", "ambiguous-норму нельзя объявлять clear", dir + "/\n"} {
 			if !strings.Contains(prompt, want) {
 				t.Fatalf("prompt.md роли %s не содержит %q", task.TaskID, want)
 			}
 		}
-		if strings.Contains(prompt, "manifest.json") || strings.Contains(prompt, "state.json") {
+		if strings.Contains(prompt, "manifest.json") || strings.Contains(prompt, "state.json") || task.Role == "redteam" && !strings.Contains(prompt, "восстановление/incident, повтор, откат") {
 			t.Fatal("prompt.md не должен называть manifest/state")
 		}
 	}
