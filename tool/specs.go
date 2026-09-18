@@ -234,6 +234,10 @@ func indexSummary(cfg Config) (any, error) {
 	}
 	delete(index, "requirements")
 	delete(index, "files")
+	// tool-spec §37.2: the accepted journal stays in the full answer; the summary keeps head and the package count.
+	if accepted, ok := index["accepted"].(*AcceptedSummary); ok && accepted != nil {
+		index["accepted"] = map[string]any{"head": accepted.Head, "history_total": len(accepted.History)}
+	}
 	index["requirements_total"], index["active_ids"], index["files_total"], index["scopes"] = len(requirements), ids, len(files), cfg.Scopes
 	slog.Debug("index: сводка", "requirements", len(requirements), "files", len(files))
 	return index, nil
@@ -377,9 +381,19 @@ scopes: []
 // AnchorEntry is one anchor of `anchors CONFIG` (tool-spec §33.1): where normative spec files mention it and where any
 // spec file (normative or reference) defines it, so the host can hand the extractor exact reference lines.
 type AnchorEntry struct {
-	Anchor      string        `json:"anchor"`
-	Mentions    []CitationRef `json:"mentions"`
-	Definitions []CitationRef `json:"definitions"`
+	Anchor      string             `json:"anchor"`
+	Mentions    []CitationRef      `json:"mentions"`
+	Definitions []AnchorDefinition `json:"definitions"`
+}
+
+// AnchorDefinition is one defining range (tool-spec §33.1, §37.1): kind tells a glossary item or heading from a table
+// row (coverage tables also start with "| A-NNN |"), references are the anchors the definition itself names.
+type AnchorDefinition struct {
+	Path       string   `json:"path"`
+	LineStart  int      `json:"line_start"`
+	LineEnd    int      `json:"line_end"`
+	Kind       string   `json:"kind"` // heading | list | table | text
+	References []string `json:"references"`
 }
 
 type AnchorIndex struct {
@@ -403,7 +417,7 @@ func anchorIndex(cfg Config) (AnchorIndex, error) {
 	entries := map[string]*AnchorEntry{}
 	entry := func(key string) *AnchorEntry {
 		if entries[key] == nil {
-			entries[key] = &AnchorEntry{Anchor: key, Mentions: []CitationRef{}, Definitions: []CitationRef{}}
+			entries[key] = &AnchorEntry{Anchor: key, Mentions: []CitationRef{}, Definitions: []AnchorDefinition{}}
 		}
 		return entries[key]
 	}
@@ -449,8 +463,26 @@ func anchorIndex(cfg Config) (AnchorIndex, error) {
 					end = j
 				}
 			}
+			kind := "text"
+			switch trimmed := strings.TrimSpace(line); {
+			case heading:
+				kind = "heading"
+			case strings.HasPrefix(trimmed, "|"):
+				kind = "table"
+			case strings.HasPrefix(trimmed, "*") || strings.HasPrefix(trimmed, "-"):
+				kind = "list"
+			}
+			references, seen := []string{}, map[string]bool{match[1]: true}
+			for _, l := range file.lines[i : end+1] {
+				for _, anchor := range anchorRE.FindAllString(l, -1) {
+					if k := anchorKey(anchor); !seen[k] {
+						seen[k] = true
+						references = append(references, k)
+					}
+				}
+			}
 			e := entries[match[1]]
-			e.Definitions = append(e.Definitions, CitationRef{file.path, i + 1, end + 1})
+			e.Definitions = append(e.Definitions, AnchorDefinition{file.path, i + 1, end + 1, kind, references})
 		}
 	}
 	index := AnchorIndex{SnapshotFiles: len(files), Anchors: []AnchorEntry{}, Undefined: []string{}}

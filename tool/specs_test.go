@@ -206,8 +206,8 @@ func TestIndexSummary(t *testing.T) {
 	c := candidateAt(t, filepath.Dir(accepted), "rules.md", "C001", "Лимит 8 МиБ", 2, 2)
 	raw, decision := acceptedInputs(t, accepted, "initial", []legacyCandidate{c}, acceptOperation("accept", []string{}, "C001"))
 	runOK(t, "reconcile", accepted, raw, decision)
-	if summary := runOK(t, "index", accepted, "summary").(map[string]any); summary["freshness"] != "fresh" || summary["requirements_total"] != 1 || summary["accepted"] == nil {
-		t.Fatal("сводка в accepted-режиме", summary)
+	if summary := runOK(t, "index", accepted, "summary").(map[string]any); summary["freshness"] != "fresh" || summary["requirements_total"] != 1 || !reflect.DeepEqual(summary["accepted"], map[string]any{"head": runOK(t, "index", accepted).(map[string]any)["accepted"].(*AcceptedSummary).Head, "history_total": 1}) {
+		t.Fatal("сводка в accepted-режиме — head и число пакетов вместо журнала (§37.2)", summary["accepted"])
 	}
 	runFail(t, "index", config, "other")
 }
@@ -217,7 +217,7 @@ func TestAnchors(t *testing.T) {
 	config, base := acceptedFixture(t)
 	rules := filepath.Join(base, "source/rules.md")
 	writeFixture(t, rules, append(readFixture(t, rules), []byte("Срок согласуется по §9.9 и A-777 (см. также §1.2).\n\n## 9.9 Сроки\nТекст раздела.\nЕщё строка.\n\n## 10 Прочее\n")...))
-	writeFixture(t, filepath.Join(base, "source/clarification.md"), []byte("# Уточнения\n* A-777: правило суток.\n  продолжение.\n\n* A-778: другое.\nУпоминание A-777 в прозе.\n"))
+	writeFixture(t, filepath.Join(base, "source/clarification.md"), []byte("# Уточнения\n* A-777: правило суток (см. A-778 и §9.9).\n  продолжение.\n\n* A-778: другое.\nУпоминание A-777 в прозе.\n\n| A-777 | P2/9.9 |\n"))
 	writeFixture(t, config, append(readFixture(t, config), []byte("references: {paths: [clarification.md]}\n")...))
 	index := runOK(t, "anchors", config).(AnchorIndex)
 	byAnchor := map[string]AnchorEntry{}
@@ -227,10 +227,11 @@ func TestAnchors(t *testing.T) {
 	if index.SnapshotFiles != 2 || len(index.Anchors) != 3 || !reflect.DeepEqual(index.Undefined, []string{"1.2"}) {
 		t.Fatal("индекс якорей", index)
 	}
-	if e := byAnchor["A-777"]; !reflect.DeepEqual(e.Mentions, []CitationRef{{"rules.md", 6, 6}}) || !reflect.DeepEqual(e.Definitions, []CitationRef{{"clarification.md", 2, 3}}) {
-		t.Fatal("A-777: упоминание в нормативном файле, определение в reference до пустой строки", e)
+	// tool-spec §37.1: kind tells a list item from a coverage-table row; references are the anchors the definition names.
+	if e := byAnchor["A-777"]; !reflect.DeepEqual(e.Mentions, []CitationRef{{"rules.md", 6, 6}}) || !reflect.DeepEqual(e.Definitions, []AnchorDefinition{{"clarification.md", 2, 3, "list", []string{"A-778", "9.9"}}, {"clarification.md", 8, 8, "table", []string{}}}) {
+		t.Fatal("A-777: упоминание в нормативном файле, определения — пункт списка со ссылками и строка таблицы", e)
 	}
-	if e := byAnchor["9.9"]; !reflect.DeepEqual(e.Definitions, []CitationRef{{"rules.md", 8, 10}}) {
+	if e := byAnchor["9.9"]; !reflect.DeepEqual(e.Definitions, []AnchorDefinition{{"rules.md", 8, 10, "heading", []string{}}}) {
 		t.Fatal("заголовок определяется до следующего заголовка", e)
 	}
 	if _, ok := byAnchor["A-778"]; ok {

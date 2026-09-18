@@ -1162,8 +1162,11 @@ func requirementText(view RequirementView, brief bool) string {
 	} else {
 		b.WriteString("\n[host] решения нет\n")
 	}
-	for _, e := range view.Executions {
-		fmt.Fprintf(&b, "  запуск %s: %s (%s)\n", e.TestID, e.State, e.ReceiptID)
+	// tool-spec §37.3: brief drops the per-test execution lines; text keeps them.
+	if !brief {
+		for _, e := range view.Executions {
+			fmt.Fprintf(&b, "  запуск %s: %s (%s)\n", e.TestID, e.State, e.ReceiptID)
+		}
 	}
 	return b.String()
 }

@@ -1102,7 +1102,7 @@ func TestReviewRequirementView(t *testing.T) {
 		}
 	}
 	brief := runOK(t, "review", config, "review", "REQ-DEMO-001", "brief").(map[string]string)["text"]
-	if strings.Contains(brief, "code source.go:1-2") || !strings.Contains(brief, "цитаты: spec ") || !strings.Contains(brief, after.Roles["mapper"].Statement) || !strings.Contains(brief, "[host] ") {
+	if strings.Contains(brief, "code source.go:1-2") || strings.Contains(brief, "запуск ") || !strings.Contains(brief, "цитаты: spec ") || !strings.Contains(brief, after.Roles["mapper"].Statement) || !strings.Contains(brief, "[host] ") || !strings.Contains(text, "запуск ") {
 		t.Fatalf("brief держит суждения и считает цитаты:\n%s", brief)
 	}
 	runFail(t, "review", config, "review", "REQ-DEMO-001", "html")
