@@ -415,6 +415,7 @@ func reconcile(cfg Config, paths []string) (any, error) {
 	// Same view as the read-only call; freshness is measured again under the held lock, not assumed.
 	view := acceptedView(cfg, staged.ledger, staged.state)
 	view["accepted"], view["duplicate"] = true, false
+	view["deferred"], view["rejected"] = decidedCandidates(decision, "defer"), decidedCandidates(decision, "reject")
 	slog.Debug("reconcile: view после apply", "freshness", view["freshness"], "records", len(staged.state.Records))
 	return view, nil
 }
@@ -745,6 +746,22 @@ func checkAcceptance(cfg Config, paths []string) (any, error) {
 	}
 	// §22.3: on success the decision's base_index equals the current head by construction (applyAccepted enforced it).
 	view["duplicate"], view["base_index_current"], view["next_head"], view["assignments"], view["retired"] = false, true, staged.state.Head, assignments, retired
+	// tool-spec §38.1: the remainder is named, not inferred from the assignments' absence.
+	view["deferred"], view["rejected"] = decidedCandidates(*decision, "defer"), decidedCandidates(*decision, "reject")
 	slog.Info("check: приёмка проверена", "candidates", len(candidates), "decision", true, "assignments", len(assignments), "retired", len(retired), "duplicate", false)
 	return view, nil
+}
+
+// decidedCandidates lists the candidates a decision handled with the given action (tool-spec §38.1).
+func decidedCandidates(decision AcceptedDecision, action string) []string {
+	ids := []string{}
+	for _, operation := range decision.Operations {
+		if operation.Action != action {
+			continue
+		}
+		for _, target := range operation.Targets {
+			ids = append(ids, target.Candidate)
+		}
+	}
+	return ids
 }

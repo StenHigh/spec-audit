@@ -206,7 +206,7 @@ func TestIndexSummary(t *testing.T) {
 	c := candidateAt(t, filepath.Dir(accepted), "rules.md", "C001", "Лимит 8 МиБ", 2, 2)
 	raw, decision := acceptedInputs(t, accepted, "initial", []legacyCandidate{c}, acceptOperation("accept", []string{}, "C001"))
 	runOK(t, "reconcile", accepted, raw, decision)
-	if summary := runOK(t, "index", accepted, "summary").(map[string]any); summary["freshness"] != "fresh" || summary["requirements_total"] != 1 || !reflect.DeepEqual(summary["accepted"], map[string]any{"head": runOK(t, "index", accepted).(map[string]any)["accepted"].(*AcceptedSummary).Head, "history_total": 1}) {
+	if summary := runOK(t, "index", accepted, "summary").(map[string]any); summary["freshness"] != "fresh" || summary["requirements_total"] != 1 || !reflect.DeepEqual(summary["accepted"], map[string]any{"head": runOK(t, "index", accepted).(map[string]any)["accepted"].(*AcceptedSummary).Head, "history_total": 1, "last_deferred": []string{}, "last_rejected": []string{}}) {
 		t.Fatal("сводка в accepted-режиме — head и число пакетов вместо журнала (§37.2)", summary["accepted"])
 	}
 	runFail(t, "index", config, "other")
@@ -224,20 +224,49 @@ func TestAnchors(t *testing.T) {
 	for _, e := range index.Anchors {
 		byAnchor[e.Anchor] = e
 	}
-	if index.SnapshotFiles != 2 || len(index.Anchors) != 3 || !reflect.DeepEqual(index.Undefined, []string{"1.2"}) {
+	if index.SnapshotFiles != 2 || len(index.Anchors) != 4 || !reflect.DeepEqual(index.Undefined, []string{"1.2"}) || len(index.OutsideFiles) != 0 {
 		t.Fatal("индекс якорей", index)
 	}
 	// tool-spec §37.1: kind tells a list item from a coverage-table row; references are the anchors the definition names.
-	if e := byAnchor["A-777"]; !reflect.DeepEqual(e.Mentions, []CitationRef{{"rules.md", 6, 6}}) || !reflect.DeepEqual(e.Definitions, []AnchorDefinition{{"clarification.md", 2, 3, "list", []string{"A-778", "9.9"}}, {"clarification.md", 8, 8, "table", []string{}}}) {
+	if e := byAnchor["A-777"]; !reflect.DeepEqual(e.Mentions, []CitationRef{{"rules.md", 6, 6}}) || !reflect.DeepEqual(e.Definitions, []AnchorDefinition{{"clarification.md", 2, 3, "list", []string{"A-778", "9.9"}, false}, {"clarification.md", 8, 8, "table", []string{}, false}}) {
 		t.Fatal("A-777: упоминание в нормативном файле, определения — пункт списка со ссылками и строка таблицы", e)
 	}
-	if e := byAnchor["9.9"]; !reflect.DeepEqual(e.Definitions, []AnchorDefinition{{"rules.md", 8, 10, "heading", []string{}}}) {
+	if e := byAnchor["9.9"]; !reflect.DeepEqual(e.Definitions, []AnchorDefinition{{"rules.md", 8, 10, "heading", []string{}, false}}) {
 		t.Fatal("заголовок определяется до следующего заголовка", e)
 	}
-	if _, ok := byAnchor["A-778"]; ok {
-		t.Fatal("якорь без упоминания в нормативном файле не индексируется")
+	// tool-spec §38.2: an anchor named only by a definition is resolved one level down and marked nested.
+	if e, ok := byAnchor["A-778"]; !ok || !e.Nested || len(e.Mentions) != 0 || len(e.Definitions) != 1 || e.Definitions[0].LineStart != 5 {
+		t.Fatal("вложенная ссылка определения резолвится одним уровнем", e)
 	}
 	if _, err := os.Stat(filepath.Join(base, "runs")); !os.IsNotExist(err) {
 		t.Fatal("anchors не создаёт каталог отчётов")
+	}
+	// tool-spec §38.2: extra paths under project_root supply outside definitions for undefined anchors.
+	writeFixture(t, filepath.Join(base, "source/corpus/other.md"), []byte("# Другой раздел\n\n## 1.2 Общие правила\nТекст.\n"))
+	outside := runOK(t, "anchors", config, "corpus").(AnchorIndex)
+	if !reflect.DeepEqual(outside.OutsideFiles, []string{"corpus/other.md"}) || len(outside.Undefined) != 0 {
+		t.Fatal("определение из дополнительного каталога снимает undefined", outside.OutsideFiles, outside.Undefined)
+	}
+	for _, e := range outside.Anchors {
+		if e.Anchor == "1.2" && (len(e.Definitions) != 1 || !e.Definitions[0].Outside || e.Definitions[0].Path != "corpus/other.md" || e.Definitions[0].Kind != "heading") {
+			t.Fatal("определение снаружи помечено outside", e)
+		}
+	}
+	runFail(t, "anchors", config, "../")
+	runFail(t, "anchors", config, "missing")
+}
+
+// tool-spec §38.3: a scope above the recommendation with an explicit reason gets no size advisory.
+func TestScopeOversizeReason(t *testing.T) {
+	config, base := fixture(t)
+	plain := readFixture(t, config)
+	writeFixture(t, filepath.Join(base, "source/rules.md"), manyRequirements(25))
+	writeFixture(t, config, bytes.Replace(plain, []byte("scopes: []\n"), []byte(strings.Replace(scopesYAML(25), "{id: part-1,", "{id: part-1, oversize_reason: 'подраздел неделим',", 1)), 1))
+	if got, _ := runOK(t, "index", config).(map[string]any)["advisories"].([]string); len(got) != 0 {
+		t.Fatal("явная причина подавляет рекомендацию", got)
+	}
+	writeFixture(t, config, bytes.Replace(plain, []byte("scopes: []\n"), []byte(scopesYAML(25)), 1))
+	if got, _ := runOK(t, "index", config).(map[string]any)["advisories"].([]string); len(got) != 1 {
+		t.Fatal("без причины рекомендация остаётся", got)
 	}
 }

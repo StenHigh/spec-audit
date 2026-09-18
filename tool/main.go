@@ -55,6 +55,9 @@ type Scope struct {
 	ID           string   `yaml:"id" json:"id"`
 	Focus        string   `yaml:"focus" json:"focus"`
 	Requirements []string `yaml:"requirements" json:"requirements"`
+	// OversizeReason names why a scope above the §20 recommendation stays whole (an indivisible subsection);
+	// it silences the size advisory for that scope only (tool-spec §38.3).
+	OversizeReason string `yaml:"oversize_reason,omitempty" json:"oversize_reason,omitempty"`
 }
 
 type Sources struct {
@@ -1158,7 +1161,7 @@ func validReviewArgs(args []string) bool {
 }
 
 // usage is the command list of tool-spec §1–10 with later extensions; help prints it, wrong arguments refuse with it (§24.4).
-const usage = "команды: help; init/index CONFIG; index CONFIG summary; anchors CONFIG; overview CONFIG...; cite CONFIG PATH A B; reconcile CONFIG [RAW DECISION]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION|REQ-ID [text|brief]|summary|citations [PATH|REQ-ID|ROLE]]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; validate CONFIG RUN_ID host DECISION; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]"
+const usage = "команды: help; init/index CONFIG; index CONFIG summary; anchors CONFIG [PATH...]; overview CONFIG...; cite CONFIG PATH A B; reconcile CONFIG [RAW DECISION]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION|REQ-ID [text|brief]|summary|citations [PATH|REQ-ID|ROLE]]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; validate CONFIG RUN_ID host DECISION; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]"
 
 func execute(args []string) (any, error) {
 	if len(args) > 0 && args[0] == "reconcile" {
@@ -1184,12 +1187,12 @@ func execute(args []string) (any, error) {
 	if len(args) >= 2 && args[0] == "overview" {
 		return overview(args[1:])
 	}
-	if len(args) == 2 && args[0] == "anchors" {
+	if len(args) >= 2 && args[0] == "anchors" {
 		cfg, err := loadConfig(args[1], true)
 		if err != nil {
 			return nil, err
 		}
-		return anchorIndex(cfg)
+		return anchorIndex(cfg, args[2:])
 	}
 	if len(args) == 5 && args[0] == "cite" {
 		cfg, err := loadConfig(args[1], true)

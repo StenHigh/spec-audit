@@ -308,6 +308,17 @@ func TestCheckAcceptance(t *testing.T) {
 		if got := assignmentsOf(retire); !reflect.DeepEqual(got, []checkedAssignment{{"C002", "REQ-AI-002", "rebind", 1, []string{"REQ-AI-002"}}}) || !reflect.DeepEqual(retire["retired"], []string{"REQ-AI-001"}) {
 			t.Fatal("retire/rebind/defer", retire)
 		}
+		// tool-spec §38.1: the remainder is named in the dry-run, the apply answer and the index summary.
+		if !reflect.DeepEqual(retire["deferred"], []string{"C003"}) || !reflect.DeepEqual(retire["rejected"], []string{}) {
+			t.Fatal("deferred/rejected в ответе check", retire["deferred"], retire["rejected"])
+		}
+		applied = runOK(t, "reconcile", config, raw, decision).(map[string]any)
+		if !reflect.DeepEqual(applied["deferred"], []string{"C003"}) || !reflect.DeepEqual(applied["rejected"], []string{}) {
+			t.Fatal("deferred/rejected в ответе reconcile", applied["deferred"])
+		}
+		if accepted := runOK(t, "index", config, "summary").(map[string]any)["accepted"].(map[string]any); !reflect.DeepEqual(accepted["last_deferred"], []string{"C003"}) || accepted["history_total"] != 2 {
+			t.Fatal("index summary называет остаток последнего пакета", accepted)
+		}
 		// Reference-only target: the guard text is shared with apply.
 		config, base = referenceFixture(t)
 		only := candidateAt(t, base, "clarification.md", "C001", "Срок по договору", 3, 3)

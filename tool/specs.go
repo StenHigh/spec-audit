@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -210,6 +211,10 @@ const scopeAdvisoryRequirements = 24
 func scopeAdvisories(m Manifest) []string {
 	advisories := []string{}
 	for _, scope := range m.Config.Scopes {
+		if len(scope.Requirements) > scopeAdvisoryRequirements && strings.TrimSpace(scope.OversizeReason) != "" {
+			slog.Debug("scope выше рекомендации по явной причине", "scope", scope.ID, "requirements", len(scope.Requirements), "reason", scope.OversizeReason)
+			continue
+		}
 		if len(scope.Requirements) > scopeAdvisoryRequirements {
 			advisories = append(advisories, fmt.Sprintf("scope %s: %d норм, %d файлов; §6: слишком большой scope требует осознанного деления (рекомендация ≤ %d норм)",
 				scope.ID, len(scope.Requirements), len(m.Files), scopeAdvisoryRequirements))
@@ -236,7 +241,12 @@ func indexSummary(cfg Config) (any, error) {
 	delete(index, "files")
 	// tool-spec §37.2: the accepted journal stays in the full answer; the summary keeps head and the package count.
 	if accepted, ok := index["accepted"].(*AcceptedSummary); ok && accepted != nil {
-		index["accepted"] = map[string]any{"head": accepted.Head, "history_total": len(accepted.History)}
+		brief := map[string]any{"head": accepted.Head, "history_total": len(accepted.History), "last_deferred": []string{}, "last_rejected": []string{}}
+		if n := len(accepted.History); n > 0 {
+			last := accepted.History[n-1].Decision
+			brief["last_deferred"], brief["last_rejected"] = decidedCandidates(last, "defer"), decidedCandidates(last, "reject")
+		}
+		index["accepted"] = brief
 	}
 	index["requirements_total"], index["active_ids"], index["files_total"], index["scopes"] = len(requirements), ids, len(files), cfg.Scopes
 	slog.Debug("index: сводка", "requirements", len(requirements), "files", len(files))
@@ -382,6 +392,7 @@ scopes: []
 // spec file (normative or reference) defines it, so the host can hand the extractor exact reference lines.
 type AnchorEntry struct {
 	Anchor      string             `json:"anchor"`
+	Nested      bool               `json:"nested,omitempty"` // named only by another anchor's definition, not by a normative file
 	Mentions    []CitationRef      `json:"mentions"`
 	Definitions []AnchorDefinition `json:"definitions"`
 }
@@ -394,17 +405,19 @@ type AnchorDefinition struct {
 	LineEnd    int      `json:"line_end"`
 	Kind       string   `json:"kind"` // heading | list | table | text
 	References []string `json:"references"`
+	Outside    bool     `json:"outside,omitempty"` // found in an extra path, not in the snapshot's spec files (§38.2)
 }
 
 type AnchorIndex struct {
 	SnapshotFiles int           `json:"spec_files"`
+	OutsideFiles  []string      `json:"outside_files"`
 	Anchors       []AnchorEntry `json:"anchors"`
 	Undefined     []string      `json:"undefined"`
 }
 
 // anchorIndex scans the spec files of CONFIG without the accepted index (it serves acceptance, which comes first).
 // A definition runs from its line to the next blank line or next definition; a heading runs to the next heading.
-func anchorIndex(cfg Config) (AnchorIndex, error) {
+func anchorIndex(cfg Config, extra []string) (AnchorIndex, error) {
 	m, err := scanSnapshot(cfg)
 	if err != nil {
 		return AnchorIndex{}, err
@@ -414,6 +427,43 @@ func anchorIndex(cfg Config) (AnchorIndex, error) {
 		return AnchorIndex{}, err
 	}
 	defer root.Close()
+	// tool-spec §38.2: extra directories or files under project_root supply definitions from outside the snapshot.
+	known := map[string]bool{}
+	for _, file := range m.Files {
+		known[file.Path] = true
+	}
+	outside := []string{}
+	for _, path := range extra {
+		if filepath.IsAbs(path) || path != filepath.Clean(path) || strings.HasPrefix(path, "../") {
+			return AnchorIndex{}, errors.New("дополнительный путь — относительный, под project_root")
+		}
+		info, err := root.Stat(path)
+		if err != nil {
+			return AnchorIndex{}, err
+		}
+		if !info.IsDir() {
+			if !known[path] {
+				outside = append(outside, path)
+			}
+			continue
+		}
+		err = fs.WalkDir(root.FS(), path, func(p string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.Type()&os.ModeSymlink != 0 {
+				return fmt.Errorf("символическая ссылка запрещена: %s", p)
+			}
+			if entry.Type().IsRegular() && strings.HasSuffix(p, ".md") && !known[p] {
+				outside = append(outside, p)
+			}
+			return nil
+		})
+		if err != nil {
+			return AnchorIndex{}, err
+		}
+	}
+	sort.Strings(outside)
 	entries := map[string]*AnchorEntry{}
 	entry := func(key string) *AnchorEntry {
 		if entries[key] == nil {
@@ -422,20 +472,30 @@ func anchorIndex(cfg Config) (AnchorIndex, error) {
 		return entries[key]
 	}
 	type located struct {
-		path  string
-		lines []string
+		path    string
+		lines   []string
+		outside bool
 	}
 	files := []located{}
+	for _, path := range outside {
+		data, err := readRoot(root, path, maxFile)
+		if err != nil {
+			return AnchorIndex{}, err
+		}
+		files = append(files, located{path, strings.Split(strings.TrimSuffix(string(data), "\n"), "\n"), true})
+	}
+	specFiles := 0
 	for _, file := range m.Files {
 		if file.Kind != "spec" {
 			continue
 		}
+		specFiles++
 		data, err := readRoot(root, file.Path, maxFile)
 		if err != nil {
 			return AnchorIndex{}, err
 		}
 		lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
-		files = append(files, located{file.Path, lines})
+		files = append(files, located{file.Path, lines, false})
 		if file.Reference {
 			continue
 		}
@@ -446,46 +506,65 @@ func anchorIndex(cfg Config) (AnchorIndex, error) {
 			}
 		}
 	}
-	for _, file := range files {
-		for i, line := range file.lines {
-			match := anchorDefinedRE.FindStringSubmatch(line)
-			if match == nil || entries[match[1]] == nil {
-				continue
-			}
-			heading := strings.HasPrefix(strings.TrimSpace(line), "#")
-			end := i
-			for j := i + 1; j < len(file.lines); j++ {
-				next := strings.TrimSpace(file.lines[j])
-				if heading && strings.HasPrefix(next, "#") || !heading && (next == "" || anchorDefinedRE.MatchString(file.lines[j])) {
-					break
+	// Definitions are collected twice: for the anchors the normative files mention, then once more for the anchors
+	// those definitions name (§38.2, one level), so the host sees where a nested reference leads.
+	collect := func(wanted func(string) bool) {
+		for _, file := range files {
+			for i, line := range file.lines {
+				match := anchorDefinedRE.FindStringSubmatch(line)
+				if match == nil || !wanted(match[1]) {
+					continue
 				}
-				if next != "" {
-					end = j
-				}
-			}
-			kind := "text"
-			switch trimmed := strings.TrimSpace(line); {
-			case heading:
-				kind = "heading"
-			case strings.HasPrefix(trimmed, "|"):
-				kind = "table"
-			case strings.HasPrefix(trimmed, "*") || strings.HasPrefix(trimmed, "-"):
-				kind = "list"
-			}
-			references, seen := []string{}, map[string]bool{match[1]: true}
-			for _, l := range file.lines[i : end+1] {
-				for _, anchor := range anchorRE.FindAllString(l, -1) {
-					if k := anchorKey(anchor); !seen[k] {
-						seen[k] = true
-						references = append(references, k)
+				heading := strings.HasPrefix(strings.TrimSpace(line), "#")
+				end := i
+				for j := i + 1; j < len(file.lines); j++ {
+					next := strings.TrimSpace(file.lines[j])
+					if heading && strings.HasPrefix(next, "#") || !heading && (next == "" || anchorDefinedRE.MatchString(file.lines[j])) {
+						break
+					}
+					if next != "" {
+						end = j
 					}
 				}
+				kind := "text"
+				switch trimmed := strings.TrimSpace(line); {
+				case heading:
+					kind = "heading"
+				case strings.HasPrefix(trimmed, "|"):
+					kind = "table"
+				case strings.HasPrefix(trimmed, "*") || strings.HasPrefix(trimmed, "-"):
+					kind = "list"
+				}
+				references, seen := []string{}, map[string]bool{match[1]: true}
+				for _, l := range file.lines[i : end+1] {
+					for _, anchor := range anchorRE.FindAllString(l, -1) {
+						if k := anchorKey(anchor); !seen[k] {
+							seen[k] = true
+							references = append(references, k)
+						}
+					}
+				}
+				e := entry(match[1])
+				e.Definitions = append(e.Definitions, AnchorDefinition{file.path, i + 1, end + 1, kind, references, file.outside})
 			}
-			e := entries[match[1]]
-			e.Definitions = append(e.Definitions, AnchorDefinition{file.path, i + 1, end + 1, kind, references})
 		}
 	}
-	index := AnchorIndex{SnapshotFiles: len(files), Anchors: []AnchorEntry{}, Undefined: []string{}}
+	collect(func(key string) bool { return entries[key] != nil })
+	nested := map[string]bool{}
+	for _, e := range entries {
+		for _, d := range e.Definitions {
+			for _, r := range d.References {
+				if entries[r] == nil {
+					nested[r] = true
+				}
+			}
+		}
+	}
+	collect(func(key string) bool { return nested[key] })
+	for key := range nested {
+		entry(key).Nested = true
+	}
+	index := AnchorIndex{SnapshotFiles: specFiles, OutsideFiles: outside, Anchors: []AnchorEntry{}, Undefined: []string{}}
 	for _, e := range entries {
 		index.Anchors = append(index.Anchors, *e)
 		if len(e.Definitions) == 0 {
@@ -494,6 +573,6 @@ func anchorIndex(cfg Config) (AnchorIndex, error) {
 	}
 	sort.Slice(index.Anchors, func(i, j int) bool { return index.Anchors[i].Anchor < index.Anchors[j].Anchor })
 	sort.Strings(index.Undefined)
-	slog.Debug("anchors: индекс якорей", "spec_files", len(files), "anchors", len(index.Anchors), "undefined", len(index.Undefined))
+	slog.Debug("anchors: индекс якорей", "spec_files", specFiles, "outside_files", len(outside), "anchors", len(index.Anchors), "nested", len(nested), "undefined", len(index.Undefined))
 	return index, nil
 }
