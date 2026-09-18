@@ -957,7 +957,7 @@ func TestOverview(t *testing.T) {
 		t.Fatal("итоги по двум scope", view.Totals)
 	}
 	first := view.Scopes[0]
-	if first.Decided == nil || first.Decided.RunID != "review" || first.Decided.HostReviewState != "current" || first.Decided.Form != "assessments" || !reflect.DeepEqual(first.Decided.Disagree, []string{"REQ-DEMO-001"}) || !first.Decided.SnapshotCurrent || first.Decided.Submitted != 2 {
+	if first.Decided == nil || first.Decided.RunID != "review" || first.Decided.HostReviewState != "current" || first.Decided.Form != "assessments" || !reflect.DeepEqual(first.Decided.Disagree, []string{"REQ-DEMO-001"}) || !first.Decided.SnapshotCurrent || first.Decided.Submitted != 2 || len(first.Decided.Contradicted) != first.Decided.Implementation["contradicted"] {
 		t.Fatal("решённый run", first.Decided)
 	}
 	if second := view.Scopes[1]; second.IndexMode != "accepted" || second.Freshness != "fresh" || second.Requirements != 1 || second.Head == "" || second.Runs != 0 {

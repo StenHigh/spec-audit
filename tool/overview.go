@@ -50,6 +50,7 @@ type RunOverview struct {
 	Form             string         `json:"form,omitempty"`
 	Implementation   map[string]int `json:"implementation"`
 	Assertion        map[string]int `json:"assertion"`
+	Contradicted     []string       `json:"contradicted"` // norms the host found contradicted — the GAP list of the scope
 	Disagree         []string       `json:"disagree"`
 }
 
@@ -172,7 +173,7 @@ func runOverview(reports *os.Root, runID, current string) (RunOverview, error) {
 	if err != nil {
 		return RunOverview{}, err
 	}
-	view := RunOverview{RunID: runID, SnapshotCurrent: current == m.SnapshotID, Implementation: map[string]int{}, Assertion: map[string]int{}, Disagree: []string{}}
+	view := RunOverview{RunID: runID, SnapshotCurrent: current == m.SnapshotID, Implementation: map[string]int{}, Assertion: map[string]int{}, Contradicted: []string{}, Disagree: []string{}}
 	if len(versions.Records) > 0 {
 		view.PreparedAt, view.ToolVersion = versions.Records[0].RecordedAt, versions.Records[0].ToolVersion
 	}
@@ -189,6 +190,9 @@ func runOverview(reports *os.Root, runID, current string) (RunOverview, error) {
 		for _, a := range summary.Latest.Assessments {
 			view.Implementation[a.Implementation]++
 			view.Assertion[a.Assertion]++
+			if a.Implementation == "contradicted" {
+				view.Contradicted = append(view.Contradicted, a.RequirementID)
+			}
 		}
 	}
 	if view.DeliveryComplete {
