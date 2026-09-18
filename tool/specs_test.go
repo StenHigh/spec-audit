@@ -182,3 +182,31 @@ func TestAnchorAdvisories(t *testing.T) {
 		t.Fatal("после apply index показывает только §1.2", index["advisories"])
 	}
 }
+
+// tool-spec §32.1: `index CONFIG summary` keeps everything but the requirement and file bodies.
+func TestIndexSummary(t *testing.T) {
+	config, _ := fixture(t)
+	plain := readFixture(t, config)
+	writeFixture(t, config, bytes.Replace(plain, []byte("scopes: []\n"), []byte(scopesYAML(3, 2)), 1))
+	full := runOK(t, "index", config).(map[string]any)
+	summary := runOK(t, "index", config, "summary").(map[string]any)
+	requirements := full["requirements"].([]Requirement)
+	ids := []string{}
+	for _, req := range requirements {
+		ids = append(ids, req.ID)
+	}
+	if _, ok := summary["requirements"]; ok || summary["files"] != nil || summary["requirements_total"] != len(requirements) || !reflect.DeepEqual(summary["active_ids"], ids) || summary["files_total"] != len(full["files"].([]SourceFile)) || summary["snapshot_id"] != full["snapshot_id"] || len(summary["scopes"].([]Scope)) != 2 {
+		t.Fatal("сводка index: счётчики и ID вместо тел", summary)
+	}
+	if _, ok := summary["advisories"].([]string); !ok || summary["freshness"] != nil {
+		t.Fatal("advisories остаются, freshness в declared-режиме нет", summary["advisories"], summary["freshness"])
+	}
+	accepted, _ := acceptedFixture(t)
+	c := candidateAt(t, filepath.Dir(accepted), "rules.md", "C001", "Лимит 8 МиБ", 2, 2)
+	raw, decision := acceptedInputs(t, accepted, "initial", []legacyCandidate{c}, acceptOperation("accept", []string{}, "C001"))
+	runOK(t, "reconcile", accepted, raw, decision)
+	if summary := runOK(t, "index", accepted, "summary").(map[string]any); summary["freshness"] != "fresh" || summary["requirements_total"] != 1 || summary["accepted"] == nil {
+		t.Fatal("сводка в accepted-режиме", summary)
+	}
+	runFail(t, "index", config, "other")
+}

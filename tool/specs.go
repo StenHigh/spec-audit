@@ -219,6 +219,26 @@ func scopeAdvisories(m Manifest) []string {
 	return advisories
 }
 
+// indexSummary is `index CONFIG summary` (tool-spec §32.1): the index answer with counts and IDs instead of the
+// requirement and file bodies; everything else — advisories, freshness, accepted, scopes — as in `index`.
+func indexSummary(cfg Config) (any, error) {
+	full, err := indexConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	index := full.(map[string]any)
+	requirements, files := index["requirements"].([]Requirement), index["files"].([]SourceFile)
+	ids := []string{}
+	for _, req := range requirements {
+		ids = append(ids, req.ID)
+	}
+	delete(index, "requirements")
+	delete(index, "files")
+	index["requirements_total"], index["active_ids"], index["files_total"], index["scopes"] = len(requirements), ids, len(files), cfg.Scopes
+	slog.Debug("index: сводка", "requirements", len(requirements), "files", len(files))
+	return index, nil
+}
+
 func indexConfig(cfg Config) (any, error) {
 	m, err := snapshot(cfg)
 	if err != nil {

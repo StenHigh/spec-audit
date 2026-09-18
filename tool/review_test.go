@@ -1161,3 +1161,39 @@ func TestReviewCitations(t *testing.T) {
 		t.Fatal("хост в индексе — только собственные цитаты решения", host)
 	}
 }
+
+// tool-spec §32.2: `review CONFIG RUN_ID summary` — outcomes, roles and the decision state without entries or bodies.
+func TestReviewBrief(t *testing.T) {
+	config, base := fixture(t)
+	batch := runOK(t, "prepare", config, "review").(TaskBatch)
+	if brief := runOK(t, "review", config, "review", "summary").(ReviewBrief); brief.DeliveryComplete || len(brief.Roles) != len(batch.Tasks) || brief.State != "missing" || brief.Agree != 0 {
+		t.Fatal("сводка до доставки", brief)
+	}
+	for _, task := range batch.Tasks {
+		result := sampleResult(t, task, filepath.Join(base, "source"))
+		if task.Role == "redteam" {
+			result.Assessments[0].Assertion = "weak"
+		}
+		path := filepath.Join(base, task.TaskID+".json")
+		writeFixture(t, path, legacyMarshal(t, result))
+		runOK(t, "submit", config, "review", task.TaskID, path)
+	}
+	versionsPath := filepath.Join(base, "runs/review/tool-versions.json")
+	versionsBefore := readFixture(t, versionsPath)
+	full := runOK(t, "review", config, "review").(ReviewContext)
+	brief := runOK(t, "review", config, "review", "summary").(ReviewBrief)
+	if !brief.DeliveryComplete || brief.RequirementsTotal != len(full.Requirements) || !reflect.DeepEqual(brief.Outcomes, full.Outcomes) || brief.Agree != len(full.Outcomes)-1 || !reflect.DeepEqual(brief.Disagree, []string{"REQ-DEMO-001"}) || brief.BasisSHA256 != full.BasisSHA256 {
+		t.Fatal("сводка после доставки", brief.Agree, brief.Disagree)
+	}
+	raw, err := json.Marshal(brief)
+	if err != nil || bytes.Contains(raw, []byte(`"entries"`)) || bytes.Contains(raw, []byte(`"quote"`)) {
+		t.Fatal("сводка не несёт entries и цитат", err)
+	}
+	if !bytes.Equal(versionsBefore, readFixture(t, versionsPath)) {
+		t.Fatal("сводка не должна писать провенанс")
+	}
+	runOK(t, "review", config, "review", writeReviewInput(t, base, reviewInput(t, config)))
+	if brief := runOK(t, "review", config, "review", "summary").(ReviewBrief); brief.State != "current" || len(brief.History) != 1 || brief.Form != "assessments" {
+		t.Fatal("сводка после решения", brief.State, brief.Form)
+	}
+}

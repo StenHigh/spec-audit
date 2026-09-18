@@ -984,6 +984,37 @@ func requirementView(reports, run *os.Root, runID string, m Manifest, state Stat
 	return view, nil
 }
 
+// ReviewBrief is `review CONFIG RUN_ID summary` (tool-spec §32.2): the context without entries, executions, requirement
+// bodies and the decision's assessments — what the host reads first, small enough to read whole.
+type ReviewBrief struct {
+	RunID             string          `json:"run_id"`
+	SnapshotID        string          `json:"snapshot_id"`
+	DeliveryComplete  bool            `json:"delivery_complete"`
+	Freshness         string          `json:"freshness"`
+	State             string          `json:"state"`
+	BasisSHA256       string          `json:"basis_sha256"`
+	History           []ReviewHistory `json:"history"`
+	Form              string          `json:"form,omitempty"`
+	RequirementsTotal int             `json:"requirements_total"`
+	Roles             []RoleEntry     `json:"roles"`
+	Outcomes          []Outcome       `json:"outcomes"`
+	Agree             int             `json:"agree"`
+	Disagree          []string        `json:"disagree"`
+}
+
+func reviewBrief(context ReviewContext) ReviewBrief {
+	brief := ReviewBrief{context.RunID, context.SnapshotID, context.DeliveryComplete, context.Freshness, context.State, context.BasisSHA256, context.History, context.Form, len(context.Requirements), context.Roles, context.Outcomes, 0, []string{}}
+	for _, row := range context.Outcomes {
+		if row.Agree {
+			brief.Agree++
+		} else {
+			brief.Disagree = append(brief.Disagree, row.RequirementID)
+		}
+	}
+	slog.Debug("review: сводка", "run_id", context.RunID, "agree", brief.Agree, "disagree", len(brief.Disagree))
+	return brief
+}
+
 // CitationRow is one line of the run's citation index (tool-spec §30.2): who cites which lines under which norm, no quote.
 type CitationRow struct {
 	Path          string `json:"path"`
