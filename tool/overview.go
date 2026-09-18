@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -221,14 +222,45 @@ func runOverview(reports *os.Root, runID, current string) (RunOverview, []Contra
 	code := []ContradictedCitation{}
 	if summary.Latest != nil {
 		view.ReviewID = summary.Latest.ReviewID
+		// tool-spec §44.1: only the lines that back the contradiction — the roles that themselves found the norm
+		// contradicted plus the host's own citations — not a supporting role's context lines.
+		own := map[string][]Citation{}
+		if n := len(journal.Records); n > 0 {
+			if record, err := validateReview([]byte(journal.Records[n-1]), runID, m, nil, false); err == nil {
+				for _, a := range record.Assessments {
+					own[a.RequirementID] = a.Code
+				}
+			}
+		}
 		for _, a := range summary.Latest.Assessments {
 			view.Implementation[a.Implementation]++
 			view.Assertion[a.Assertion]++
-			if a.Implementation == "contradicted" {
-				view.Contradicted = append(view.Contradicted, a.RequirementID)
-				for _, c := range a.Code {
+			if a.Implementation != "contradicted" {
+				continue
+			}
+			view.Contradicted = append(view.Contradicted, a.RequirementID)
+			seen := map[string]bool{}
+			add := func(c Citation) {
+				key := fmt.Sprintf("%s:%d-%d", c.Path, c.LineStart, c.LineEnd)
+				if !seen[key] {
+					seen[key] = true
 					code = append(code, ContradictedCitation{Path: c.Path, LineStart: c.LineStart, LineEnd: c.LineEnd, RunID: runID, RequirementID: a.RequirementID})
 				}
+			}
+			for _, entry := range state.Entries {
+				if entry.Result == nil {
+					continue
+				}
+				for _, ra := range entry.Result.Assessments {
+					if ra.RequirementID == a.RequirementID && ra.Implementation == "contradicted" {
+						for _, c := range ra.Code {
+							add(c)
+						}
+					}
+				}
+			}
+			for _, c := range own[a.RequirementID] {
+				add(c)
 			}
 		}
 	}
