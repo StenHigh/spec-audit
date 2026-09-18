@@ -111,6 +111,32 @@ type Manifest struct {
 	Requirements []Requirement    `json:"requirements"`
 	SnapshotID   string           `json:"snapshot_id"`
 	Accepted     *AcceptedSummary `json:"accepted,omitempty"`
+	// Incremental is set by `prepare … since PREV_RUN` (tool-spec §50): which norms the roles assess and which host
+	// verdicts are carried over unchanged. Added after snapshot_id is computed, so freshness is unaffected.
+	Incremental *IncrementalPlan `json:"incremental,omitempty"`
+}
+
+type IncrementalPlan struct {
+	SinceRun string            `json:"since_run"`
+	ReviewID string            `json:"review_id"`
+	Assessed []string          `json:"assessed"`
+	Carried  []CarriedVerdict  `json:"carried"`
+	Reasons  map[string]string `json:"reasons"` // norm → why it is assessed again: new | gap | changed
+}
+
+// CarriedVerdict is the host's verdict of the previous run with its evidence and the files that evidence rests on,
+// all byte-identical in the current snapshot (that is what carrying requires).
+type CarriedVerdict struct {
+	RequirementID  string         `json:"requirement_id"`
+	Specification  string         `json:"specification"`
+	Implementation string         `json:"implementation"`
+	Assertion      string         `json:"assertion"`
+	Statement      string         `json:"statement"`
+	Limitations    []string       `json:"limitations"`
+	Spec           []Citation     `json:"spec"`
+	Code           []Citation     `json:"code"`
+	Tests          []TestCitation `json:"tests"`
+	Files          []SourceFile   `json:"files"`
 }
 
 type Task struct {
@@ -179,10 +205,29 @@ type TaskBatch struct {
 	Files       []SourceFile `json:"files"`
 	SDK         []SDKRecord  `json:"sdk"`
 	// Delivery counters as in Status (tool-spec §30.3): an empty tasks list after full delivery is explicit, not silent.
-	Expected         int      `json:"expected"`
-	Submitted        int      `json:"submitted"`
-	DeliveryComplete bool     `json:"delivery_complete"`
-	PendingIDs       []string `json:"pending_ids"` // task IDs still to deliver (tool-spec §40.3) — the queue without the bodies
+	Expected         int                 `json:"expected"`
+	Submitted        int                 `json:"submitted"`
+	DeliveryComplete bool                `json:"delivery_complete"`
+	PendingIDs       []string            `json:"pending_ids"` // task IDs still to deliver (tool-spec §40.3) — the queue without the bodies
+	Incremental      *IncrementalSummary `json:"incremental,omitempty"`
+}
+
+type IncrementalSummary struct {
+	SinceRun string         `json:"since_run"`
+	Assessed int            `json:"assessed"`
+	Carried  int            `json:"carried"`
+	Reasons  map[string]int `json:"reasons"`
+}
+
+func incrementalSummary(m Manifest) *IncrementalSummary {
+	if m.Incremental == nil {
+		return nil
+	}
+	reasons := map[string]int{}
+	for _, reason := range m.Incremental.Reasons {
+		reasons[reason]++
+	}
+	return &IncrementalSummary{m.Incremental.SinceRun, len(m.Incremental.Assessed), len(m.Incremental.Carried), reasons}
 }
 
 type Status struct {
@@ -1179,14 +1224,24 @@ func checkStateSize(state State) error {
 
 func newState(m Manifest) State {
 	state := State{Entries: []Entry{}, Executions: []Receipt{}}
+	assessed := map[string]bool{}
+	if m.Incremental != nil {
+		for _, id := range m.Incremental.Assessed {
+			assessed[id] = true
+		}
+	}
 	for _, scope := range m.Config.Scopes {
 		reqs := []Requirement{}
 		for _, req := range m.Requirements {
 			for _, id := range scope.Requirements {
-				if req.ID == id {
+				if req.ID == id && (m.Incremental == nil || assessed[id]) {
 					reqs = append(reqs, req)
 				}
 			}
+		}
+		if len(reqs) == 0 {
+			// tool-spec §50: a scope whose norms are all carried gets no tasks.
+			continue
 		}
 		for _, role := range []string{"mapper", "redteam"} {
 			state.Entries = append(state.Entries, Entry{Task: Task{
@@ -1319,6 +1374,11 @@ func execute(args []string) (any, error) {
 		return nil, errors.New(usage)
 	}
 	command, runID := args[0], args[2]
+	sinceRun := ""
+	if command == "prepare" && len(args) == 5 && args[3] == "since" && slugRE.MatchString(args[4]) {
+		sinceRun = args[4] // the incremental source; the arity check below sees the plain form
+		args = args[:3]
+	}
 	argc := map[string]int{"prepare": 3, "tasks": 3, "status": 3, "report": 3, "review": -2, "draft": 3, "submit": 5, "validate": 5, "retry": 4, "test": 4, "php-facts": -1, "php-typed": -1}
 	if count, ok := argc[command]; !ok || (count >= 0 && len(args) != count) || (count == -1 && len(args) < 4) || (count == -2 && !validReviewArgs(args)) || !slugRE.MatchString(runID) {
 		return nil, errors.New("неизвестная команда, неверные аргументы или недопустимый RUN_ID")
@@ -1365,6 +1425,13 @@ func execute(args []string) (any, error) {
 			return nil, errors.New("нет объявленных требований; это не доказательство отсутствия обязанностей")
 		}
 		scopeAdvisories(m)
+		if sinceRun != "" {
+			plan, err := incrementalPlan(reports, sinceRun, m)
+			if err != nil {
+				return nil, err
+			}
+			m.Incremental = plan
+		}
 		// Check serialized bounds before publishing a new run directory.
 		body, err := json.MarshalIndent(m, "", "  ")
 		if err != nil || len(body)+1 > maxState {
@@ -1488,7 +1555,7 @@ func execute(args []string) (any, error) {
 	}
 	switch command {
 	case "prepare", "tasks":
-		batch := TaskBatch{RunID: runID, SnapshotID: m.SnapshotID, ProjectRoot: cfg.ProjectRoot, Runtime: cfg.Runtime, Tasks: pending(state), Files: m.Files, SDK: sdkRecordsFor(cfg.ReportsDir, runID, state.SDK)}
+		batch := TaskBatch{RunID: runID, SnapshotID: m.SnapshotID, ProjectRoot: cfg.ProjectRoot, Runtime: cfg.Runtime, Tasks: pending(state), Files: m.Files, SDK: sdkRecordsFor(cfg.ReportsDir, runID, state.SDK), Incremental: incrementalSummary(m)}
 		batch.Expected, batch.Submitted = len(state.Entries), len(state.Entries)-len(batch.Tasks)
 		batch.DeliveryComplete, batch.PendingIDs = len(batch.Tasks) == 0, []string{}
 		for _, task := range batch.Tasks {
@@ -1772,4 +1839,127 @@ func makeReport(runID string, m Manifest, state State, fresh bool) Report {
 		report.Requirements = append(report.Requirements, row)
 	}
 	return report
+}
+
+// incrementalPlan decides, norm by norm, what the roles assess again and what is carried over from PREV_RUN's host
+// decision (tool-spec §50, REQ-SA-050). PREV_RUN must belong to the same reports_dir, be fully delivered and decided.
+// A norm is assessed again when it is new or revised, when its previous verdict was a gap (§45.1), or when any file
+// its previous evidence cites changed or vanished; everything else is carried with its evidence and file hashes.
+func incrementalPlan(reports *os.Root, sinceRun string, m Manifest) (*IncrementalPlan, error) {
+	prev, err := reports.OpenRoot(sinceRun)
+	if err != nil {
+		return nil, fmt.Errorf("since: run %s недоступен: %w", sinceRun, err)
+	}
+	defer prev.Close()
+	var prevManifest Manifest
+	data, err := readRoot(prev, "manifest.json", maxState)
+	if err != nil {
+		return nil, fmt.Errorf("since: manifest run %s: %w", sinceRun, err)
+	}
+	if err := strictJSON(data, &prevManifest); err != nil {
+		return nil, fmt.Errorf("since: manifest run %s: %w", sinceRun, err)
+	}
+	var prevState State
+	if data, err = readRoot(prev, "state.json", maxState); err != nil {
+		return nil, fmt.Errorf("since: state run %s: %w", sinceRun, err)
+	}
+	if err := strictJSON(data, &prevState); err != nil {
+		return nil, fmt.Errorf("since: state run %s: %w", sinceRun, err)
+	}
+	if len(pending(prevState)) != 0 {
+		return nil, fmt.Errorf("since: run %s не доставлен полностью", sinceRun)
+	}
+	journal, err := readReviews(prev, sinceRun, prevManifest)
+	if err != nil {
+		return nil, fmt.Errorf("since: журнал решений run %s: %w", sinceRun, err)
+	}
+	if len(journal.Records) == 0 {
+		return nil, fmt.Errorf("since: run %s без решения хоста", sinceRun)
+	}
+	// The latest decision with the roles' evidence merged in — the verdicts the host actually recorded.
+	record, err := validateReview([]byte(journal.Records[len(journal.Records)-1]), sinceRun, prevManifest, &prevState, false)
+	if err != nil {
+		record, err = validateReview([]byte(journal.Records[len(journal.Records)-1]), sinceRun, prevManifest, nil, false)
+		if err != nil {
+			return nil, fmt.Errorf("since: решение run %s: %w", sinceRun, err)
+		}
+	}
+	prevKeys := map[string]string{}
+	for _, req := range prevManifest.Requirements {
+		prevKeys[req.ID] = sameNorm(req)
+	}
+	prevFiles := map[string]string{}
+	for _, file := range prevManifest.Files {
+		prevFiles[file.Path] = file.SHA256
+	}
+	currentFiles := map[string]SourceFile{}
+	for _, file := range m.Files {
+		currentFiles[file.Path] = file
+	}
+	verdicts := map[string]Assessment{}
+	for _, a := range record.Assessments {
+		verdicts[a.RequirementID] = a
+	}
+	plan := &IncrementalPlan{SinceRun: sinceRun, ReviewID: record.ReviewID, Assessed: []string{}, Carried: []CarriedVerdict{}, Reasons: map[string]string{}}
+	for _, req := range m.Requirements {
+		verdict, decided := verdicts[req.ID]
+		reason := ""
+		switch {
+		case !decided || prevKeys[req.ID] != sameNorm(req):
+			reason = "new"
+		case isGap(NormBrief{Specification: verdict.Specification, Implementation: verdict.Implementation, Assertion: verdict.Assertion}):
+			reason = "gap"
+		}
+		files := []SourceFile{}
+		if reason == "" {
+			seen := map[string]bool{}
+			paths := []string{}
+			for _, c := range verdict.Spec {
+				paths = append(paths, c.Path)
+			}
+			for _, c := range verdict.Code {
+				paths = append(paths, c.Path)
+			}
+			for _, t := range verdict.Tests {
+				paths = append(paths, t.Citation.Path)
+			}
+			for _, path := range paths {
+				if seen[path] {
+					continue
+				}
+				seen[path] = true
+				current, ok := currentFiles[path]
+				if !ok || current.SHA256 != prevFiles[path] {
+					reason = "changed"
+					break
+				}
+				files = append(files, SourceFile{Path: path, Kind: current.Kind, SHA256: current.SHA256, Bytes: current.Bytes, Reference: current.Reference})
+			}
+		}
+		if reason != "" {
+			plan.Assessed = append(plan.Assessed, req.ID)
+			plan.Reasons[req.ID] = reason
+			continue
+		}
+		limitations := verdict.Limitations
+		if limitations == nil {
+			limitations = []string{}
+		}
+		plan.Carried = append(plan.Carried, CarriedVerdict{req.ID, verdict.Specification, verdict.Implementation, verdict.Assertion, verdict.Statement, limitations, verdict.Spec, verdict.Code, verdict.Tests, files})
+	}
+	slog.Info("prepare: инкрементальный run", "since", sinceRun, "review_id", record.ReviewID, "assessed", len(plan.Assessed), "carried", len(plan.Carried))
+	return plan, nil
+}
+
+// carriedVerdict finds a norm carried into this run (tool-spec §50); nil for an assessed norm or a full run.
+func carriedVerdict(m Manifest, id string) *CarriedVerdict {
+	if m.Incremental == nil {
+		return nil
+	}
+	for i := range m.Incremental.Carried {
+		if m.Incremental.Carried[i].RequirementID == id {
+			return &m.Incremental.Carried[i]
+		}
+	}
+	return nil
 }

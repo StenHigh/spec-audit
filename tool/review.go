@@ -242,6 +242,16 @@ type Outcome struct {
 	// ContradictedElsewhere lists the related scopes (§43.1) whose decided runs cite, under a contradicted verdict, code
 	// lines that overlap what a role cites here — a consistency hint, never a verdict.
 	ContradictedElsewhere []ElsewhereHit `json:"contradicted_elsewhere"`
+	// Carried names the run and decision a norm was carried from in an incremental run (§50): no role assessed it here.
+	Carried *CarriedRef `json:"carried,omitempty"`
+}
+
+type CarriedRef struct {
+	RunID          string `json:"run_id"`
+	ReviewID       string `json:"review_id"`
+	Specification  string `json:"specification"`
+	Implementation string `json:"implementation"`
+	Assertion      string `json:"assertion"`
 }
 
 type ElsewhereHit struct {
@@ -298,6 +308,16 @@ func outcomes(m Manifest, state State, previous map[string]PreviousHost, elsewhe
 	differing := map[string]bool{}
 	for _, req := range m.Requirements {
 		row := Outcome{RequirementID: req.ID, Roles: map[string]RoleOutcome{}, AmbiguousOverClear: []string{}, ContradictedElsewhere: []ElsewhereHit{}}
+		if carried := carriedVerdict(m, req.ID); carried != nil {
+			row.Carried = &CarriedRef{m.Incremental.SinceRun, m.Incremental.ReviewID, carried.Specification, carried.Implementation, carried.Assertion}
+			for _, scope := range m.Config.Scopes {
+				for _, id := range scope.Requirements {
+					if id == req.ID {
+						row.Scope = scope.ID
+					}
+				}
+			}
+		}
 		cited := map[string]Assessment{}
 		if prior, ok := previous[req.ID]; ok {
 			row.PreviousHost = &prior
@@ -356,7 +376,9 @@ func outcomes(m Manifest, state State, previous map[string]PreviousHost, elsewhe
 		_, hasMapper := row.Roles["mapper"]
 		_, hasRedteam := row.Roles["redteam"]
 		row.Agree = hasMapper && hasRedteam && mapper.Specification == redteam.Specification && mapper.Implementation == redteam.Implementation && mapper.Assertion == redteam.Assertion
-		if !row.Agree {
+		if row.Carried != nil {
+			row.Agree = true // no roles to disagree; the verdict is the host's own carried one
+		} else if !row.Agree {
 			disagree++
 		}
 		rows = append(rows, row)
@@ -559,8 +581,15 @@ func draftDecision(runID string, m Manifest, state State, journal reviewJournal)
 	draft := ReviewDecisionV3{Version: 3, ReviewID: fmt.Sprintf("host-review-%03d", len(journal.Records)+1), RunID: runID, SnapshotID: m.SnapshotID,
 		BasisSHA256: reviewBasis(m.SnapshotID, state, previous), Verdicts: []ReviewVerdictV3{}, Limitations: []string{}}
 	for _, req := range m.Requirements {
-		draft.Verdicts = append(draft.Verdicts, ReviewVerdictV3{RequirementID: req.ID, Limitations: []string{}, Spec: []Citation{}, Code: []Citation{}, Tests: []TestCitation{}})
+		verdict := ReviewVerdictV3{RequirementID: req.ID, Limitations: []string{}, Spec: []Citation{}, Code: []Citation{}, Tests: []TestCitation{}}
+		if carried := carriedVerdict(m, req.ID); carried != nil {
+			// §50: the host's own previous verdict, not a role's — prefilled with concur carried; the host may still change it.
+			verdict.Specification, verdict.Implementation, verdict.Assertion, verdict.Concur, verdict.Statement = carried.Specification, carried.Implementation, carried.Assertion, "carried", carried.Statement
+			verdict.Limitations = append([]string{}, carried.Limitations...)
+		}
+		draft.Verdicts = append(draft.Verdicts, verdict)
 	}
+	draft.Counts = countVerdicts(baseVerdicts(draft.Verdicts))
 	slog.Info("черновик решения", "run_id", runID, "review_id", draft.ReviewID, "requirements", len(draft.Verdicts))
 	return draft, nil
 }
@@ -781,15 +810,23 @@ func validateVerdicts(record reviewRecord, verdicts []ReviewVerdictV3, counts Re
 		}
 		if state != nil {
 			if strings.TrimSpace(verdict.Statement) == "" {
-				if verdict.Concur != "both" || !rolesAgreeWith(verdict.base(), *state) {
+				if carried := carriedVerdict(m, verdict.RequirementID); carried != nil && verdict.Concur == "carried" {
+					// §50: an empty statement on a carried norm keeps the previous host statement.
+					assessment.Statement = carried.Statement
+				} else if verdict.Concur != "both" || !rolesAgreeWith(verdict.base(), *state) {
 					return reviewRecord{}, fmt.Errorf("%s: пустой statement допустим только при concur both и совпадении с оценками обеих ролей", verdict.RequirementID)
+				} else {
+					assessment.Statement = agreedStatement
+					slog.Debug("review: стандартный statement", "requirement_id", verdict.RequirementID)
 				}
-				assessment.Statement = agreedStatement
-				slog.Debug("review: стандартный statement", "requirement_id", verdict.RequirementID)
 			}
 			adopted, err := adoptEvidence(verdict.base(), m, *state)
 			if err != nil {
 				return reviewRecord{}, err
+			}
+			if carried := carriedVerdict(m, verdict.RequirementID); carried != nil && len(verdict.Spec)+len(verdict.Code)+len(verdict.Tests) == 0 &&
+				(verdict.Specification != carried.Specification || verdict.Implementation != carried.Implementation || verdict.Assertion != carried.Assertion) {
+				return reviewRecord{}, fmt.Errorf("%s: перенесённый вердикт %s/%s/%s; иные состояния требуют собственных цитат хоста (version 3)", verdict.RequirementID, carried.Specification, carried.Implementation, carried.Assertion)
 			}
 			assessment.Spec, assessment.Code, assessment.Tests = mergeCitations(adopted, assessment)
 			// §7 completeness holds on the union for both verdict forms (REQ-SA-046, §48.1): a positive state needs the
@@ -867,8 +904,8 @@ func checkVerdict(verdict ReviewVerdict, req Requirement) error {
 	if req.Accepted != nil && req.Accepted.Clarity == "ambiguous" && verdict.Specification != "ambiguous" {
 		return errors.New("принятая неоднозначность требует новой редакции, не оценки clear")
 	}
-	if !oneOf(verdict.Concur, "mapper", "redteam", "both") {
-		return errors.New("concur допускает только mapper, redteam или both")
+	if !oneOf(verdict.Concur, "mapper", "redteam", "both", "carried") {
+		return errors.New("concur допускает только mapper, redteam, both или carried")
 	}
 	for _, limitation := range verdict.Limitations {
 		if strings.TrimSpace(limitation) == "" {
@@ -880,11 +917,22 @@ func checkVerdict(verdict ReviewVerdict, req Requirement) error {
 
 // adoptEvidence collects the named roles' current citations for one norm; both = mapper then redteam, deduplicated.
 func adoptEvidence(verdict ReviewVerdict, m Manifest, state State) (Assessment, error) {
+	adopted := Assessment{Spec: []Citation{}, Code: []Citation{}, Tests: []TestCitation{}}
+	// tool-spec §50: a carried norm's evidence is the previous host verdict recorded in the manifest; no role assessed it,
+	// so a role concur is refused, and a carried concur on an assessed norm is refused likewise.
+	if carried := carriedVerdict(m, verdict.RequirementID); carried != nil {
+		if verdict.Concur != "carried" {
+			return adopted, fmt.Errorf("%s: норма перенесена из %s, роли её не оценивали — concur: carried", verdict.RequirementID, m.Incremental.SinceRun)
+		}
+		return Assessment{Spec: append([]Citation{}, carried.Spec...), Code: append([]Citation{}, carried.Code...), Tests: append([]TestCitation{}, carried.Tests...)}, nil
+	}
+	if verdict.Concur == "carried" {
+		return adopted, fmt.Errorf("%s: норма оценивалась ролями в этом run — concur: carried недопустим", verdict.RequirementID)
+	}
 	roles := []string{verdict.Concur}
 	if verdict.Concur == "both" {
 		roles = []string{"mapper", "redteam"}
 	}
-	adopted := Assessment{Spec: []Citation{}, Code: []Citation{}, Tests: []TestCitation{}}
 	seenSpec, seenCode, seenTest := map[Citation]bool{}, map[Citation]bool{}, map[TestCitation]bool{}
 	for _, role := range roles {
 		found := false
@@ -1089,11 +1137,18 @@ type ReviewBrief struct {
 	Outcomes          []Outcome       `json:"outcomes"`
 	Agree             int             `json:"agree"`
 	Disagree          []string        `json:"disagree"`
+	Carried           int             `json:"carried"` // norms carried from an earlier run (§50)
+	Assessed          int             `json:"assessed"`
 }
 
 func reviewBrief(context ReviewContext) ReviewBrief {
-	brief := ReviewBrief{context.RunID, context.SnapshotID, context.DeliveryComplete, context.Freshness, context.State, context.BasisSHA256, context.History, context.Form, len(context.Requirements), context.Roles, context.Outcomes, 0, []string{}}
+	brief := ReviewBrief{context.RunID, context.SnapshotID, context.DeliveryComplete, context.Freshness, context.State, context.BasisSHA256, context.History, context.Form, len(context.Requirements), context.Roles, context.Outcomes, 0, []string{}, 0, 0}
 	for _, row := range context.Outcomes {
+		if row.Carried != nil {
+			brief.Carried++
+			continue
+		}
+		brief.Assessed++
 		if row.Agree {
 			brief.Agree++
 		} else {
@@ -1208,6 +1263,9 @@ func requirementText(view RequirementView, brief bool) string {
 			fmt.Fprintf(&b, "; unresolved: %s", strings.Join(req.Accepted.Unresolved, " | "))
 		}
 		b.WriteString("\n")
+	}
+	if c := view.Outcome.Carried; c != nil {
+		fmt.Fprintf(&b, "\nПеренесено из %s/%s без переоценки: %s/%s/%s (цитируемые файлы не менялись)", c.RunID, c.ReviewID, c.Specification, c.Implementation, c.Assertion)
 	}
 	fmt.Fprintf(&b, "\nИтог ролей: agree=%t", view.Outcome.Agree)
 	// tool-spec §44.2: one line per sibling norm with the number of overlapping citations, not one per line pair.

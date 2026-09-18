@@ -128,6 +128,8 @@ type RunOverview struct {
 	// contradicts) with title and statement — what the corpus page shows per scope (§45).
 	Attention []NormBrief          `json:"attention"`
 	Gap       Gap                  `json:"gap"`
+	Carried   int                  `json:"carried"` // norms carried from an earlier run without reassessment (§50)
+	SinceRun  string               `json:"since_run,omitempty"`
 	verdicts  map[string]NormBrief // id → host verdict, for the scope delta (§47)
 	keys      map[string]string    // id → content_hash|revision, so only the same norm is compared
 }
@@ -374,6 +376,9 @@ func runOverview(reports *os.Root, runID, current string) (RunOverview, []Contra
 	}
 	if len(versions.Records) > 0 {
 		view.PreparedAt, view.ToolVersion = versions.Records[0].RecordedAt, versions.Records[0].ToolVersion
+	}
+	if m.Incremental != nil {
+		view.Carried, view.SinceRun = len(m.Incremental.Carried), m.Incremental.SinceRun
 	}
 	status := makeStatus(runID, m, state, view.SnapshotCurrent)
 	view.DeliveryComplete, view.Expected, view.Submitted = status.DeliveryComplete, status.Expected, status.Submitted
