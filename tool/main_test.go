@@ -1060,5 +1060,10 @@ func TestCorpus(t *testing.T) {
 	if len(decided.Attention) == 0 || decided.Attention[0].Title == "" || !strings.Contains(page, decided.Attention[0].Title) {
 		t.Fatal("нормы внимания с заголовком и statement", decided.Attention)
 	}
+	// tool-spec §45.1: GAP counts every norm once in its most severe class; the fixture decision has one contradicted,
+	// two unknown (implementation), one supported+weak (verification), none purely ambiguous.
+	if g := decided.Gap; g.Total != len(decided.Attention) || g.Implementation != 3 || g.Verification != 1 || g.Specification != 0 || view.Totals.Gap != g || !strings.Contains(page, ">GAP<") {
+		t.Fatal("GAP по классам", g, len(decided.Attention))
+	}
 	runFail(t, "corpus", out)
 }

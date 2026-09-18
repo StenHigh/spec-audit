@@ -43,6 +43,32 @@ type OverviewTotals struct {
 	Runs           int            `json:"runs"`
 	Implementation map[string]int `json:"implementation"`
 	Assertion      map[string]int `json:"assertion"`
+	Gap            Gap            `json:"gap"`
+}
+
+// Gap is the industry reading of a gap analysis over the host's verdicts (tool-spec §45.1): a norm is a gap when it is
+// not demonstrably satisfied. Each norm is counted once, in the most severe class it falls into:
+// implementation — contradicted or unknown code; verification — tests missing, contradicting or weak for a supported
+// norm; specification — an ambiguous norm that is otherwise supported and relevantly tested.
+type Gap struct {
+	Total          int `json:"total"`
+	Implementation int `json:"implementation"`
+	Verification   int `json:"verification"`
+	Specification  int `json:"specification"`
+}
+
+func (g *Gap) add(a Assessment) {
+	switch {
+	case a.Implementation == "contradicted" || a.Implementation == "unknown":
+		g.Implementation++
+	case a.Assertion != "relevant":
+		g.Verification++
+	case a.Specification == "ambiguous":
+		g.Specification++
+	default:
+		return
+	}
+	g.Total++
 }
 
 type ScopeOverview struct {
@@ -86,6 +112,7 @@ type RunOverview struct {
 	// Attention lists the host verdicts that are not supported+relevant (contradicted, unknown, ambiguous, weak/missing/
 	// contradicts) with title and statement — what the corpus page shows per scope (§45).
 	Attention []NormBrief `json:"attention"`
+	Gap       Gap         `json:"gap"`
 }
 
 func overview(paths []string) (Overview, error) {
@@ -108,6 +135,11 @@ func overview(paths []string) (Overview, error) {
 			for k, v := range scope.Decided.Assertion {
 				view.Totals.Assertion[k] += v
 			}
+			g := scope.Decided.Gap
+			view.Totals.Gap.Total += g.Total
+			view.Totals.Gap.Implementation += g.Implementation
+			view.Totals.Gap.Verification += g.Verification
+			view.Totals.Gap.Specification += g.Specification
 		}
 	}
 	sort.Slice(view.ContradictedCode, func(i, j int) bool {
@@ -262,6 +294,7 @@ func runOverview(reports *os.Root, runID, current string) (RunOverview, []Contra
 			if a.Implementation != "supported" || a.Assertion != "relevant" || a.Specification != "clear" {
 				view.Attention = append(view.Attention, NormBrief{a.RequirementID, titles[a.RequirementID], a.Specification, a.Implementation, a.Assertion, a.Statement})
 			}
+			view.Gap.add(a)
 			if a.Implementation != "contradicted" {
 				continue
 			}
