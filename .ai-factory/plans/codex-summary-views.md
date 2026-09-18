@@ -22,7 +22,7 @@ Authority: tool-spec §1–10 (позиционный CLI) > §24.1/§27.2 (`out
 - [x] Task 2: `indexSummary`, `ReviewBrief`/`reviewBrief`, диспетчер (`index CONFIG summary`, `review … summary` read-only), usage; `TestIndexSummary`, `TestReviewBrief` — Files: `tool/specs.go`, `tool/review.go`, `tool/main.go`, `tool/specs_test.go`, `tool/review_test.go`
 <!-- Commit checkpoint: tasks 1-2 -->
 - [x] Task 3: SKILL.md шаги 1 и 6, README, ROADMAP (четвёртый 7 `[x]`, строка таблицы) — Files: `skills/spec-audit/SKILL.md`, `README.md`, `.ai-factory/ROADMAP.md`
-- [ ] Task 4: релиз `v0.1.19`, update хоста/синтетики; пилот — после завершения run на новом разделе — Files: `README.md`
+- [x] Task 4: релиз `v0.1.19`, update хоста/синтетики; пилот — после завершения run на новом разделе — Files: `README.md`
 
 ## Риски
 - DECISION-файл, буквально названный `summary` или `citations`, не открыть через `review` — как и `host` у `validate`.
