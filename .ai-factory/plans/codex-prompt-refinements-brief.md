@@ -18,4 +18,4 @@ Milestone: "Уроки девятого прогона 2026-09-18"
 - [x] Task 1: `rolePrompt` — семь уточнений; `requirementText(view, brief)`; диспетчер `REQ-ID brief`; `TestPrepareDispatch`, `TestReviewRequirementView`
 - [x] Task 2: §35 tool-spec, AGENTS, SKILL.md, README, ROADMAP («Уроки девятого прогона»), adoption «восьмой цикл»
 <!-- Commit checkpoint: tasks 1-2 -->
-- [ ] Task 3: релиз `v0.1.22`, update хоста, skill в синтетике и пилоте (локальный коммит)
+- [x] Task 3: релиз `v0.1.22`, update хоста, skill в синтетике и пилоте (локальный коммит)

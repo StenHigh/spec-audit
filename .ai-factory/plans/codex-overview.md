@@ -21,7 +21,7 @@ Authority: tool-spec §1–10 (позиционный CLI, вариативны�
 - [x] Task 1: `tool/overview.go` — `Overview`/`ScopeOverview`/`RunOverview`, `overview`, `scopeOverview`, `runOverview`; диспетчер и usage; `TestOverview`
 - [x] Task 2: §34 tool-spec, AGENTS, ARCHITECTURE, SKILL.md, README, ROADMAP
 <!-- Commit checkpoint: tasks 1-2 -->
-- [ ] Task 3: релиз `v0.1.21`, update хоста, skill в синтетике и пилоте (локальный коммит), `overview` на пилоте релизным бинарником
+- [x] Task 3: релиз `v0.1.21`, update хоста, skill в синтетике и пилоте (локальный коммит), `overview` на пилоте релизным бинарником
 
 ## Риски
 - `latest` выбирается по `recorded_at` записи `prepare`; run без журнала версий (до §19) сравнивается по имени — на пилоте таких нет.
