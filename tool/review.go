@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 )
 
@@ -981,6 +982,87 @@ func requirementView(reports, run *os.Root, runID string, m Manifest, state Stat
 	}
 	slog.Debug("review: норма", "run_id", runID, "requirement_id", id, "roles", len(view.Roles), "host", view.Host != nil)
 	return view, nil
+}
+
+// CitationRow is one line of the run's citation index (tool-spec §30.2): who cites which lines under which norm, no quote.
+type CitationRow struct {
+	Path          string `json:"path"`
+	LineStart     int    `json:"line_start"`
+	LineEnd       int    `json:"line_end"`
+	Kind          string `json:"kind"`
+	TestID        string `json:"test_id"`
+	Role          string `json:"role"`
+	TaskID        string `json:"task_id"`
+	RequirementID string `json:"requirement_id"`
+}
+
+// citationIndex lists the citations of both roles' current results and the host's own citations from the latest
+// decision (version 1 cites everything itself; version 3 only what no role cited), optionally for one file. It reads
+// what is recorded and writes nothing; a damaged journal is an error like everywhere else.
+func citationIndex(run *os.Root, runID string, m Manifest, state State, filter []string) ([]CitationRow, error) {
+	journal, err := readReviews(run, runID, m)
+	if err != nil {
+		return nil, err
+	}
+	rows := []CitationRow{}
+	add := func(role, taskID string, a Assessment) {
+		for _, c := range a.Spec {
+			rows = append(rows, CitationRow{c.Path, c.LineStart, c.LineEnd, "spec", "", role, taskID, a.RequirementID})
+		}
+		for _, c := range a.Code {
+			rows = append(rows, CitationRow{c.Path, c.LineStart, c.LineEnd, "code", "", role, taskID, a.RequirementID})
+		}
+		for _, t := range a.Tests {
+			rows = append(rows, CitationRow{t.Citation.Path, t.Citation.LineStart, t.Citation.LineEnd, "tests", t.TestID, role, taskID, a.RequirementID})
+		}
+	}
+	for _, entry := range state.Entries {
+		if entry.Result == nil {
+			continue
+		}
+		for _, a := range entry.Result.Assessments {
+			add(entry.Task.Role, entry.Task.TaskID, a)
+		}
+	}
+	hostRows := 0
+	if n := len(journal.Records); n > 0 {
+		// Without state the record keeps only the citations the host wrote itself (§25), not the adopted evidence.
+		record, err := validateReview([]byte(journal.Records[n-1]), runID, m, nil, false)
+		if err != nil {
+			return nil, err
+		}
+		for _, a := range record.Assessments {
+			add("host", "", a)
+			hostRows++
+		}
+	}
+	if len(filter) == 1 {
+		kept := rows[:0]
+		for _, row := range rows {
+			if row.Path == filter[0] {
+				kept = append(kept, row)
+			}
+		}
+		rows = kept
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		if a.Path != b.Path {
+			return a.Path < b.Path
+		}
+		if a.LineStart != b.LineStart {
+			return a.LineStart < b.LineStart
+		}
+		if a.LineEnd != b.LineEnd {
+			return a.LineEnd < b.LineEnd
+		}
+		if a.Role != b.Role {
+			return a.Role < b.Role
+		}
+		return a.RequirementID < b.RequirementID
+	})
+	slog.Debug("review: индекс цитат", "run_id", runID, "path", strings.Join(filter, ""), "citations", len(rows), "host_norms", hostRows)
+	return rows, nil
 }
 
 // stagedReview is everything review checks before it writes; validate … host stops here (tool-spec §27, REQ-SA-047).
