@@ -18,4 +18,4 @@ Milestone: "Публикация для заказчика"
 - [x] Task 1: `RunRef`/`ScopeOverview.History`, `renderCorpus`, `publish()`, диспетчер и usage, колонка «История» в `corpus.html`; `TestPublish`
 - [x] Task 2: §49 tool-spec, AGENTS, SKILL.md, README, ROADMAP/LESSONS
 <!-- Commit checkpoint: tasks 1-2 -->
-- [ ] Task 3: релиз `v0.1.36`, update хоста, skill в синтетике и пилоте (push), `publish` на пилоте
+- [x] Task 3: релиз `v0.1.36`, update хоста, skill в синтетике и пилоте (push), `publish` на пилоте
