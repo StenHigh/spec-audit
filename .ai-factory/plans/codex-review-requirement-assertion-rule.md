@@ -48,7 +48,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 (`review
 <!-- Commit checkpoint: tasks 1-2 -->
 
 ### Phase 2: Документация и поставка
-- [ ] Task 3: SKILL.md, README, ROADMAP, adoption
+- [x] Task 3: SKILL.md, README, ROADMAP, adoption
   - Deliverable: SKILL.md шаг 6 — чтение по норме и правило contradicts; README «Первый запуск» и «Приёмка и ограничения» (строка §29); ROADMAP — седьмой прогон 2, 4, 1 `[x]`, строка таблицы; adoption — сноска о 0.1.16.
   - Files: `skills/spec-audit/SKILL.md`, `README.md`, `.ai-factory/ROADMAP.md`, `docs/smsplace-adoption.md`
   - Depends: 2
