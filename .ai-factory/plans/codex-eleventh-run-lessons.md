@@ -18,4 +18,4 @@ Milestone: "Уроки одиннадцатого прогона 2026-09-18"
 - [x] Task 1: `decidedCandidates` в ответах `check`/`reconcile`, `last_deferred`/`last_rejected` в `index summary`; `anchorIndex(cfg, extra)` — `outside_files`, `outside`, `nested`; `Scope.OversizeReason`; тесты `TestCheckAcceptance`, `TestAnchors`, `TestScopeOversizeReason`, `TestIndexSummary`
 - [x] Task 2: §38 tool-spec, AGENTS, SKILL.md, README, ROADMAP, adoption «десятый цикл»
 <!-- Commit checkpoint: tasks 1-2 -->
-- [ ] Task 3: релиз `v0.1.24`, update хоста, skill в синтетике и пилоте, коммит scope `07-allocation-activation` в пилоте локально
+- [x] Task 3: релиз `v0.1.24`, update хоста, skill в синтетике и пилоте, коммит scope `07-allocation-activation` в пилоте локально
