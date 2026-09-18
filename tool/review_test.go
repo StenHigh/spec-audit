@@ -903,6 +903,9 @@ func TestReviewPreviousHostAccepted(t *testing.T) {
 	}
 	submitAll("a")
 	view := runOK(t, "review", config, "a").(ReviewContext)
+	if len(view.Outcomes[0].AmbiguousOverClear) != 0 {
+		t.Fatal("роли не спорят с clarity — список пуст", view.Outcomes[0].AmbiguousOverClear)
+	}
 	verdicts := []ReviewVerdict{{view.Requirements[0].ID, "clear", "supported", "weak", "both", "host", []string{}}}
 	path := filepath.Join(base, "a-decision.json")
 	writeFixture(t, path, legacyMarshal(t, ReviewDecisionV2{2, "host-review-001", "a", view.SnapshotID, view.BasisSHA256, "host", "s", verdicts, countVerdicts(verdicts), []string{}}))
@@ -932,6 +935,20 @@ func TestReviewPreviousHostAccepted(t *testing.T) {
 	kept := runOK(t, "review", config, "d").(ReviewContext)
 	if len(kept.Outcomes) != 2 || kept.Outcomes[0].PreviousHost == nil || kept.Outcomes[0].PreviousHost.RunID != "c" || kept.Outcomes[0].PreviousHost.Assertion != "relevant" || kept.Outcomes[1].PreviousHost != nil {
 		t.Fatal("после keep previous_host есть у прежней нормы и нет у новой", kept.Outcomes)
+	}
+	// tool-spec §41.2: a role calling an accepted clear norm ambiguous is accepted by validate and named in outcomes.
+	redteam := kept.Entries[1]
+	raised := *redteam.Result
+	raised.Assessments = append([]Assessment{}, raised.Assessments...)
+	raised.Assessments[1].Specification = "ambiguous"
+	runOK(t, "retry", config, "d", redteam.Task.TaskID)
+	raised.Attempt = 2
+	raisedPath := filepath.Join(base, "d-raised.json")
+	writeFixture(t, raisedPath, legacyMarshal(t, raised))
+	runOK(t, "submit", config, "d", redteam.Task.TaskID, raisedPath)
+	flagged := runOK(t, "review", config, "d").(ReviewContext)
+	if !reflect.DeepEqual(flagged.Outcomes[1].AmbiguousOverClear, []string{"redteam"}) || flagged.Outcomes[1].Agree || len(flagged.Outcomes[0].AmbiguousOverClear) != 0 {
+		t.Fatal("ambiguous над принятой clear назван по роли", flagged.Outcomes[1].AmbiguousOverClear, flagged.Outcomes[0].AmbiguousOverClear)
 	}
 	// Changed sources: no carry-over even for an identical norm.
 	writeFixture(t, filepath.Join(base, "source/source.go"), append(readFixture(t, filepath.Join(base, "source/source.go")), []byte("\n// изменение\n")...))
