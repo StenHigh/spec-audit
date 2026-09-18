@@ -894,6 +894,95 @@ func reviewContext(reports, run *os.Root, runID string, m Manifest, state State,
 	return ReviewContext{runID, m.SnapshotID, status.DeliveryComplete, status.Freshness, summarizeReviews(runID, m, state, fresh, journal), m.Requirements, roleEntries(state), outcomes(m, state, previousHost(reports, runID, m)), state.Entries, state.Executions}, nil
 }
 
+// RequirementView is review for one norm (tool-spec §29.1): both roles' texts and citations, the derived outcome row
+// and the host's latest verdict, so the host reads nothing out of entries by hand.
+type RequirementView struct {
+	RunID       string              `json:"run_id"`
+	SnapshotID  string              `json:"snapshot_id"`
+	Freshness   string              `json:"freshness"`
+	Requirement Requirement         `json:"requirement"`
+	Outcome     Outcome             `json:"outcome"`
+	Roles       map[string]RoleView `json:"roles"`
+	Host        *HostView           `json:"host"`
+	Executions  []TestExecution     `json:"executions"`
+}
+
+type RoleView struct {
+	TaskID      string         `json:"task_id"`
+	Attempt     int            `json:"attempt"`
+	Statement   string         `json:"statement"`
+	Limitations []string       `json:"limitations"`
+	Spec        []Citation     `json:"spec"`
+	Code        []Citation     `json:"code"`
+	Tests       []TestCitation `json:"tests"`
+}
+
+type HostView struct {
+	ReviewID       string         `json:"review_id"`
+	State          string         `json:"state"`
+	Form           string         `json:"form"`
+	Specification  string         `json:"specification"`
+	Implementation string         `json:"implementation"`
+	Assertion      string         `json:"assertion"`
+	Statement      string         `json:"statement"`
+	OwnCitations   bool           `json:"own_citations"`
+	Spec           []Citation     `json:"spec"`
+	Code           []Citation     `json:"code"`
+	Tests          []TestCitation `json:"tests"`
+}
+
+func requirementView(reports, run *os.Root, runID string, m Manifest, state State, fresh bool, id string) (RequirementView, error) {
+	context, err := reviewContext(reports, run, runID, m, state, fresh)
+	if err != nil {
+		return RequirementView{}, err
+	}
+	view := RequirementView{RunID: runID, SnapshotID: m.SnapshotID, Freshness: context.Freshness, Roles: map[string]RoleView{}, Executions: []TestExecution{}}
+	found := false
+	for _, req := range m.Requirements {
+		if req.ID == id {
+			view.Requirement, found = req, true
+		}
+	}
+	if !found {
+		return RequirementView{}, errors.New("неизвестный requirement_id")
+	}
+	for _, row := range context.Outcomes {
+		if row.RequirementID == id {
+			view.Outcome = row
+		}
+	}
+	seenTests := map[string]bool{}
+	addExecutions := func(assessment Assessment) {
+		for _, execution := range assessmentExecutions(assessment, state.Executions) {
+			if !seenTests[execution.TestID] {
+				seenTests[execution.TestID] = true
+				view.Executions = append(view.Executions, execution)
+			}
+		}
+	}
+	for _, entry := range state.Entries {
+		if entry.Result == nil {
+			continue
+		}
+		for _, assessment := range entry.Result.Assessments {
+			if assessment.RequirementID == id {
+				view.Roles[entry.Task.Role] = RoleView{entry.Task.TaskID, entry.Task.Attempt, assessment.Statement, assessment.Limitations, assessment.Spec, assessment.Code, assessment.Tests}
+				addExecutions(assessment)
+			}
+		}
+	}
+	if context.Latest != nil {
+		for _, assessment := range context.Latest.Assessments {
+			if assessment.RequirementID == id {
+				view.Host = &HostView{context.Latest.ReviewID, context.State, context.Form, assessment.Specification, assessment.Implementation, assessment.Assertion, assessment.Statement, context.Own[id], assessment.Spec, assessment.Code, assessment.Tests}
+				addExecutions(assessment)
+			}
+		}
+	}
+	slog.Debug("review: норма", "run_id", runID, "requirement_id", id, "roles", len(view.Roles), "host", view.Host != nil)
+	return view, nil
+}
+
 // stagedReview is everything review checks before it writes; validate … host stops here (tool-spec §27, REQ-SA-047).
 type stagedReview struct {
 	record    reviewRecord
@@ -961,7 +1050,8 @@ func submitReview(run *os.Root, runID string, m Manifest, state State, path stri
 	}
 	decision := staged.record
 	if staged.duplicate {
-		return map[string]any{"accepted": true, "duplicate": true, "review_id": decision.ReviewID, "review_state": staged.view.State, "latest_review_id": staged.view.Latest.ReviewID}, nil
+		return map[string]any{"accepted": true, "duplicate": true, "review_id": decision.ReviewID, "review_state": staged.view.State, "latest_review_id": staged.view.Latest.ReviewID,
+			"version": decision.Version, "requirements": len(decision.Assessments), "own_citations": sortedKeys(decision.Own)}, nil
 	}
 	if err := invalidateReports(run); err != nil {
 		return nil, err
@@ -971,7 +1061,8 @@ func submitReview(run *os.Root, runID string, m Manifest, state State, path stri
 	}
 	publishToolVersion(run, versions)
 	slog.Info("согласование сохранено", "run_id", runID, "review_id", decision.ReviewID, "requirements", len(decision.Assessments), "form", decision.form())
-	return map[string]any{"accepted": true, "duplicate": false, "review_id": decision.ReviewID, "review_state": "current"}, nil
+	return map[string]any{"accepted": true, "duplicate": false, "review_id": decision.ReviewID, "review_state": "current",
+		"version": decision.Version, "requirements": len(decision.Assessments), "own_citations": sortedKeys(decision.Own)}, nil
 }
 
 // validateHostDecision answers what review would do with these bytes now, writing nothing (REQ-SA-047).
