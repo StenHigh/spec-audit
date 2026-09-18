@@ -1312,8 +1312,8 @@ func TestReviewContradictedElsewhere(t *testing.T) {
 		}
 	}
 	text := runOK(t, "review", other, "sibling", contradicted, "brief").(map[string]string)["text"]
-	if !strings.Contains(text, "уже contradicted в") {
-		t.Fatalf("brief называет память соседнего scope:\n%s", text)
+	if !strings.Contains(text, "уже contradicted в") || !strings.Contains(text, "пересечений цитат: ") || strings.Count(text, "уже contradicted в") != 1 {
+		t.Fatalf("brief сворачивает память соседнего scope в одну строку на норму:\n%s", text)
 	}
 	if plain := runOK(t, "review", config, "review", "summary").(ReviewBrief); len(plain.Outcomes[0].ContradictedElsewhere) != 0 {
 		t.Fatal("без related список пуст", plain.Outcomes[0].ContradictedElsewhere)

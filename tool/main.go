@@ -730,6 +730,14 @@ func strictJSON(data []byte, out any) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(out); err != nil {
+		// tool-spec §44.4: name the offending field or key; values never enter the message (REQ-SA-015).
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) {
+			return fmt.Errorf("JSON не соответствует типам/полям контракта: поле %s ожидает %s, получено %s", typeErr.Field, typeErr.Type, typeErr.Value)
+		}
+		if text := err.Error(); strings.HasPrefix(text, "json: unknown field ") {
+			return fmt.Errorf("JSON не соответствует типам/полям контракта: неизвестное поле %s", strings.TrimPrefix(text, "json: unknown field "))
+		}
 		return errors.New("JSON не соответствует типам/полям контракта")
 	}
 	return nil
@@ -1313,7 +1321,8 @@ func execute(args []string) (any, error) {
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	if command == "prepare" {
-		if _, err := reports.Lstat(runID); err == nil || !os.IsNotExist(err) {
+		// tool-spec §44.5: a run exists once manifest.json does; a directory the host pre-created for its own files is fine.
+		if _, err := reports.Lstat(runID + "/manifest.json"); err == nil || !os.IsNotExist(err) {
 			return nil, errors.New("run уже существует; prepare не перезаписывает его")
 		}
 	}
@@ -1336,7 +1345,7 @@ func execute(args []string) (any, error) {
 		if err := checkStateSize(newState(m)); err != nil {
 			return nil, err
 		}
-		if err := reports.Mkdir(runID, 0700); err != nil {
+		if err := reports.MkdirAll(runID, 0700); err != nil {
 			return nil, err
 		}
 	}

@@ -976,6 +976,23 @@ func TestOverview(t *testing.T) {
 			t.Fatal("строка приписана норме без вердикта contradicted", c)
 		}
 	}
+	// tool-spec §44.1: only citations of roles that themselves found the norm contradicted (plus the host's own).
+	full := runOK(t, "review", config, "review").(ReviewContext)
+	backing := map[string]bool{}
+	for _, entry := range full.Entries {
+		for _, a := range entry.Result.Assessments {
+			if a.Implementation == "contradicted" {
+				for _, c := range a.Code {
+					backing[fmt.Sprintf("%s:%d-%d", c.Path, c.LineStart, c.LineEnd)] = true
+				}
+			}
+		}
+	}
+	for _, c := range view.ContradictedCode {
+		if !backing[fmt.Sprintf("%s:%d-%d", c.Path, c.LineStart, c.LineEnd)] {
+			t.Fatal("строка не из contradicted-оценки роли", c)
+		}
+	}
 	if !bytes.Equal(before, readFixture(t, versionsPath)) {
 		t.Fatal("overview не пишет провенанс")
 	}
@@ -992,5 +1009,23 @@ func TestRequiredJSONNamesFields(t *testing.T) {
 	err := requiredJSON(json.RawMessage(`{"candidate":"C001","extra":1}`), reflect.TypeOf(AcceptedTarget{}))
 	if err == nil || !strings.Contains(err.Error(), "нет [title verification]") || !strings.Contains(err.Error(), "лишние [extra]") {
 		t.Fatal("отказ должен назвать поля", err)
+	}
+}
+
+// tool-spec §44.4/§44.5: a type mismatch names the field; prepare accepts a pre-created empty run directory.
+func TestPrepareEmptyDirAndTypedJSONError(t *testing.T) {
+	config, base := fixture(t)
+	if err := os.MkdirAll(filepath.Join(base, "runs/pre/dispatch/host"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	runOK(t, "prepare", config, "pre")
+	runFail(t, "prepare", config, "pre")
+	var result Result
+	err := strictJSON([]byte(`{"task_id":"t","attempt":1,"snapshot_id":"s","role":"mapper","scope":"all","summary":"x","assessments":[{"requirement_id":"R","specification":"clear","implementation":"supported","assertion":"relevant","statement":"s","spec":{},"code":[],"tests":[],"limitations":[]}],"limitations":[]}`), &result)
+	if err == nil || !strings.Contains(err.Error(), "поле assessments.0.spec") {
+		t.Fatal("отказ типа должен назвать поле", err)
+	}
+	if err := strictJSON([]byte(`{"task_id":"t","extra":1}`), &result); err == nil || !strings.Contains(err.Error(), "неизвестное поле") {
+		t.Fatal("неизвестный ключ назван", err)
 	}
 }

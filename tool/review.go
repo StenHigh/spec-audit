@@ -251,7 +251,9 @@ type ElsewhereHit struct {
 	Path          string `json:"path"`
 	LineStart     int    `json:"line_start"`
 	LineEnd       int    `json:"line_end"`
-	Role          string `json:"role"` // the role here whose citation overlaps
+	Role          string `json:"role"`      // the role here whose citation overlaps
+	RoleHere      string `json:"role_here"` // that role's implementation verdict in this run (§44.1): a supported role citing
+	// context lines is the usual false positive — the host reads it as such
 }
 
 // elsewhereIndex reads the related scopes' contradicted code once per review (§43.1); a broken sibling is skipped.
@@ -271,7 +273,7 @@ func elsewhereIndex(related []string) map[string][]ContradictedCitation {
 	return index
 }
 
-func elsewhereHits(index map[string][]ContradictedCitation, role string, code []Citation) []ElsewhereHit {
+func elsewhereHits(index map[string][]ContradictedCitation, role, implementation string, code []Citation) []ElsewhereHit {
 	hits := []ElsewhereHit{}
 	seen := map[string]bool{}
 	for _, c := range code {
@@ -284,7 +286,7 @@ func elsewhereHits(index map[string][]ContradictedCitation, role string, code []
 				continue
 			}
 			seen[key] = true
-			hits = append(hits, ElsewhereHit{other.Config, other.RunID, other.RequirementID, other.Path, other.LineStart, other.LineEnd, role})
+			hits = append(hits, ElsewhereHit{other.Config, other.RunID, other.RequirementID, other.Path, other.LineStart, other.LineEnd, role, implementation})
 		}
 	}
 	return hits
@@ -324,7 +326,7 @@ func outcomes(m Manifest, state State, previous map[string]PreviousHost, elsewhe
 						limitations = []string{}
 					}
 					cited[entry.Task.Role] = assessment
-					row.ContradictedElsewhere = append(row.ContradictedElsewhere, elsewhereHits(elsewhere, entry.Task.Role, assessment.Code)...)
+					row.ContradictedElsewhere = append(row.ContradictedElsewhere, elsewhereHits(elsewhere, entry.Task.Role, assessment.Implementation, assessment.Code)...)
 					row.Roles[entry.Task.Role] = RoleOutcome{TaskID: entry.Task.TaskID, Attempt: entry.Task.Attempt, Specification: assessment.Specification, Implementation: assessment.Implementation, Assertion: assessment.Assertion, Limitations: limitations,
 						Citations: CitationCounts{len(assessment.Spec), len(assessment.Code), len(assessment.Tests)}}
 				}
@@ -1209,8 +1211,31 @@ func requirementText(view RequirementView, brief bool) string {
 		b.WriteString("\n")
 	}
 	fmt.Fprintf(&b, "\nИтог ролей: agree=%t", view.Outcome.Agree)
+	// tool-spec §44.2: one line per sibling norm with the number of overlapping citations, not one per line pair.
+	type memory struct {
+		label   string
+		count   int
+		backing int // overlaps from a role that itself found this norm contradicted
+	}
+	order, counts := []string{}, map[string]*memory{}
 	for _, hit := range view.Outcome.ContradictedElsewhere {
-		fmt.Fprintf(&b, "; %s:%d-%d (%s) уже contradicted в %s/%s %s", hit.Path, hit.LineStart, hit.LineEnd, hit.Role, filepath.Base(filepath.Dir(hit.Config)), hit.RunID, hit.RequirementID)
+		key := hit.Config + "|" + hit.RequirementID
+		if counts[key] == nil {
+			counts[key] = &memory{fmt.Sprintf("%s/%s %s", filepath.Base(filepath.Dir(hit.Config)), hit.RunID, hit.RequirementID), 0, 0}
+			order = append(order, key)
+		}
+		counts[key].count++
+		if hit.RoleHere == "contradicted" {
+			counts[key].backing++
+		}
+	}
+	for _, key := range order {
+		m := counts[key]
+		note := "здесь роли тоже contradicted"
+		if m.backing == 0 {
+			note = "здесь роли не contradicted — вероятно, контекстные строки"
+		}
+		fmt.Fprintf(&b, "; уже contradicted в %s (пересечений цитат: %d; %s)", m.label, m.count, note)
 	}
 	if view.Outcome.PreviousHost != nil {
 		p := view.Outcome.PreviousHost
