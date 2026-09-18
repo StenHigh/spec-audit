@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -306,6 +307,24 @@ func candidateAnchorSources(candidates []legacyCandidate) []anchorSource {
 	return sources
 }
 
+// anchorRangeRE matches «A-051–A-055»; anchorRangeKeys expands the inner anchors the plain regexp cannot see (§39.2).
+var anchorRangeRE = regexp.MustCompile(`\bA-(\d{2,4})\s?[–—-]\s?A-(\d{2,4})\b`)
+
+func anchorRangeKeys(line string) []string {
+	keys := []string{}
+	for _, match := range anchorRangeRE.FindAllStringSubmatch(line, -1) {
+		from, err1 := strconv.Atoi(match[1])
+		to, err2 := strconv.Atoi(match[2])
+		if err1 != nil || err2 != nil || to <= from || to-from > 64 {
+			continue
+		}
+		for n := from + 1; n < to; n++ {
+			keys = append(keys, fmt.Sprintf("A-%0*d", len(match[1]), n))
+		}
+	}
+	return keys
+}
+
 // anchorKey normalizes a matched anchor: A-NNN stays as is, §1.6.10A becomes 1.6.10A.
 func anchorKey(anchor string) string {
 	return strings.TrimSpace(strings.TrimPrefix(anchor, "§"))
@@ -500,7 +519,7 @@ func anchorIndex(cfg Config, extra []string) (AnchorIndex, error) {
 			continue
 		}
 		for i, line := range lines {
-			for _, anchor := range anchorRE.FindAllString(line, -1) {
+			for _, anchor := range append(anchorRE.FindAllString(line, -1), anchorRangeKeys(line)...) {
 				e := entry(anchorKey(anchor))
 				e.Mentions = append(e.Mentions, CitationRef{file.Path, i + 1, i + 1})
 			}
