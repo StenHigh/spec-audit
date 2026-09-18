@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"unicode"
 )
 
 const acceptedFile = "._accepted-index.json"
@@ -561,6 +562,7 @@ const (
 	matchHintThreshold     = 0.1
 	matchHintLimit         = 4
 	likelyDuplicateOverlap = 0.5 // §41.3: a candidate sharing half its lines with an accepted norm is probably the same text
+	likelyDuplicateText    = 0.5 // §42.1: token Jaccard of condition+statement at which a restatement counts as a duplicate
 )
 
 type matchHint struct {
@@ -573,6 +575,36 @@ type matchHint struct {
 	// LikelyDuplicate marks a hint whose candidate repeats an accepted norm almost verbatim (tool-spec §41.3): the
 	// usual outcome is defer/merge/reject, never a second accept. A hint, not a decision.
 	LikelyDuplicate bool `json:"likely_duplicate"`
+	// TextSimilarity is the token Jaccard of condition+statement (tool-spec §42.1): a digest section restating an
+	// accepted norm in its own lines shares no citation lines but most of its words.
+	TextSimilarity float64 `json:"text_similarity"`
+}
+
+// textTokens lowers and splits a norm's condition and statement into a word set for the §42.1 similarity.
+func textTokens(condition, statement string) map[string]bool {
+	tokens := map[string]bool{}
+	for _, word := range strings.FieldsFunc(strings.ToLower(condition+" "+statement), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		if len([]rune(word)) > 2 {
+			tokens[word] = true
+		}
+	}
+	return tokens
+}
+
+func tokenJaccard(a, b map[string]bool) float64 {
+	shared := 0
+	for token := range a {
+		if b[token] {
+			shared++
+		}
+	}
+	union := len(a) + len(b) - shared
+	if union == 0 {
+		return 0
+	}
+	return float64(shared) / float64(union)
 }
 
 // lineFrequency counts, per exact citation line, how many active records cite it; frequency 1 marks a line unique to one norm.
@@ -627,6 +659,7 @@ func fieldsEqual(candidate legacyCandidate, req Requirement) bool {
 
 func matchHints(candidate legacyCandidate, records []AcceptedRecord, frequency map[string]int) []matchHint {
 	lines := quoteLines(candidate.Citations)
+	tokens := textTokens(candidate.Condition, candidate.Statement)
 	hints := []matchHint{}
 	for _, record := range records {
 		if record.Status != "active" || record.Requirement.Accepted == nil {
@@ -650,7 +683,8 @@ func matchHints(candidate legacyCandidate, records []AcceptedRecord, frequency m
 		if overlap < matchHintThreshold {
 			continue
 		}
-		hints = append(hints, matchHint{record.Requirement.ID, record.Revision, overlap, shared, unique, fieldsEqual(candidate, record.Requirement), overlap >= likelyDuplicateOverlap})
+		similarity := tokenJaccard(tokens, textTokens(record.Requirement.Condition, record.Requirement.Statement))
+		hints = append(hints, matchHint{record.Requirement.ID, record.Revision, overlap, shared, unique, fieldsEqual(candidate, record.Requirement), overlap >= likelyDuplicateOverlap || similarity >= likelyDuplicateText, similarity})
 	}
 	sort.Slice(hints, func(i, j int) bool {
 		if hints[i].Overlap != hints[j].Overlap {
@@ -658,6 +692,30 @@ func matchHints(candidate legacyCandidate, records []AcceptedRecord, frequency m
 		}
 		return hints[i].ID < hints[j].ID
 	})
+	if len(hints) > matchHintLimit {
+		hints = hints[:matchHintLimit]
+	}
+	// tool-spec §42.1: records with no shared lines but near-identical wording are appended after the line hints.
+	hinted := map[string]bool{}
+	for _, hint := range hints {
+		hinted[hint.ID] = true
+	}
+	textual := []matchHint{}
+	for _, record := range records {
+		if record.Status != "active" || hinted[record.Requirement.ID] {
+			continue
+		}
+		if similarity := tokenJaccard(tokens, textTokens(record.Requirement.Condition, record.Requirement.Statement)); similarity >= likelyDuplicateText {
+			textual = append(textual, matchHint{record.Requirement.ID, record.Revision, 0, 0, 0, fieldsEqual(candidate, record.Requirement), true, similarity})
+		}
+	}
+	sort.Slice(textual, func(i, j int) bool {
+		if textual[i].TextSimilarity != textual[j].TextSimilarity {
+			return textual[i].TextSimilarity > textual[j].TextSimilarity
+		}
+		return textual[i].ID < textual[j].ID
+	})
+	hints = append(hints, textual...)
 	if len(hints) > matchHintLimit {
 		hints = hints[:matchHintLimit]
 	}

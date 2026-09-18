@@ -963,6 +963,19 @@ func TestOverview(t *testing.T) {
 	if second := view.Scopes[1]; second.IndexMode != "accepted" || second.Freshness != "fresh" || second.Requirements != 1 || second.Head == "" || second.Runs != 0 {
 		t.Fatal("accepted scope без run", second)
 	}
+	// tool-spec §42.2: the code lines cited under contradicted verdicts are listed across scopes with their origin.
+	if len(view.ContradictedCode) == 0 || view.ContradictedCode[0].Config != config || view.ContradictedCode[0].RunID != "review" || view.ContradictedCode[0].Path == "" {
+		t.Fatal("contradicted_code по решённому run", view.ContradictedCode)
+	}
+	for _, c := range view.ContradictedCode {
+		found := false
+		for _, id := range first.Decided.Contradicted {
+			found = found || id == c.RequirementID
+		}
+		if !found {
+			t.Fatal("строка приписана норме без вердикта contradicted", c)
+		}
+	}
 	if !bytes.Equal(before, readFixture(t, versionsPath)) {
 		t.Fatal("overview не пишет провенанс")
 	}

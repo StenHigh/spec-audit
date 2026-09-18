@@ -15,6 +15,19 @@ import (
 type Overview struct {
 	Scopes []ScopeOverview `json:"scopes"`
 	Totals OverviewTotals  `json:"totals"`
+	// ContradictedCode is the cross-scope memory (tool-spec §42.2): every code line the host cited under a contradicted
+	// verdict in any scope's decided run, so a host in a new scope sees «this file:lines is already contradicted in
+	// scope X» instead of deciding the same defect an eighth time. Hints, not verdicts.
+	ContradictedCode []ContradictedCitation `json:"contradicted_code"`
+}
+
+type ContradictedCitation struct {
+	Path          string `json:"path"`
+	LineStart     int    `json:"line_start"`
+	LineEnd       int    `json:"line_end"`
+	Config        string `json:"config"`
+	RunID         string `json:"run_id"`
+	RequirementID string `json:"requirement_id"`
 }
 
 type OverviewTotals struct {
@@ -55,14 +68,15 @@ type RunOverview struct {
 }
 
 func overview(paths []string) (Overview, error) {
-	view := Overview{Scopes: []ScopeOverview{}, Totals: OverviewTotals{Implementation: map[string]int{}, Assertion: map[string]int{}}}
+	view := Overview{Scopes: []ScopeOverview{}, Totals: OverviewTotals{Implementation: map[string]int{}, Assertion: map[string]int{}}, ContradictedCode: []ContradictedCitation{}}
 	for _, path := range paths {
 		cfg, err := loadConfig(path, true)
 		if err != nil {
 			return Overview{}, err
 		}
-		scope := scopeOverview(path, cfg)
+		scope, cited := scopeOverview(path, cfg)
 		view.Scopes = append(view.Scopes, scope)
+		view.ContradictedCode = append(view.ContradictedCode, cited...)
 		view.Totals.Scopes++
 		view.Totals.Requirements += scope.Requirements
 		view.Totals.Runs += scope.Runs
@@ -75,13 +89,27 @@ func overview(paths []string) (Overview, error) {
 			}
 		}
 	}
-	slog.Debug("overview: карта scope", "scopes", view.Totals.Scopes, "requirements", view.Totals.Requirements, "runs", view.Totals.Runs)
+	sort.Slice(view.ContradictedCode, func(i, j int) bool {
+		a, b := view.ContradictedCode[i], view.ContradictedCode[j]
+		if a.Path != b.Path {
+			return a.Path < b.Path
+		}
+		if a.LineStart != b.LineStart {
+			return a.LineStart < b.LineStart
+		}
+		if a.Config != b.Config {
+			return a.Config < b.Config
+		}
+		return a.RequirementID < b.RequirementID
+	})
+	slog.Debug("overview: карта scope", "scopes", view.Totals.Scopes, "requirements", view.Totals.Requirements, "runs", view.Totals.Runs, "contradicted_code", len(view.ContradictedCode))
 	return view, nil
 }
 
 // scopeOverview never fails the whole map for one scope: a stale or missing index is reported as its freshness/error.
-func scopeOverview(path string, cfg Config) ScopeOverview {
+func scopeOverview(path string, cfg Config) (ScopeOverview, []ContradictedCitation) {
 	scope := ScopeOverview{Config: path, IndexMode: "declared", Freshness: "n/a"}
+	cited := []ContradictedCitation{}
 	if cfg.IndexMode == "accepted" {
 		scope.IndexMode = "accepted"
 	}
@@ -111,12 +139,12 @@ func scopeOverview(path string, cfg Config) ScopeOverview {
 	}
 	reports, err := os.OpenRoot(cfg.ReportsDir)
 	if err != nil {
-		return scope
+		return scope, cited
 	}
 	defer reports.Close()
 	dirs, err := fs.ReadDir(reports.FS(), ".")
 	if err != nil {
-		return scope
+		return scope, cited
 	}
 	runs := []string{}
 	for _, dir := range dirs {
@@ -130,8 +158,9 @@ func scopeOverview(path string, cfg Config) ScopeOverview {
 	newer := func(run RunOverview, than *RunOverview) bool {
 		return than == nil || run.PreparedAt > than.PreparedAt || (run.PreparedAt == than.PreparedAt && run.RunID > than.RunID)
 	}
+	var decidedCode []ContradictedCitation
 	for _, runID := range runs {
-		run, err := runOverview(reports, runID, current)
+		run, code, err := runOverview(reports, runID, current)
 		if err != nil {
 			slog.Debug("overview: run пропущен", "run_id", runID, "error", err.Error())
 			continue
@@ -142,36 +171,40 @@ func scopeOverview(path string, cfg Config) ScopeOverview {
 		}
 		if run.ReviewID != "" && newer(run, scope.Decided) {
 			copied := run
-			scope.Decided = &copied
+			scope.Decided, decidedCode = &copied, code
 		}
 	}
-	return scope
+	for _, c := range decidedCode {
+		c.Config = path
+		cited = append(cited, c)
+	}
+	return scope, cited
 }
 
-func runOverview(reports *os.Root, runID, current string) (RunOverview, error) {
+func runOverview(reports *os.Root, runID, current string) (RunOverview, []ContradictedCitation, error) {
 	run, err := reports.OpenRoot(runID)
 	if err != nil {
-		return RunOverview{}, err
+		return RunOverview{}, nil, err
 	}
 	defer run.Close()
 	var m Manifest
 	data, err := readRoot(run, "manifest.json", maxState)
 	if err != nil {
-		return RunOverview{}, err
+		return RunOverview{}, nil, err
 	}
 	if err := strictJSON(data, &m); err != nil {
-		return RunOverview{}, err
+		return RunOverview{}, nil, err
 	}
 	var state State
 	if data, err = readRoot(run, "state.json", maxState); err != nil {
-		return RunOverview{}, err
+		return RunOverview{}, nil, err
 	}
 	if err := strictJSON(data, &state); err != nil {
-		return RunOverview{}, err
+		return RunOverview{}, nil, err
 	}
 	versions, err := readToolVersions(run)
 	if err != nil {
-		return RunOverview{}, err
+		return RunOverview{}, nil, err
 	}
 	view := RunOverview{RunID: runID, SnapshotCurrent: current == m.SnapshotID, Implementation: map[string]int{}, Assertion: map[string]int{}, Contradicted: []string{}, Disagree: []string{}}
 	if len(versions.Records) > 0 {
@@ -181,10 +214,11 @@ func runOverview(reports *os.Root, runID, current string) (RunOverview, error) {
 	view.DeliveryComplete, view.Expected, view.Submitted = status.DeliveryComplete, status.Expected, status.Submitted
 	journal, err := readReviews(run, runID, m)
 	if err != nil {
-		return RunOverview{}, err
+		return RunOverview{}, nil, err
 	}
 	summary := summarizeReviews(runID, m, state, view.SnapshotCurrent, journal)
 	view.HostReviewState, view.Form = summary.State, summary.Form
+	code := []ContradictedCitation{}
 	if summary.Latest != nil {
 		view.ReviewID = summary.Latest.ReviewID
 		for _, a := range summary.Latest.Assessments {
@@ -192,6 +226,9 @@ func runOverview(reports *os.Root, runID, current string) (RunOverview, error) {
 			view.Assertion[a.Assertion]++
 			if a.Implementation == "contradicted" {
 				view.Contradicted = append(view.Contradicted, a.RequirementID)
+				for _, c := range a.Code {
+					code = append(code, ContradictedCitation{Path: c.Path, LineStart: c.LineStart, LineEnd: c.LineEnd, RunID: runID, RequirementID: a.RequirementID})
+				}
 			}
 		}
 	}
@@ -203,5 +240,5 @@ func runOverview(reports *os.Root, runID, current string) (RunOverview, error) {
 		}
 	}
 	sort.Strings(view.Disagree)
-	return view, nil
+	return view, code, nil
 }
