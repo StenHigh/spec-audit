@@ -18,4 +18,4 @@ Milestone: "Уроки пятнадцатого прогона 2026-09-18"
 - [x] Task 1: `Config.Related` (yaml, `json:"-"`, канонизация относительно CONFIG); `elsewhereIndex`/`elsewhereHits`; `Outcome.ContradictedElsewhere`; строка в `requirementText`; `TestReviewContradictedElsewhere`
 - [x] Task 2: §43 tool-spec, AGENTS, SKILL.md, README, ROADMAP, adoption «четырнадцатый цикл»
 <!-- Commit checkpoint: tasks 1-2 -->
-- [ ] Task 3: релиз `v0.1.29`, update хоста, skill в синтетике и пилоте, коммит конфигов scope 08/03 в пилоте локально
+- [x] Task 3: релиз `v0.1.29`, update хоста, skill в синтетике и пилоте, коммит конфигов scope 08/03 в пилоте локально
