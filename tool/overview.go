@@ -44,6 +44,8 @@ type OverviewTotals struct {
 	Implementation map[string]int `json:"implementation"`
 	Assertion      map[string]int `json:"assertion"`
 	Gap            Gap            `json:"gap"`
+	Closed         int            `json:"closed"` // sums of the scope deltas (§47)
+	Opened         int            `json:"opened"`
 }
 
 // Gap is the industry reading of a gap analysis over the host's verdicts (tool-spec §45.1): a norm is a gap when it is
@@ -81,6 +83,7 @@ type ScopeOverview struct {
 	Runs         int          `json:"runs"`
 	Latest       *RunOverview `json:"latest"`  // the most recently prepared run: delivery progress
 	Decided      *RunOverview `json:"decided"` // the most recent run with a host decision: verdict counts; totals come from here
+	Delta        *Delta       `json:"delta"`   // decided vs the decided run before it (§47); nil with fewer than two
 }
 
 // NormBrief is one norm of the decided run for the corpus page (tool-spec §45): the host's verdict in a sentence.
@@ -111,8 +114,71 @@ type RunOverview struct {
 	Disagree         []string       `json:"disagree"`
 	// Attention lists the host verdicts that are not supported+relevant (contradicted, unknown, ambiguous, weak/missing/
 	// contradicts) with title and statement — what the corpus page shows per scope (§45).
-	Attention []NormBrief `json:"attention"`
-	Gap       Gap         `json:"gap"`
+	Attention []NormBrief          `json:"attention"`
+	Gap       Gap                  `json:"gap"`
+	verdicts  map[string]NormBrief // id → host verdict, for the scope delta (§47)
+	keys      map[string]string    // id → content_hash|revision, so only the same norm is compared
+}
+
+// Delta is the change between the two latest decided runs of a scope (tool-spec §47): what the product fix closed,
+// what it opened, what moved inside the gap. Norms are compared only when their content and revision are identical.
+type Delta struct {
+	BaselineRun  string       `json:"baseline_run"`
+	Pinned       bool         `json:"pinned"`  // baseline named by CONFIG baseline_run rather than «the run before»
+	Closed       []NormChange `json:"closed"`  // was a gap in the baseline, is not one now
+	Opened       []NormChange `json:"opened"`  // was not a gap, is one now
+	Changed      []NormChange `json:"changed"` // a gap in both, but the states differ
+	Unchanged    int          `json:"unchanged"`
+	Incomparable []string     `json:"incomparable"` // new, retired or revised norms — no like-for-like comparison
+	GapBefore    Gap          `json:"gap_before"`
+	GapAfter     Gap          `json:"gap_after"`
+}
+
+type NormChange struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	From  string `json:"from"` // specification/implementation/assertion in the baseline
+	To    string `json:"to"`
+}
+
+func states(n NormBrief) string { return n.Specification + "/" + n.Implementation + "/" + n.Assertion }
+
+func isGap(n NormBrief) bool {
+	return n.Implementation != "supported" || n.Assertion != "relevant" || n.Specification != "clear"
+}
+
+func scopeDelta(baseline, current RunOverview) *Delta {
+	d := &Delta{BaselineRun: baseline.RunID, Closed: []NormChange{}, Opened: []NormChange{}, Changed: []NormChange{}, Incomparable: []string{}, GapBefore: baseline.Gap, GapAfter: current.Gap}
+	seen := map[string]bool{}
+	for id, now := range current.verdicts {
+		seen[id] = true
+		was, ok := baseline.verdicts[id]
+		if !ok || baseline.keys[id] != current.keys[id] {
+			d.Incomparable = append(d.Incomparable, id)
+			continue
+		}
+		change := NormChange{id, now.Title, states(was), states(now)}
+		switch {
+		case isGap(was) && !isGap(now):
+			d.Closed = append(d.Closed, change)
+		case !isGap(was) && isGap(now):
+			d.Opened = append(d.Opened, change)
+		case states(was) != states(now):
+			d.Changed = append(d.Changed, change)
+		default:
+			d.Unchanged++
+		}
+	}
+	for id := range baseline.verdicts {
+		if !seen[id] {
+			d.Incomparable = append(d.Incomparable, id)
+		}
+	}
+	for _, list := range []*[]NormChange{&d.Closed, &d.Opened, &d.Changed} {
+		sort.Slice(*list, func(i, j int) bool { return (*list)[i].ID < (*list)[j].ID })
+	}
+	sort.Strings(d.Incomparable)
+	return d
 }
 
 func overview(paths []string) (Overview, error) {
@@ -134,6 +200,10 @@ func overview(paths []string) (Overview, error) {
 			}
 			for k, v := range scope.Decided.Assertion {
 				view.Totals.Assertion[k] += v
+			}
+			if scope.Delta != nil {
+				view.Totals.Closed += len(scope.Delta.Closed)
+				view.Totals.Opened += len(scope.Delta.Opened)
 			}
 			g := scope.Decided.Gap
 			view.Totals.Gap.Total += g.Total
@@ -212,6 +282,7 @@ func scopeOverview(path string, cfg Config) (ScopeOverview, []ContradictedCitati
 		return than == nil || run.PreparedAt > than.PreparedAt || (run.PreparedAt == than.PreparedAt && run.RunID > than.RunID)
 	}
 	var decidedCode []ContradictedCitation
+	decidedRuns := []RunOverview{}
 	for _, runID := range runs {
 		run, code, err := runOverview(reports, runID, current)
 		if err != nil {
@@ -222,10 +293,30 @@ func scopeOverview(path string, cfg Config) (ScopeOverview, []ContradictedCitati
 			copied := run
 			scope.Latest = &copied
 		}
-		if run.ReviewID != "" && newer(run, scope.Decided) {
-			copied := run
-			scope.Decided, decidedCode = &copied, code
+		if run.ReviewID != "" {
+			decidedRuns = append(decidedRuns, run)
+			if newer(run, scope.Decided) {
+				copied := run
+				scope.Decided, decidedCode = &copied, code
+			}
 		}
+	}
+	sort.Slice(decidedRuns, func(i, j int) bool { return newer(decidedRuns[j], &decidedRuns[i]) })
+	if n := len(decidedRuns); n >= 2 {
+		baseline := decidedRuns[n-2]
+		if cfg.BaselineRun != "" {
+			for _, run := range decidedRuns[:n-1] {
+				if run.RunID == cfg.BaselineRun {
+					baseline = run
+				}
+			}
+			if baseline.RunID != cfg.BaselineRun {
+				slog.Warn("baseline_run не найден среди решённых run; сравнение с предыдущим", "config", path, "baseline_run", cfg.BaselineRun)
+			}
+		}
+		scope.Delta = scopeDelta(baseline, decidedRuns[n-1])
+		scope.Delta.Pinned = cfg.BaselineRun != "" && baseline.RunID == cfg.BaselineRun
+		slog.Debug("overview: динамика scope", "config", path, "baseline", scope.Delta.BaselineRun, "closed", len(scope.Delta.Closed), "opened", len(scope.Delta.Opened))
 	}
 	for _, c := range decidedCode {
 		c.Config = path
@@ -259,10 +350,11 @@ func runOverview(reports *os.Root, runID, current string) (RunOverview, []Contra
 	if err != nil {
 		return RunOverview{}, nil, err
 	}
-	view := RunOverview{RunID: runID, SnapshotCurrent: current == m.SnapshotID, Implementation: map[string]int{}, Assertion: map[string]int{}, Contradicted: []string{}, Disagree: []string{}, Attention: []NormBrief{}}
+	view := RunOverview{RunID: runID, SnapshotCurrent: current == m.SnapshotID, Implementation: map[string]int{}, Assertion: map[string]int{}, Contradicted: []string{}, Disagree: []string{}, Attention: []NormBrief{}, verdicts: map[string]NormBrief{}, keys: map[string]string{}}
 	titles := map[string]string{}
 	for _, req := range m.Requirements {
 		titles[req.ID] = req.Title
+		view.keys[req.ID] = sameNorm(req)
 	}
 	if len(versions.Records) > 0 {
 		view.PreparedAt, view.ToolVersion = versions.Records[0].RecordedAt, versions.Records[0].ToolVersion
@@ -291,8 +383,10 @@ func runOverview(reports *os.Root, runID, current string) (RunOverview, []Contra
 		for _, a := range summary.Latest.Assessments {
 			view.Implementation[a.Implementation]++
 			view.Assertion[a.Assertion]++
-			if a.Implementation != "supported" || a.Assertion != "relevant" || a.Specification != "clear" {
-				view.Attention = append(view.Attention, NormBrief{a.RequirementID, titles[a.RequirementID], a.Specification, a.Implementation, a.Assertion, a.Statement})
+			brief := NormBrief{a.RequirementID, titles[a.RequirementID], a.Specification, a.Implementation, a.Assertion, a.Statement}
+			view.verdicts[a.RequirementID] = brief
+			if isGap(brief) {
+				view.Attention = append(view.Attention, brief)
 			}
 			view.Gap.add(a)
 			if a.Implementation != "contradicted" {
