@@ -52,7 +52,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 > REQ-SA
   - Verify: `go test ./tool -run TestSkillFiles -count=1`; полный `go test ./tool`.
   - REQ: REQ-SA-037
 
-- [ ] Task 4: релиз `v0.1.18`, update хоста/синтетики; пилот — после завершения run на новом разделе
+- [x] Task 4: релиз `v0.1.18`, update хоста/синтетики; пилот — после завершения run на новом разделе
   - Files: `README.md`
   - Depends: 3
   - Verify: `gh release view v0.1.18` — 5 ассетов; `spec-audit version` → 0.1.18.
