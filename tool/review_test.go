@@ -546,6 +546,10 @@ func TestReviewV2(t *testing.T) {
 	if report.Requirements[0].Navigation.HostConcur != "свидетельства redteam" || report.Requirements[4].Navigation.HostConcur != "свидетельства redteam" {
 		t.Fatal("навигация должна называть принятые свидетельства", report.Requirements[0].Navigation.HostConcur)
 	}
+	// tool-spec §36.1: the host's states per norm are readable from report.json without walking host_review.latest.
+	if a := report.HostReview.Latest.Assessments[0]; report.Requirements[0].Navigation.HostStates != a.Specification+"/"+a.Implementation+"/"+a.Assertion {
+		t.Fatal("навигация должна нести состояния вердикта хоста", report.Requirements[0].Navigation.HostStates)
+	}
 	if html := readFixture(t, filepath.Join(base, "runs/review/report.html")); !bytes.Contains(html, []byte("Решение хоста опирается на свидетельства redteam")) || !bytes.Contains(html, []byte("Форма решения — вердикты (version 2)")) || !bytes.Contains(html, []byte("не согласие роли с вердиктом")) {
 		t.Fatal("HTML без подписи concur/формы решения")
 	}

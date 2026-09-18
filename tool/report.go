@@ -40,6 +40,7 @@ type RequirementNavigation struct {
 	Basis          string          `json:"basis"`
 	Flags          []string        `json:"flags"`
 	Host           *Assessment     `json:"-"`
+	HostStates     string          `json:"host_states,omitempty"` // specification/implementation/assertion of the host verdict; the full verdict is host_review.latest
 	HostConcur     string          `json:"host_concur,omitempty"`
 	HostExecutions []TestExecution `json:"host_executions"`
 }
@@ -322,6 +323,8 @@ func buildNavigation(report *Report, m Manifest) {
 		req := row.Requirement
 		row.Navigation = RequirementNavigation{Section: req.Source.Path, Basis: "roles", Flags: []string{}, Host: host[req.ID], HostExecutions: []TestExecution{}}
 		if report.HostReview != nil && host[req.ID] != nil {
+			a := host[req.ID]
+			row.Navigation.HostStates = a.Specification + "/" + a.Implementation + "/" + a.Assertion
 			row.Navigation.HostConcur = hostConcurLabel(report.HostReview.Concur[req.ID], report.HostReview.Own[req.ID])
 		}
 		flags := map[string]bool{"unreviewed": !currentHost}
