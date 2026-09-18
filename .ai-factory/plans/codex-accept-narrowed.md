@@ -18,4 +18,4 @@ Milestone: "Уроки десятого прогона 2026-09-18" (пункт �
 - [x] Task 1: `acceptedDecisionV2`/`decodeDecision`, `AcceptedTarget.Narrowed` (`json:"-"`), guard `narrowable`, `requiredJSON` без внутренних полей; `TestAcceptNarrowed`
 - [x] Task 2: §46 tool-spec, AGENTS, SKILL.md, README, ROADMAP (решения владельца)
 <!-- Commit checkpoint: tasks 1-2 -->
-- [ ] Task 3: релиз `v0.1.33`, update хоста, skill в синтетике и пилоте (push)
+- [x] Task 3: релиз `v0.1.33`, update хоста, skill в синтетике и пилоте (push)
