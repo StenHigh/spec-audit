@@ -18,4 +18,4 @@ Milestone: "Разбор внешнего review 2026-09-18"
 - [x] Task 1: полнота §7 для version 2 (`validateVerdicts`), `atomicWrite` chmod до rename и `update` без Chmod после, `signal.NotifyContext` → `processContext` в runtime/php, regexp hoisting, `slices.Equal`, подпись reference-группы, curl-таймауты, `ci.yml`; `TestReviewV2`
 - [x] Task 2: §48 tool-spec, AGENTS, README, ROADMAP (открытые пункты — владельцу)
 <!-- Commit checkpoint: tasks 1-2 -->
-- [ ] Task 3: релиз `v0.1.35`, update хоста, skill в синтетике и пилоте (push)
+- [x] Task 3: релиз `v0.1.35`, update хоста, skill в синтетике и пилоте (push)
