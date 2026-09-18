@@ -57,6 +57,8 @@ type boundedOutput struct {
 	truncated bool
 }
 
+var goTestNameRE = regexp.MustCompile(`^Test[A-Za-z0-9_]+$`)
+
 func (b *boundedOutput) Write(p []byte) (int, error) {
 	if b.hash == nil {
 		b.hash = sha256.New()
@@ -155,7 +157,7 @@ func validateRuntime(rt *Runtime) error {
 		if test == "" || len(test) > 512 || strings.ContainsAny(test, "\x00\r\n") {
 			return errors.New("недопустимое имя теста")
 		}
-		if rt.Kind == "go" && !regexp.MustCompile(`^Test[A-Za-z0-9_]+$`).MatchString(test) {
+		if rt.Kind == "go" && !goTestNameRE.MatchString(test) {
 			return errors.New("Go tests: точные имена Test функций")
 		}
 	}
@@ -207,7 +209,7 @@ func executeTests(cfg Config, m Manifest, id string) (Receipt, error) {
 	if cfg.Runtime.Kind == "docker-php" {
 		deadline += 15
 	} // Preflight/cleanup must not shorten the container-side test deadline.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(deadline)*time.Second)
+	ctx, cancel := context.WithTimeout(processContext, time.Duration(deadline)*time.Second)
 	defer cancel()
 	var process processResult
 	valid := false
