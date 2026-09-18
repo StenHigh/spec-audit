@@ -373,3 +373,95 @@ runtime:
   timeout_seconds: 30
 scopes: []
 `
+
+// AnchorEntry is one anchor of `anchors CONFIG` (tool-spec §33.1): where normative spec files mention it and where any
+// spec file (normative or reference) defines it, so the host can hand the extractor exact reference lines.
+type AnchorEntry struct {
+	Anchor      string        `json:"anchor"`
+	Mentions    []CitationRef `json:"mentions"`
+	Definitions []CitationRef `json:"definitions"`
+}
+
+type AnchorIndex struct {
+	SnapshotFiles int           `json:"spec_files"`
+	Anchors       []AnchorEntry `json:"anchors"`
+	Undefined     []string      `json:"undefined"`
+}
+
+// anchorIndex scans the spec files of CONFIG without the accepted index (it serves acceptance, which comes first).
+// A definition runs from its line to the next blank line or next definition; a heading runs to the next heading.
+func anchorIndex(cfg Config) (AnchorIndex, error) {
+	m, err := scanSnapshot(cfg)
+	if err != nil {
+		return AnchorIndex{}, err
+	}
+	root, err := os.OpenRoot(cfg.ProjectRoot)
+	if err != nil {
+		return AnchorIndex{}, err
+	}
+	defer root.Close()
+	entries := map[string]*AnchorEntry{}
+	entry := func(key string) *AnchorEntry {
+		if entries[key] == nil {
+			entries[key] = &AnchorEntry{Anchor: key, Mentions: []CitationRef{}, Definitions: []CitationRef{}}
+		}
+		return entries[key]
+	}
+	type located struct {
+		path  string
+		lines []string
+	}
+	files := []located{}
+	for _, file := range m.Files {
+		if file.Kind != "spec" {
+			continue
+		}
+		data, err := readRoot(root, file.Path, maxFile)
+		if err != nil {
+			return AnchorIndex{}, err
+		}
+		lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+		files = append(files, located{file.Path, lines})
+		if file.Reference {
+			continue
+		}
+		for i, line := range lines {
+			for _, anchor := range anchorRE.FindAllString(line, -1) {
+				e := entry(anchorKey(anchor))
+				e.Mentions = append(e.Mentions, CitationRef{file.Path, i + 1, i + 1})
+			}
+		}
+	}
+	for _, file := range files {
+		for i, line := range file.lines {
+			match := anchorDefinedRE.FindStringSubmatch(line)
+			if match == nil || entries[match[1]] == nil {
+				continue
+			}
+			heading := strings.HasPrefix(strings.TrimSpace(line), "#")
+			end := i
+			for j := i + 1; j < len(file.lines); j++ {
+				next := strings.TrimSpace(file.lines[j])
+				if heading && strings.HasPrefix(next, "#") || !heading && (next == "" || anchorDefinedRE.MatchString(file.lines[j])) {
+					break
+				}
+				if next != "" {
+					end = j
+				}
+			}
+			e := entries[match[1]]
+			e.Definitions = append(e.Definitions, CitationRef{file.path, i + 1, end + 1})
+		}
+	}
+	index := AnchorIndex{SnapshotFiles: len(files), Anchors: []AnchorEntry{}, Undefined: []string{}}
+	for _, e := range entries {
+		index.Anchors = append(index.Anchors, *e)
+		if len(e.Definitions) == 0 {
+			index.Undefined = append(index.Undefined, e.Anchor)
+		}
+	}
+	sort.Slice(index.Anchors, func(i, j int) bool { return index.Anchors[i].Anchor < index.Anchors[j].Anchor })
+	sort.Strings(index.Undefined)
+	slog.Debug("anchors: индекс якорей", "spec_files", len(files), "anchors", len(index.Anchors), "undefined", len(index.Undefined))
+	return index, nil
+}

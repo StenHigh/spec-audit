@@ -1090,6 +1090,14 @@ func TestReviewRequirementView(t *testing.T) {
 	if duplicate := runOK(t, "review", config, "review", path).(map[string]any); duplicate["duplicate"] != true || duplicate["version"] != 3 || !reflect.DeepEqual(duplicate["own_citations"], []string{"REQ-DEMO-001"}) {
 		t.Fatal("duplicate-ответ тоже симметричен", duplicate)
 	}
+	// tool-spec §33.4: the text form carries the same facts in one readable block inside the JSON envelope.
+	text := runOK(t, "review", config, "review", "REQ-DEMO-001", "text").(map[string]string)["text"]
+	for _, want := range []string{"REQ-DEMO-001 — ", "[mapper] ", "[redteam] ", "[host] ", "v3-view", after.Roles["mapper"].Statement, "code source.go:1-2", "test " + after.Roles["mapper"].Tests[0].TestID, "agree=false"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("текст нормы не содержит %q:\n%s", want, text)
+		}
+	}
+	runFail(t, "review", config, "review", "REQ-DEMO-001", "html")
 }
 
 // tool-spec §30.2: the citation index says who cites which lines under which norm; the host part is its own citations only.
@@ -1140,6 +1148,22 @@ func TestReviewCitations(t *testing.T) {
 	}
 	if rows := runOK(t, "review", config, "review", "citations", "nowhere.go").([]CitationRow); len(rows) != 0 {
 		t.Fatal("неизвестный путь даёт пустой список", rows)
+	}
+	// tool-spec §33.2: the same argument filters by norm or by role.
+	byNorm := runOK(t, "review", config, "review", "citations", "REQ-DEMO-001").([]CitationRow)
+	byRole := runOK(t, "review", config, "review", "citations", "redteam").([]CitationRow)
+	if len(byNorm) == 0 || len(byRole) == 0 || len(byNorm)+len(byRole) >= len(all) {
+		t.Fatal("фильтры по норме и роли сужают индекс", len(byNorm), len(byRole), len(all))
+	}
+	for _, row := range byNorm {
+		if row.RequirementID != "REQ-DEMO-001" {
+			t.Fatal("фильтр по норме", row)
+		}
+	}
+	for _, row := range byRole {
+		if row.Role != "redteam" {
+			t.Fatal("фильтр по роли", row)
+		}
 	}
 	quote, err := lineQuote(readFixture(t, filepath.Join(base, "source/source.go")), 1, 2)
 	if err != nil {

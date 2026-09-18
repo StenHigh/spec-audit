@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -209,4 +210,33 @@ func TestIndexSummary(t *testing.T) {
 		t.Fatal("сводка в accepted-режиме", summary)
 	}
 	runFail(t, "index", config, "other")
+}
+
+// tool-spec §33.1: anchors names where normative files mention an anchor and where any spec file defines it, before any index.
+func TestAnchors(t *testing.T) {
+	config, base := acceptedFixture(t)
+	rules := filepath.Join(base, "source/rules.md")
+	writeFixture(t, rules, append(readFixture(t, rules), []byte("Срок согласуется по §9.9 и A-777 (см. также §1.2).\n\n## 9.9 Сроки\nТекст раздела.\nЕщё строка.\n\n## 10 Прочее\n")...))
+	writeFixture(t, filepath.Join(base, "source/clarification.md"), []byte("# Уточнения\n* A-777: правило суток.\n  продолжение.\n\n* A-778: другое.\nУпоминание A-777 в прозе.\n"))
+	writeFixture(t, config, append(readFixture(t, config), []byte("references: {paths: [clarification.md]}\n")...))
+	index := runOK(t, "anchors", config).(AnchorIndex)
+	byAnchor := map[string]AnchorEntry{}
+	for _, e := range index.Anchors {
+		byAnchor[e.Anchor] = e
+	}
+	if index.SnapshotFiles != 2 || len(index.Anchors) != 3 || !reflect.DeepEqual(index.Undefined, []string{"1.2"}) {
+		t.Fatal("индекс якорей", index)
+	}
+	if e := byAnchor["A-777"]; !reflect.DeepEqual(e.Mentions, []CitationRef{{"rules.md", 6, 6}}) || !reflect.DeepEqual(e.Definitions, []CitationRef{{"clarification.md", 2, 3}}) {
+		t.Fatal("A-777: упоминание в нормативном файле, определение в reference до пустой строки", e)
+	}
+	if e := byAnchor["9.9"]; !reflect.DeepEqual(e.Definitions, []CitationRef{{"rules.md", 8, 10}}) {
+		t.Fatal("заголовок определяется до следующего заголовка", e)
+	}
+	if _, ok := byAnchor["A-778"]; ok {
+		t.Fatal("якорь без упоминания в нормативном файле не индексируется")
+	}
+	if _, err := os.Stat(filepath.Join(base, "runs")); !os.IsNotExist(err) {
+		t.Fatal("anchors не создаёт каталог отчётов")
+	}
 }

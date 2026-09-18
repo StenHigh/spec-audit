@@ -893,3 +893,35 @@ func TestCite(t *testing.T) {
 		runFail(t, append([]string{"cite", config}, args...)...)
 	}
 }
+
+// tool-spec §33.3: a publishing command on a run prepared by another binary version warns; the journal records both.
+func TestVersionDriftWarning(t *testing.T) {
+	config, base := fixture(t)
+	batch := runOK(t, "prepare", config, "review").(TaskBatch)
+	versionsPath := filepath.Join(base, "runs/review/tool-versions.json")
+	var journal toolVersionJournal
+	if err := json.Unmarshal(readFixture(t, versionsPath), &journal); err != nil {
+		t.Fatal(err)
+	}
+	journal.Records[0].ToolVersion = "0.0.1"
+	data, _ := json.MarshalIndent(journal, "", "  ")
+	writeFixture(t, versionsPath, append(data, '\n'))
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	task := batch.Tasks[0]
+	path := filepath.Join(base, task.TaskID+".json")
+	writeFixture(t, path, legacyMarshal(t, sampleResult(t, task, filepath.Join(base, "source"))))
+	runOK(t, "tasks", config, "review")
+	if strings.Contains(logs.String(), "другой версией") {
+		t.Fatal("read-only команда не предупреждает")
+	}
+	runOK(t, "submit", config, "review", task.TaskID, path)
+	if !strings.Contains(logs.String(), "другой версией") || !strings.Contains(logs.String(), `"prepared":"0.0.1"`) {
+		t.Fatal("submit должен предупредить о версии prepare", logs.String())
+	}
+	if err := json.Unmarshal(readFixture(t, versionsPath), &journal); err != nil || len(journal.Records) != 2 || journal.Records[1].ToolVersion == "0.0.1" {
+		t.Fatal("журнал версий пишет обе версии", journal.Records)
+	}
+}
