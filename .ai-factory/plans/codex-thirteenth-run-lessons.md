@@ -18,4 +18,4 @@ Milestone: "Уроки тринадцатого прогона 2026-09-18"
 - [x] Task 1: `requiredJSON` — списки полей; `Outcome.AmbiguousOverClear`; `matchHint.LikelyDuplicate`; тесты
 - [x] Task 2: §41 tool-spec, AGENTS, SKILL.md, README, ROADMAP, adoption «двенадцатый цикл»
 <!-- Commit checkpoint: tasks 1-2 -->
-- [ ] Task 3: релиз `v0.1.27`, update хоста, skill в синтетике и пилоте, коммит scope `06-provider-integrations` в пилоте локально
+- [x] Task 3: релиз `v0.1.27`, update хоста, skill в синтетике и пилоте, коммит scope `06-provider-integrations` в пилоте локально
