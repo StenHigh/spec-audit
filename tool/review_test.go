@@ -1266,3 +1266,56 @@ func TestReviewBrief(t *testing.T) {
 		t.Fatal("сводка после решения", brief.State, brief.Form)
 	}
 }
+
+// tool-spec §43.1: a scope listing a sibling in `related` sees the sibling's contradicted code lines under its own norms.
+func TestReviewContradictedElsewhere(t *testing.T) {
+	config, base := fixture(t)
+	batch := runOK(t, "prepare", config, "review").(TaskBatch)
+	for _, task := range batch.Tasks {
+		path := filepath.Join(base, task.TaskID+".json")
+		writeFixture(t, path, legacyMarshal(t, sampleResult(t, task, filepath.Join(base, "source"))))
+		runOK(t, "submit", config, "review", task.TaskID, path)
+	}
+	runOK(t, "review", config, "review", writeReviewInput(t, base, reviewInput(t, config)))
+	first := runOK(t, "review", config, "review").(ReviewContext)
+	contradicted := ""
+	for _, a := range first.Latest.Assessments {
+		if a.Implementation == "contradicted" {
+			contradicted = a.RequirementID
+		}
+	}
+	if contradicted == "" {
+		t.Fatal("фикстура должна содержать contradicted-норму")
+	}
+	// A second scope over the same sources, related to the first; its roles cite the same code lines.
+	other := filepath.Join(base, "other/config.yaml")
+	writeFixture(t, other, []byte("version: 1\nproject_root: ../source\nspecs: {paths: [rules.md]}\ncode: {paths: [source.go, go.mod]}\ntests: {paths: [source_test.go]}\nreports_dir: runs\nruntime: {kind: none}\nscopes: []\nrelated: [../config.yaml]\n"))
+	batch = runOK(t, "prepare", other, "sibling").(TaskBatch)
+	for _, task := range batch.Tasks {
+		path := filepath.Join(base, "other-"+task.TaskID+".json")
+		writeFixture(t, path, legacyMarshal(t, sampleResult(t, task, filepath.Join(base, "source"))))
+		runOK(t, "submit", other, "sibling", task.TaskID, path)
+	}
+	view := runOK(t, "review", other, "sibling", "summary").(ReviewBrief)
+	hits := map[string][]ElsewhereHit{}
+	for _, row := range view.Outcomes {
+		hits[row.RequirementID] = row.ContradictedElsewhere
+	}
+	if len(hits[contradicted]) == 0 || hits[contradicted][0].RequirementID != contradicted || hits[contradicted][0].RunID != "review" || !strings.HasSuffix(hits[contradicted][0].Config, "config.yaml") {
+		t.Fatal("строки, contradicted в соседнем scope, названы под нормой", hits[contradicted])
+	}
+	for id, list := range hits {
+		for _, hit := range list {
+			if hit.RequirementID != contradicted {
+				t.Fatal("подсказка только по contradicted-нормам соседа", id, hit)
+			}
+		}
+	}
+	text := runOK(t, "review", other, "sibling", contradicted, "brief").(map[string]string)["text"]
+	if !strings.Contains(text, "уже contradicted в") {
+		t.Fatalf("brief называет память соседнего scope:\n%s", text)
+	}
+	if plain := runOK(t, "review", config, "review", "summary").(ReviewBrief); len(plain.Outcomes[0].ContradictedElsewhere) != 0 {
+		t.Fatal("без related список пуст", plain.Outcomes[0].ContradictedElsewhere)
+	}
+}

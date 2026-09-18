@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -238,14 +239,63 @@ type Outcome struct {
 	// protocol (only the reverse is refused) and always the host's explicit call.
 	AmbiguousOverClear []string      `json:"ambiguous_over_clear"`
 	PreviousHost       *PreviousHost `json:"previous_host,omitempty"`
+	// ContradictedElsewhere lists the related scopes (§43.1) whose decided runs cite, under a contradicted verdict, code
+	// lines that overlap what a role cites here — a consistency hint, never a verdict.
+	ContradictedElsewhere []ElsewhereHit `json:"contradicted_elsewhere"`
 }
 
-func outcomes(m Manifest, state State, previous map[string]PreviousHost) []Outcome {
+type ElsewhereHit struct {
+	Config        string `json:"config"`
+	RunID         string `json:"run_id"`
+	RequirementID string `json:"requirement_id"`
+	Path          string `json:"path"`
+	LineStart     int    `json:"line_start"`
+	LineEnd       int    `json:"line_end"`
+	Role          string `json:"role"` // the role here whose citation overlaps
+}
+
+// elsewhereIndex reads the related scopes' contradicted code once per review (§43.1); a broken sibling is skipped.
+func elsewhereIndex(related []string) map[string][]ContradictedCitation {
+	index := map[string][]ContradictedCitation{}
+	if len(related) == 0 {
+		return index
+	}
+	view, err := overview(related)
+	if err != nil {
+		slog.Debug("review: related scope пропущен", "error", err.Error())
+		return index
+	}
+	for _, c := range view.ContradictedCode {
+		index[c.Path] = append(index[c.Path], c)
+	}
+	return index
+}
+
+func elsewhereHits(index map[string][]ContradictedCitation, role string, code []Citation) []ElsewhereHit {
+	hits := []ElsewhereHit{}
+	seen := map[string]bool{}
+	for _, c := range code {
+		for _, other := range index[c.Path] {
+			if other.LineEnd < c.LineStart || other.LineStart > c.LineEnd {
+				continue
+			}
+			key := other.Config + "|" + other.RequirementID + "|" + role
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			hits = append(hits, ElsewhereHit{other.Config, other.RunID, other.RequirementID, other.Path, other.LineStart, other.LineEnd, role})
+		}
+	}
+	return hits
+}
+
+func outcomes(m Manifest, state State, previous map[string]PreviousHost, elsewhere map[string][]ContradictedCitation) []Outcome {
 	rows := []Outcome{}
 	disagree := 0
 	differing := map[string]bool{}
 	for _, req := range m.Requirements {
-		row := Outcome{RequirementID: req.ID, Roles: map[string]RoleOutcome{}, AmbiguousOverClear: []string{}}
+		row := Outcome{RequirementID: req.ID, Roles: map[string]RoleOutcome{}, AmbiguousOverClear: []string{}, ContradictedElsewhere: []ElsewhereHit{}}
 		cited := map[string]Assessment{}
 		if prior, ok := previous[req.ID]; ok {
 			row.PreviousHost = &prior
@@ -274,6 +324,7 @@ func outcomes(m Manifest, state State, previous map[string]PreviousHost) []Outco
 						limitations = []string{}
 					}
 					cited[entry.Task.Role] = assessment
+					row.ContradictedElsewhere = append(row.ContradictedElsewhere, elsewhereHits(elsewhere, entry.Task.Role, assessment.Code)...)
 					row.Roles[entry.Task.Role] = RoleOutcome{TaskID: entry.Task.TaskID, Attempt: entry.Task.Attempt, Specification: assessment.Specification, Implementation: assessment.Implementation, Assertion: assessment.Assertion, Limitations: limitations,
 						Citations: CitationCounts{len(assessment.Spec), len(assessment.Code), len(assessment.Tests)}}
 				}
@@ -923,13 +974,13 @@ func summarizeReviews(runID string, m Manifest, state State, fresh bool, journal
 	summary.BasisSHA256 = reviewBasis(m.SnapshotID, state, previous)
 	return summary
 }
-func reviewContext(reports, run *os.Root, runID string, m Manifest, state State, fresh bool) (ReviewContext, error) {
+func reviewContext(reports, run *os.Root, runID string, m Manifest, state State, fresh bool, related []string) (ReviewContext, error) {
 	journal, err := readReviews(run, runID, m)
 	if err != nil {
 		return ReviewContext{}, err
 	}
 	status := makeStatus(runID, m, state, fresh)
-	return ReviewContext{runID, m.SnapshotID, status.DeliveryComplete, status.Freshness, summarizeReviews(runID, m, state, fresh, journal), m.Requirements, roleEntries(state), outcomes(m, state, previousHost(reports, runID, m)), state.Entries, state.Executions}, nil
+	return ReviewContext{runID, m.SnapshotID, status.DeliveryComplete, status.Freshness, summarizeReviews(runID, m, state, fresh, journal), m.Requirements, roleEntries(state), outcomes(m, state, previousHost(reports, runID, m), elsewhereIndex(related)), state.Entries, state.Executions}, nil
 }
 
 // RequirementView is review for one norm (tool-spec §29.1): both roles' texts and citations, the derived outcome row
@@ -969,8 +1020,8 @@ type HostView struct {
 	Tests          []TestCitation `json:"tests"`
 }
 
-func requirementView(reports, run *os.Root, runID string, m Manifest, state State, fresh bool, id string) (RequirementView, error) {
-	context, err := reviewContext(reports, run, runID, m, state, fresh)
+func requirementView(reports, run *os.Root, runID string, m Manifest, state State, fresh bool, related []string, id string) (RequirementView, error) {
+	context, err := reviewContext(reports, run, runID, m, state, fresh, related)
 	if err != nil {
 		return RequirementView{}, err
 	}
@@ -1158,6 +1209,9 @@ func requirementText(view RequirementView, brief bool) string {
 		b.WriteString("\n")
 	}
 	fmt.Fprintf(&b, "\nИтог ролей: agree=%t", view.Outcome.Agree)
+	for _, hit := range view.Outcome.ContradictedElsewhere {
+		fmt.Fprintf(&b, "; %s:%d-%d (%s) уже contradicted в %s/%s %s", hit.Path, hit.LineStart, hit.LineEnd, hit.Role, filepath.Base(filepath.Dir(hit.Config)), hit.RunID, hit.RequirementID)
+	}
 	if view.Outcome.PreviousHost != nil {
 		p := view.Outcome.PreviousHost
 		fmt.Fprintf(&b, "; прошлый хост %s/%s: %s/%s/%s — %s", p.RunID, p.ReviewID, p.Specification, p.Implementation, p.Assertion, p.Statement)
