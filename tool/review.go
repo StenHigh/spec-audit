@@ -1105,7 +1105,7 @@ func citationIndex(run *os.Root, runID string, m Manifest, state State, filter [
 
 // requirementText renders a RequirementView as one readable text (tool-spec §33.4): the outcome row, each role's
 // states, statement, limitations and citations by location, then the host's verdict. JSON stays the answer envelope.
-func requirementText(view RequirementView) string {
+func requirementText(view RequirementView, brief bool) string {
 	var b strings.Builder
 	req := view.Requirement
 	fmt.Fprintf(&b, "%s — %s (run %s, %s)\n", req.ID, req.Title, view.RunID, view.Freshness)
@@ -1128,6 +1128,11 @@ func requirementText(view RequirementView) string {
 	b.WriteString("\n")
 	locate := func(c Citation) string { return fmt.Sprintf("%s:%d-%d", c.Path, c.LineStart, c.LineEnd) }
 	cite := func(spec, code []Citation, tests []TestCitation) {
+		// tool-spec §35.2: brief keeps the judgments and counts the citations instead of listing them.
+		if brief {
+			fmt.Fprintf(&b, "  цитаты: spec %d, code %d, tests %d\n", len(spec), len(code), len(tests))
+			return
+		}
 		for _, c := range spec {
 			fmt.Fprintf(&b, "  spec %s\n", locate(c))
 		}
