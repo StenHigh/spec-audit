@@ -919,6 +919,26 @@ func TestReviewPreviousHostAccepted(t *testing.T) {
 	if view := runOK(t, "review", config, "c").(ReviewContext); view.Outcomes[0].PreviousHost != nil {
 		t.Fatal("другой accepted head — previous_host отсутствует", view.Outcomes[0].PreviousHost)
 	}
+	// tool-spec §40.1: a later package that keeps the norm (§39) changes the head but not the norm — the verdict of run c
+	// carries over to the kept norm and not to the new one.
+	view = runOK(t, "review", config, "c").(ReviewContext)
+	verdicts = []ReviewVerdict{{view.Requirements[0].ID, "clear", "supported", "relevant", "both", "host", []string{}}}
+	writeFixture(t, path, legacyMarshal(t, ReviewDecisionV2{2, "host-review-001", "c", view.SnapshotID, view.BasisSHA256, "host", "s", verdicts, countVerdicts(verdicts), []string{}}))
+	runOK(t, "review", config, "c", path)
+	second := candidateAt(t, base, "rules.md", "C001", "Название карточки обязательно", 3, 3)
+	raw, decision = acceptedInputs(t, config, "pkg-2", []legacyCandidate{second}, acceptOperation("keep", []string{view.Requirements[0].ID}), acceptOperation("accept", []string{}, "C001"))
+	runOK(t, "reconcile", config, raw, decision)
+	submitAll("d")
+	kept := runOK(t, "review", config, "d").(ReviewContext)
+	if len(kept.Outcomes) != 2 || kept.Outcomes[0].PreviousHost == nil || kept.Outcomes[0].PreviousHost.RunID != "c" || kept.Outcomes[0].PreviousHost.Assertion != "relevant" || kept.Outcomes[1].PreviousHost != nil {
+		t.Fatal("после keep previous_host есть у прежней нормы и нет у новой", kept.Outcomes)
+	}
+	// Changed sources: no carry-over even for an identical norm.
+	writeFixture(t, filepath.Join(base, "source/source.go"), append(readFixture(t, filepath.Join(base, "source/source.go")), []byte("\n// изменение\n")...))
+	submitAll("e")
+	if view := runOK(t, "review", config, "e").(ReviewContext); view.Outcomes[0].PreviousHost != nil {
+		t.Fatal("другие файлы — previous_host отсутствует", view.Outcomes[0].PreviousHost)
+	}
 }
 
 // tool-spec §27 / REQ-SA-047: validate … host runs review's checks without writing anything.

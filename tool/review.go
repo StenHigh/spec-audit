@@ -343,10 +343,6 @@ func previousHost(reports *os.Root, runID string, m Manifest) map[string]Previou
 		slog.Debug("review: прошлый вердикт: каталог пропущен", "run_id", "", "error", err.Error())
 		return nil
 	}
-	head := ""
-	if m.Accepted != nil {
-		head = m.Accepted.Head
-	}
 	type candidate struct {
 		runID, reviewID, recordedAt string
 		states                      map[string]PreviousHost
@@ -357,7 +353,7 @@ func previousHost(reports *os.Root, runID string, m Manifest) map[string]Previou
 		if !dir.IsDir() || other == runID || !slugRE.MatchString(other) {
 			continue
 		}
-		states, reviewID, recordedAt, err := previousHostRun(reports, other, m.SnapshotID, head)
+		states, reviewID, recordedAt, err := previousHostRun(reports, other, m)
 		if err != nil {
 			slog.Debug("review: прошлый вердикт: каталог пропущен", "run_id", other, "error", err.Error())
 			continue
@@ -381,8 +377,29 @@ func previousHost(reports *os.Root, runID string, m Manifest) map[string]Previou
 	return best.states
 }
 
-// previousHostRun reads one sibling run; nil states mean "not the same snapshot/head or no decision".
-func previousHostRun(reports *os.Root, other, snapshotID, head string) (map[string]PreviousHost, string, string, error) {
+// sameNorm is the §40.1 key of a norm across runs: the accepted content and revision, independent of the index head.
+func sameNorm(req Requirement) string {
+	revision := 0
+	if req.Accepted != nil {
+		revision = req.Accepted.Revision
+	}
+	return fmt.Sprintf("%s|%s|%d", req.ID, req.ContentHash, revision)
+}
+
+// filesDigest hashes every source file of a manifest: two runs with equal digests audited the same bytes even when
+// their accepted sets differ (a later package carried norms with keep, tool-spec §39).
+func filesDigest(files []SourceFile) string {
+	parts := []string{}
+	for _, file := range files {
+		parts = append(parts, file.Path+"="+file.SHA256)
+	}
+	sort.Strings(parts)
+	return digest([]byte(strings.Join(parts, "\n")))
+}
+
+// previousHostRun reads one sibling run; nil states mean "different sources or no decision". A norm is carried over
+// only when the sibling audited the same files and the norm's content and revision are identical (§25, §40.1).
+func previousHostRun(reports *os.Root, other string, m Manifest) (map[string]PreviousHost, string, string, error) {
 	run, err := reports.OpenRoot(other)
 	if err != nil {
 		return nil, "", "", err
@@ -393,19 +410,26 @@ func previousHostRun(reports *os.Root, other, snapshotID, head string) (map[stri
 		return nil, "", "", err
 	}
 	var brief struct {
-		SnapshotID string `json:"snapshot_id"`
-		Accepted   *struct {
-			Head string `json:"head"`
-		} `json:"accepted"`
+		Files        []SourceFile  `json:"files"`
+		Requirements []Requirement `json:"requirements"`
 	}
 	if err := json.Unmarshal(manifest, &brief); err != nil {
 		return nil, "", "", err
 	}
-	otherHead := ""
-	if brief.Accepted != nil {
-		otherHead = brief.Accepted.Head
+	if filesDigest(brief.Files) != filesDigest(m.Files) {
+		return nil, "", "", nil
 	}
-	if brief.SnapshotID != snapshotID || otherHead != head {
+	comparable := map[string]bool{}
+	for _, req := range brief.Requirements {
+		comparable[sameNorm(req)] = true
+	}
+	shared := map[string]bool{}
+	for _, req := range m.Requirements {
+		if comparable[sameNorm(req)] {
+			shared[req.ID] = true
+		}
+	}
+	if len(shared) == 0 {
 		return nil, "", "", nil
 	}
 	data, err := readRoot(run, "host-reviews.json", maxState)
@@ -440,6 +464,9 @@ func previousHostRun(reports *os.Root, other, snapshotID, head string) (map[stri
 	}
 	states := map[string]PreviousHost{}
 	for _, r := range append(last.Assessments, last.Verdicts...) {
+		if !shared[r.RequirementID] {
+			continue
+		}
 		limitations := r.Limitations
 		if limitations == nil {
 			limitations = []string{}
