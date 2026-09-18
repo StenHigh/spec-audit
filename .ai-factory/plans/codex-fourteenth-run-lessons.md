@@ -18,4 +18,4 @@ Milestone: "Уроки четырнадцатого прогона 2026-09-18"
 - [x] Task 1: `textTokens`/`tokenJaccard`, словесные подсказки и `TextSimilarity`; `overview.contradicted_code`; `sourceRanges` в отказе цитаты; тесты
 - [x] Task 2: §42 tool-spec, AGENTS, SKILL.md, README, ROADMAP, adoption «тринадцатый цикл»
 <!-- Commit checkpoint: tasks 1-2 -->
-- [ ] Task 3: релиз `v0.1.28`, update хоста, skill в синтетике и пилоте, коммит конфигов scope 09/10 в пилоте локально
+- [x] Task 3: релиз `v0.1.28`, update хоста, skill в синтетике и пилоте, коммит конфигов scope 09/10 в пилоте локально
