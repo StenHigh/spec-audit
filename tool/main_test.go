@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1165,4 +1166,164 @@ func TestPublish(t *testing.T) {
 		t.Fatal("отчёт копируется байт-в-байт")
 	}
 	runFail(t, "publish", site)
+}
+
+// tool-spec §50 / REQ-SA-050: an incremental run reassesses only new, gap and touched norms; the rest is carried with
+// the previous host verdict and its evidence, and the decision names it with concur: carried.
+func TestIncrementalRerun(t *testing.T) {
+	config, base := fixture(t)
+	source := filepath.Join(base, "source")
+	deliver := func(runID string) TaskBatch {
+		batch := runOK(t, "prepare", config, runID).(TaskBatch)
+		for _, task := range batch.Tasks {
+			path := filepath.Join(base, runID+"-"+task.TaskID+".json")
+			writeFixture(t, path, legacyMarshal(t, sampleResult(t, task, source)))
+			runOK(t, "submit", config, runID, task.TaskID, path)
+		}
+		return batch
+	}
+	// r1: a full run; the host takes the mapper's assessments as its version 1 decision.
+	deliver("r1")
+	view := runOK(t, "review", config, "r1").(ReviewContext)
+	rows := append([]Assessment{}, view.Entries[0].Result.Assessments...)
+	decision := filepath.Join(base, "host-r1.json")
+	writeFixture(t, decision, legacyMarshal(t, ReviewDecision{1, "decision-r1", "r1", view.SnapshotID, view.BasisSHA256, "host", "s", rows, []string{}}))
+	runOK(t, "review", config, "r1", decision)
+	gap, sound := map[string]bool{}, []string{}
+	for _, a := range rows {
+		if a.Implementation != "supported" || a.Assertion != "relevant" || a.Specification != "ambiguous" && a.Specification != "clear" {
+			gap[a.RequirementID] = true
+		} else if a.Specification == "clear" {
+			sound = append(sound, a.RequirementID)
+		}
+	}
+	// Refusals: unknown source run, a run without a decision, an undelivered run.
+	runFail(t, "prepare", config, "r2", "since", "nowhere")
+	runOK(t, "prepare", config, "undecided")
+	runFail(t, "prepare", config, "r2", "since", "undecided")
+	// r2 on unchanged sources: only the gap norms are reassessed, every sound norm is carried.
+	batch := runOK(t, "prepare", config, "r2", "since", "r1").(TaskBatch)
+	if batch.Incremental == nil || batch.Incremental.SinceRun != "r1" || batch.Incremental.Carried != len(sound) || batch.Incremental.Assessed != len(gap) || batch.Incremental.Reasons["gap"] != len(gap) {
+		t.Fatal("инкремент без изменений: перенесены только clear/supported/relevant", batch.Incremental, len(sound), len(gap))
+	}
+	for _, task := range batch.Tasks {
+		for _, req := range task.Requirements {
+			if !gap[req.ID] {
+				t.Fatal("роли получают только переоцениваемые нормы", task.TaskID, req.ID)
+			}
+		}
+	}
+	// r3 after touching a code file no verdict cites (go.mod): the carried set is unchanged — r3 gets the full flow below.
+	writeFixture(t, filepath.Join(source, "go.mod"), append(readFixture(t, filepath.Join(source, "go.mod")), []byte("\n// touched\n")...))
+	batch = runOK(t, "prepare", config, "r3", "since", "r1").(TaskBatch)
+	if batch.Incremental.Reasons["changed"] != 0 || batch.Incremental.Carried != len(sound) || batch.Incremental.Assessed+batch.Incremental.Carried != len(rows) {
+		t.Fatal("нецитируемый файл не возвращает нормы ролям", batch.Incremental)
+	}
+	brief := runOK(t, "review", config, "r3", "summary").(ReviewBrief)
+	if brief.Carried != batch.Incremental.Carried || brief.Assessed != batch.Incremental.Assessed {
+		t.Fatal("сводка считает перенесённые и переоцениваемые", brief.Carried, brief.Assessed)
+	}
+	for _, task := range batch.Tasks {
+		path := filepath.Join(base, "r3-"+task.TaskID+".json")
+		writeFixture(t, path, legacyMarshal(t, sampleResult(t, task, source)))
+		runOK(t, "submit", config, "r3", task.TaskID, path)
+	}
+	draft := runOK(t, "draft", config, "r3").(ReviewDecisionV3)
+	carriedID, assessedID := "", ""
+	for _, v := range draft.Verdicts {
+		if v.Concur == "carried" {
+			carriedID = v.RequirementID
+			if v.Implementation == "" || v.Statement == "" {
+				t.Fatal("draft предзаполняет перенесённый вердикт", v)
+			}
+		} else if v.Concur == "" {
+			assessedID = v.RequirementID
+		}
+	}
+	if carriedID == "" || assessedID == "" {
+		t.Fatal("в draft есть и перенесённые, и переоцениваемые нормы")
+	}
+	full := runOK(t, "review", config, "r3").(ReviewContext)
+	for i := range draft.Verdicts {
+		v := &draft.Verdicts[i]
+		if v.Concur == "carried" {
+			continue
+		}
+		for _, a := range full.Entries[0].Result.Assessments {
+			if a.RequirementID == v.RequirementID {
+				v.Specification, v.Implementation, v.Assertion, v.Concur, v.Statement = a.Specification, a.Implementation, a.Assertion, "mapper", "host: по оценке mapper"
+			}
+		}
+	}
+	draft.Counts = countVerdicts(baseVerdicts(draft.Verdicts))
+	draft.Reviewer, draft.Summary = "host", "инкрементальное решение"
+	write := func(id string, d ReviewDecisionV3) string {
+		p := filepath.Join(base, "host-r3-"+id+".json")
+		writeFixture(t, p, legacyMarshal(t, d))
+		return p
+	}
+	// A role concur on a carried norm, a carried concur on an assessed norm, and changed carried states without own
+	// citations are refused; the draft as filled is accepted.
+	wrong := draft
+	wrong.Verdicts = append([]ReviewVerdictV3{}, draft.Verdicts...)
+	for i := range wrong.Verdicts {
+		if wrong.Verdicts[i].RequirementID == carriedID {
+			wrong.Verdicts[i].Concur = "mapper"
+		}
+	}
+	if _, err := execute([]string{"validate", config, "r3", "host", write("role", wrong)}); err == nil || !strings.Contains(err.Error(), "concur: carried") {
+		t.Fatal("роль на перенесённой норме — отказ", err)
+	}
+	wrong.Verdicts = append([]ReviewVerdictV3{}, draft.Verdicts...)
+	for i := range wrong.Verdicts {
+		if wrong.Verdicts[i].RequirementID == assessedID {
+			wrong.Verdicts[i].Concur = "carried"
+		}
+	}
+	if _, err := execute([]string{"validate", config, "r3", "host", write("carried", wrong)}); err == nil || !strings.Contains(err.Error(), "недопустим") {
+		t.Fatal("carried на оценённой норме — отказ", err)
+	}
+	wrong.Verdicts = append([]ReviewVerdictV3{}, draft.Verdicts...)
+	for i := range wrong.Verdicts {
+		if wrong.Verdicts[i].RequirementID == carriedID {
+			wrong.Verdicts[i].Assertion = "weak"
+		}
+	}
+	wrong.Counts = countVerdicts(baseVerdicts(wrong.Verdicts))
+	if _, err := execute([]string{"validate", config, "r3", "host", write("states", wrong)}); err == nil || !strings.Contains(err.Error(), "собственных цитат") {
+		t.Fatal("иные состояния перенесённой нормы без цитат — отказ", err)
+	}
+	runOK(t, "review", config, "r3", write("ok", draft))
+	after := runOK(t, "review", config, "r3", carriedID).(RequirementView)
+	if after.Host == nil || after.Outcome.Carried == nil || after.Outcome.Carried.RunID != "r1" || len(after.Host.Code) == 0 || !after.Outcome.Agree {
+		t.Fatal("перенесённая норма: вердикт хоста со свидетельствами r1", after.Outcome.Carried, after.Host)
+	}
+	if text := runOK(t, "review", config, "r3", carriedID, "brief").(map[string]string)["text"]; !strings.Contains(text, "Перенесено из r1/") {
+		t.Fatalf("brief называет перенос:\n%s", text)
+	}
+	report := runOK(t, "report", config, "r3").(map[string]any)
+	var rep Report
+	if err := json.Unmarshal(readFixture(t, report["report_json"].(string)), &rep); err != nil {
+		t.Fatal(err)
+	}
+	flagged := 0
+	for _, row := range rep.Requirements {
+		if row.Navigation.CarriedFrom == "r1" {
+			flagged++
+			if !slices.Contains(row.Navigation.Flags, "carried") || row.Navigation.HostConcur != "перенесено из прежнего run" {
+				t.Fatal("отчёт помечает перенесённую норму", row.Navigation)
+			}
+		}
+	}
+	if flagged != batch.Incremental.Carried {
+		t.Fatal("флаг carried у каждой перенесённой нормы", flagged, batch.Incremental.Carried)
+	}
+	if ov := runOK(t, "overview", config).(Overview); ov.Scopes[0].Decided.RunID != "r3" || ov.Scopes[0].Decided.Carried != batch.Incremental.Carried || ov.Scopes[0].Decided.SinceRun != "r1" || ov.Scopes[0].Delta == nil || ov.Scopes[0].Delta.BaselineRun != "r1" {
+		t.Fatal("overview: инкрементальный run решён, динамика против r1", ov.Scopes[0].Decided.Carried, ov.Scopes[0].Delta)
+	}
+	// r4 after touching the file every verdict cites: the sound norm returns to the roles, nothing is carried.
+	writeFixture(t, filepath.Join(source, "source.go"), append(readFixture(t, filepath.Join(source, "source.go")), []byte("\n// touched\n")...))
+	if batch := runOK(t, "prepare", config, "r4", "since", "r3").(TaskBatch); batch.Incremental.Reasons["changed"] == 0 || batch.Incremental.Carried != 0 {
+		t.Fatal("изменённый цитируемый файл возвращает норму ролям", batch.Incremental)
+	}
 }

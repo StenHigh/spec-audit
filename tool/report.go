@@ -40,7 +40,8 @@ type RequirementNavigation struct {
 	Basis          string          `json:"basis"`
 	Flags          []string        `json:"flags"`
 	Host           *Assessment     `json:"-"`
-	HostStates     string          `json:"host_states,omitempty"` // specification/implementation/assertion of the host verdict; the full verdict is host_review.latest
+	HostStates     string          `json:"host_states,omitempty"`  // specification/implementation/assertion of the host verdict; the full verdict is host_review.latest
+	CarriedFrom    string          `json:"carried_from,omitempty"` // run the verdict was carried from in an incremental run (§50)
 	HostConcur     string          `json:"host_concur,omitempty"`
 	HostExecutions []TestExecution `json:"host_executions"`
 }
@@ -55,6 +56,8 @@ func hostConcurLabel(concur string, own bool) string {
 		label = "свидетельства redteam"
 	case "both":
 		label = "свидетельства обеих ролей"
+	case "carried":
+		label = "перенесено из прежнего run"
 	}
 	if label != "" && own {
 		label += " и хоста"
@@ -259,6 +262,7 @@ func buildNavigation(report *Report, m Manifest) {
 			{ID: "pending", Label: "Ожидается ответ роли"},
 			{ID: "disagreement", Label: "Различаются оценки ролей"},
 			{ID: "unreviewed", Label: "Нет текущего согласования"},
+			{ID: "carried", Label: "Перенесено из прежнего run без переоценки"},
 		},
 	}
 	files := map[string]int{}
@@ -332,6 +336,11 @@ func buildNavigation(report *Report, m Manifest) {
 			row.Navigation.Basis = "history"
 		} else if currentHost {
 			row.Navigation.Basis = "host-current"
+		}
+		if carried := carriedVerdict(m, req.ID); carried != nil {
+			// tool-spec §50: the verdict was carried from an earlier run on unchanged evidence lines, not assessed here.
+			flags["carried"] = true
+			row.Navigation.CarriedFrom = m.Incremental.SinceRun
 		}
 		citations := []Citation{req.Source}
 		if req.Accepted != nil {
