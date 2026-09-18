@@ -1044,3 +1044,49 @@ func TestReviewAgreedStatement(t *testing.T) {
 		t.Fatal("отказы изменили журнал")
 	}
 }
+
+// tool-spec §29.1: review CONFIG RUN_ID REQ-ID reads one norm — both roles, the outcome row and the host's verdict.
+func TestReviewRequirementView(t *testing.T) {
+	config, base := fixture(t)
+	batch := runOK(t, "prepare", config, "review").(TaskBatch)
+	runFail(t, "review", config, "review", "REQ-DEMO-999")
+	for _, task := range batch.Tasks {
+		result := sampleResult(t, task, filepath.Join(base, "source"))
+		if task.Role == "redteam" {
+			result.Assessments[0].Assertion, result.Assessments[0].Tests = "unknown", []TestCitation{}
+		}
+		path := filepath.Join(base, task.TaskID+".json")
+		writeFixture(t, path, legacyMarshal(t, result))
+		runOK(t, "submit", config, "review", task.TaskID, path)
+	}
+	versionsPath := filepath.Join(base, "runs/review/tool-versions.json")
+	versionsBefore := readFixture(t, versionsPath)
+	before := runOK(t, "review", config, "review", "REQ-DEMO-001").(RequirementView)
+	if before.Host != nil || before.Requirement.ID != "REQ-DEMO-001" || before.Outcome.Agree || len(before.Roles) != 2 || before.Roles["mapper"].Statement == "" || len(before.Roles["mapper"].Tests) != 1 || len(before.Roles["redteam"].Tests) != 0 || before.Freshness != "fresh" {
+		t.Fatal("чтение нормы до решения", before)
+	}
+	if !bytes.Equal(versionsBefore, readFixture(t, versionsPath)) {
+		t.Fatal("чтение нормы не должно писать провенанс")
+	}
+	source := readFixture(t, filepath.Join(base, "source/source.go"))
+	quote, err := lineQuote(source, 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := reviewV3Input(t, config, "v3-view", "redteam")
+	decision.Verdicts[0].Code = []Citation{{"source.go", 1, 2, quote}}
+	decision.Verdicts[0].Tests = before.Roles["mapper"].Tests
+	path := filepath.Join(base, "v3-view.json")
+	writeFixture(t, path, legacyMarshal(t, decision))
+	accepted := runOK(t, "review", config, "review", path).(map[string]any)
+	if accepted["version"] != 3 || accepted["requirements"] != len(batch.Tasks[0].Requirements) || !reflect.DeepEqual(accepted["own_citations"], []string{"REQ-DEMO-001"}) {
+		t.Fatal("ответ review должен повторять version/requirements/own_citations (§29.2)", accepted)
+	}
+	after := runOK(t, "review", config, "review", "REQ-DEMO-001").(RequirementView)
+	if after.Host == nil || after.Host.ReviewID != "v3-view" || after.Host.State != "current" || after.Host.Form != "verdicts" || !after.Host.OwnCitations || len(after.Host.Code) != 2 || len(after.Host.Tests) != 1 || after.Outcome.PreviousHost != nil {
+		t.Fatal("чтение нормы после решения", after.Host)
+	}
+	if duplicate := runOK(t, "review", config, "review", path).(map[string]any); duplicate["duplicate"] != true || duplicate["version"] != 3 || !reflect.DeepEqual(duplicate["own_citations"], []string{"REQ-DEMO-001"}) {
+		t.Fatal("duplicate-ответ тоже симметричен", duplicate)
+	}
+}
