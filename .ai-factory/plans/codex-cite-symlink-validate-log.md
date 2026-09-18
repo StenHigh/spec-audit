@@ -46,7 +46,7 @@ Authority: [docs/tool-spec.md](../../docs/tool-spec.md) frozen §1–10 > REQ-SA
 <!-- Commit checkpoint: tasks 1-2 -->
 
 ### Phase 2: Документация и поставка
-- [ ] Task 3: SKILL.md (симлинк, CITE/validate.log), README, ROADMAP
+- [x] Task 3: SKILL.md (симлинк, CITE/validate.log), README, ROADMAP
   - Files: `skills/spec-audit/SKILL.md`, `README.md`, `.ai-factory/ROADMAP.md`
   - Depends: 2
   - Verify: `go test ./tool -run TestSkillFiles -count=1`; полный `go test ./tool`.
