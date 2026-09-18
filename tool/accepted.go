@@ -142,7 +142,7 @@ func applyAccepted(state acceptedState, raw legacyRaw, decision AcceptedDecision
 			valid = p == 1 && n >= 2 && n <= 64
 		case "merge":
 			valid = p >= 2 && p <= 64 && n == 1
-		case "retire":
+		case "retire", "keep":
 			valid = p == 1 && n == 0
 		}
 		if !valid || strings.TrimSpace(operation.Reason) == "" {
@@ -154,6 +154,16 @@ func applyAccepted(state acceptedState, raw legacyRaw, decision AcceptedDecision
 				return state, errors.New("previous требует неповторяющиеся прежние active ID")
 			}
 			seenPrevious[id] = true
+			if operation.Action == "keep" {
+				// REQ-SA-048: a norm outside this raw continues unchanged only while every file it cites is byte-identical
+				// to the source set of the package that accepted it; otherwise the host must rebind/revise it with a candidate.
+				if err := keepable(state.Records[position].Requirement, state.SourceSet, raw.SourceSet); err != nil {
+					return state, fmt.Errorf("keep %s: %w", id, err)
+				}
+				state.Records[position].Reason = operation.Reason
+				slog.Debug("reconcile: keep", "id", id)
+				continue
+			}
 			state.Records[position].Status, state.Records[position].Reason = "retired", operation.Reason
 		}
 		for _, target := range operation.Targets {
@@ -415,7 +425,7 @@ func reconcile(cfg Config, paths []string) (any, error) {
 	// Same view as the read-only call; freshness is measured again under the held lock, not assumed.
 	view := acceptedView(cfg, staged.ledger, staged.state)
 	view["accepted"], view["duplicate"] = true, false
-	view["deferred"], view["rejected"] = decidedCandidates(decision, "defer"), decidedCandidates(decision, "reject")
+	view["deferred"], view["rejected"], view["kept"] = decidedCandidates(decision, "defer"), decidedCandidates(decision, "reject"), keptIDs(decision)
 	slog.Debug("reconcile: view после apply", "freshness", view["freshness"], "records", len(staged.state.Records))
 	return view, nil
 }
@@ -747,7 +757,7 @@ func checkAcceptance(cfg Config, paths []string) (any, error) {
 	// §22.3: on success the decision's base_index equals the current head by construction (applyAccepted enforced it).
 	view["duplicate"], view["base_index_current"], view["next_head"], view["assignments"], view["retired"] = false, true, staged.state.Head, assignments, retired
 	// tool-spec §38.1: the remainder is named, not inferred from the assignments' absence.
-	view["deferred"], view["rejected"] = decidedCandidates(*decision, "defer"), decidedCandidates(*decision, "reject")
+	view["deferred"], view["rejected"], view["kept"] = decidedCandidates(*decision, "defer"), decidedCandidates(*decision, "reject"), keptIDs(*decision)
 	slog.Info("check: приёмка проверена", "candidates", len(candidates), "decision", true, "assignments", len(assignments), "retired", len(retired), "duplicate", false)
 	return view, nil
 }
@@ -761,6 +771,40 @@ func decidedCandidates(decision AcceptedDecision, action string) []string {
 		}
 		for _, target := range operation.Targets {
 			ids = append(ids, target.Candidate)
+		}
+	}
+	return ids
+}
+
+// keepable is the §39 guard: the kept norm's cited files must be unchanged since the accepting package.
+func keepable(req Requirement, previous, current []legacySource) error {
+	before, after := map[string]string{}, map[string]string{}
+	for _, source := range previous {
+		before[source.Path] = source.SHA256
+	}
+	for _, source := range current {
+		after[source.Path] = source.SHA256
+	}
+	paths := map[string]bool{req.Source.Path: true}
+	if req.Accepted != nil {
+		for _, c := range req.Accepted.Citations {
+			paths[c.Path] = true
+		}
+	}
+	for path := range paths {
+		if before[path] == "" || before[path] != after[path] {
+			return fmt.Errorf("источник %s изменился или отсутствует в raw; норму нужно перепривязать кандидатом (rebind/revise/reanchor)", path)
+		}
+	}
+	return nil
+}
+
+// keptIDs lists the norms a decision carries over with keep (tool-spec §39).
+func keptIDs(decision AcceptedDecision) []string {
+	ids := []string{}
+	for _, operation := range decision.Operations {
+		if operation.Action == "keep" {
+			ids = append(ids, operation.Previous...)
 		}
 	}
 	return ids

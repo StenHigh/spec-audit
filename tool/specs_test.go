@@ -216,16 +216,17 @@ func TestIndexSummary(t *testing.T) {
 func TestAnchors(t *testing.T) {
 	config, base := acceptedFixture(t)
 	rules := filepath.Join(base, "source/rules.md")
-	writeFixture(t, rules, append(readFixture(t, rules), []byte("Срок согласуется по §9.9 и A-777 (см. также §1.2).\n\n## 9.9 Сроки\nТекст раздела.\nЕщё строка.\n\n## 10 Прочее\n")...))
-	writeFixture(t, filepath.Join(base, "source/clarification.md"), []byte("# Уточнения\n* A-777: правило суток (см. A-778 и §9.9).\n  продолжение.\n\n* A-778: другое.\nУпоминание A-777 в прозе.\n\n| A-777 | P2/9.9 |\n"))
+	writeFixture(t, rules, append(readFixture(t, rules), []byte("Срок согласуется по §9.9 и A-777 (см. также §1.2).\n\n## 9.9 Сроки\nТекст раздела.\nЕщё строка.\n\n## 10 Прочее\nДиапазон A-900–A-902 тоже упоминание.\n")...))
+	writeFixture(t, filepath.Join(base, "source/clarification.md"), []byte("# Уточнения\n* A-777: правило суток (см. A-778 и §9.9).\n  продолжение.\n\n* A-778: другое.\nУпоминание A-777 в прозе.\n\n| A-777 | P2/9.9 |\n* A-901: середина диапазона.\n"))
 	writeFixture(t, config, append(readFixture(t, config), []byte("references: {paths: [clarification.md]}\n")...))
 	index := runOK(t, "anchors", config).(AnchorIndex)
 	byAnchor := map[string]AnchorEntry{}
 	for _, e := range index.Anchors {
 		byAnchor[e.Anchor] = e
 	}
-	if index.SnapshotFiles != 2 || len(index.Anchors) != 4 || !reflect.DeepEqual(index.Undefined, []string{"1.2"}) || len(index.OutsideFiles) != 0 {
-		t.Fatal("индекс якорей", index)
+	// tool-spec §39.2: «A-900–A-902» mentions A-901 too; A-900/A-902 stay undefined like any other anchor.
+	if index.SnapshotFiles != 2 || len(index.Anchors) != 7 || !reflect.DeepEqual(index.Undefined, []string{"1.2", "A-900", "A-902"}) || len(index.OutsideFiles) != 0 || len(byAnchor["A-901"].Definitions) != 1 {
+		t.Fatal("индекс якорей", index.Undefined, len(index.Anchors))
 	}
 	// tool-spec §37.1: kind tells a list item from a coverage-table row; references are the anchors the definition names.
 	if e := byAnchor["A-777"]; !reflect.DeepEqual(e.Mentions, []CitationRef{{"rules.md", 6, 6}}) || !reflect.DeepEqual(e.Definitions, []AnchorDefinition{{"clarification.md", 2, 3, "list", []string{"A-778", "9.9"}, false}, {"clarification.md", 8, 8, "table", []string{}, false}}) {
@@ -244,7 +245,7 @@ func TestAnchors(t *testing.T) {
 	// tool-spec §38.2: extra paths under project_root supply outside definitions for undefined anchors.
 	writeFixture(t, filepath.Join(base, "source/corpus/other.md"), []byte("# Другой раздел\n\n## 1.2 Общие правила\nТекст.\n"))
 	outside := runOK(t, "anchors", config, "corpus").(AnchorIndex)
-	if !reflect.DeepEqual(outside.OutsideFiles, []string{"corpus/other.md"}) || len(outside.Undefined) != 0 {
+	if !reflect.DeepEqual(outside.OutsideFiles, []string{"corpus/other.md"}) || !reflect.DeepEqual(outside.Undefined, []string{"A-900", "A-902"}) {
 		t.Fatal("определение из дополнительного каталога снимает undefined", outside.OutsideFiles, outside.Undefined)
 	}
 	for _, e := range outside.Anchors {

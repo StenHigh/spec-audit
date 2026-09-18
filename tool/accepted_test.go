@@ -1028,3 +1028,41 @@ func TestReanchor(t *testing.T) {
 		t.Fatal("guard нормативной цитаты", err)
 	}
 }
+
+// tool-spec §39 / REQ-SA-048: a second package on the same scope carries prior norms with keep when their sources are
+// unchanged; the raw need not repeat them, IDs continue, records stay byte-for-byte.
+func TestKeepPackage(t *testing.T) {
+	config, base := acceptedFixture(t)
+	first := candidateAt(t, base, "rules.md", "C001", "Лимит 8 МиБ", 2, 2)
+	raw, decision := acceptedInputs(t, config, "pkg-1", []legacyCandidate{first}, acceptOperation("accept", []string{}, "C001"))
+	runOK(t, "reconcile", config, raw, decision)
+	before := runOK(t, "reconcile", config).(map[string]any)["records"]
+	second := candidateAt(t, base, "rules.md", "C001", "Название карточки обязательно", 3, 3)
+	raw, decision = acceptedInputs(t, config, "pkg-2", []legacyCandidate{second}, acceptOperation("keep", []string{"REQ-AI-001"}), acceptOperation("accept", []string{}, "C001"))
+	view := runOK(t, "check", config, raw, decision).(map[string]any)
+	if !reflect.DeepEqual(view["kept"], []string{"REQ-AI-001"}) || len(view["assignments"].([]checkedAssignment)) != 1 || view["assignments"].([]checkedAssignment)[0].RequirementID != "REQ-AI-002" {
+		t.Fatal("check: keep не занимает ID, нумерация продолжается", view["kept"], view["assignments"])
+	}
+	applied := runOK(t, "reconcile", config, raw, decision).(map[string]any)
+	records := applied["records"].([]AcceptedRecord)
+	if !reflect.DeepEqual(applied["kept"], []string{"REQ-AI-001"}) || len(records) != 2 || records[0].Status != "active" || records[1].Requirement.ID != "REQ-AI-002" {
+		t.Fatal("reconcile: два active после keep + accept", applied["kept"], len(records))
+	}
+	if kept, prior := records[0].Requirement, before.([]AcceptedRecord)[0].Requirement; !reflect.DeepEqual(kept, prior) {
+		t.Fatal("keep не меняет норму: ID, revision, цитаты, hash", kept.Accepted, prior.Accepted)
+	}
+	if index := runOK(t, "index", config, "summary").(map[string]any); index["requirements_total"] != 2 || index["accepted"].(map[string]any)["history_total"] != 2 {
+		t.Fatal("индекс после второго пакета", index["requirements_total"])
+	}
+	// keep with a target, and keep after the cited source changed, are refused with the reason.
+	bad := acceptOperation("keep", []string{"REQ-AI-002"}, "C001")
+	raw, decision = acceptedInputs(t, config, "pkg-bad", []legacyCandidate{first}, bad, acceptOperation("keep", []string{"REQ-AI-001"}))
+	runFail(t, "check", config, raw, decision)
+	rules := filepath.Join(base, "source/rules.md")
+	writeFixture(t, rules, append(readFixture(t, rules), []byte("ещё строка\n")...))
+	third := candidateAt(t, base, "rules.md", "C001", "Уведомить при задержке", 4, 4)
+	raw, decision = acceptedInputs(t, config, "pkg-3", []legacyCandidate{third}, acceptOperation("keep", []string{"REQ-AI-001"}), acceptOperation("keep", []string{"REQ-AI-002"}), acceptOperation("accept", []string{}, "C001"))
+	if _, err := execute([]string{"check", config, raw, decision}); err == nil || !strings.Contains(err.Error(), "keep REQ-AI-001") || !strings.Contains(err.Error(), "rules.md") {
+		t.Fatal("keep после изменения источника — отказ с именем нормы и файла", err)
+	}
+}
