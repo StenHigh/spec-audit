@@ -18,4 +18,4 @@ Milestone: "Несколько разделов и обзор корпуса"
 - [x] Task 1: `Delta`/`NormChange`/`scopeDelta`, `RunOverview.verdicts/keys`, `Config.BaselineRun`, `totals.closed/opened`, раздел «Динамика» в `corpus.html`; `TestCorpusDelta`
 - [x] Task 2: §47 tool-spec, AGENTS, SKILL.md, README, ROADMAP
 <!-- Commit checkpoint: tasks 1-2 -->
-- [ ] Task 3: релиз `v0.1.34`, update хоста, skill в синтетике и пилоте (push), `corpus` на пилоте
+- [x] Task 3: релиз `v0.1.34`, update хоста, skill в синтетике и пилоте (push), `corpus` на пилоте
