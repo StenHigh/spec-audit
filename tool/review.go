@@ -234,7 +234,10 @@ type Outcome struct {
 	Scope         string                 `json:"scope"`
 	Roles         map[string]RoleOutcome `json:"roles"`
 	Agree         bool                   `json:"agree"`
-	PreviousHost  *PreviousHost          `json:"previous_host,omitempty"`
+	// AmbiguousOverClear names the roles that call an accepted clear norm ambiguous (tool-spec §41.2): allowed by the
+	// protocol (only the reverse is refused) and always the host's explicit call.
+	AmbiguousOverClear []string      `json:"ambiguous_over_clear"`
+	PreviousHost       *PreviousHost `json:"previous_host,omitempty"`
 }
 
 func outcomes(m Manifest, state State, previous map[string]PreviousHost) []Outcome {
@@ -242,7 +245,7 @@ func outcomes(m Manifest, state State, previous map[string]PreviousHost) []Outco
 	disagree := 0
 	differing := map[string]bool{}
 	for _, req := range m.Requirements {
-		row := Outcome{RequirementID: req.ID, Roles: map[string]RoleOutcome{}}
+		row := Outcome{RequirementID: req.ID, Roles: map[string]RoleOutcome{}, AmbiguousOverClear: []string{}}
 		cited := map[string]Assessment{}
 		if prior, ok := previous[req.ID]; ok {
 			row.PreviousHost = &prior
@@ -288,6 +291,13 @@ func outcomes(m Manifest, state State, previous map[string]PreviousHost) []Outco
 				differing[req.ID] = true
 			}
 			row.Roles[role] = outcome
+		}
+		if req.Accepted != nil && req.Accepted.Clarity == "clear" {
+			for _, role := range []string{"mapper", "redteam"} {
+				if outcome, ok := row.Roles[role]; ok && outcome.Specification == "ambiguous" {
+					row.AmbiguousOverClear = append(row.AmbiguousOverClear, role)
+				}
+			}
 		}
 		mapper, redteam := row.Roles["mapper"], row.Roles["redteam"]
 		_, hasMapper := row.Roles["mapper"]

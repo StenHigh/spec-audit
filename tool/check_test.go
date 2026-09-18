@@ -135,14 +135,15 @@ func TestCheckAcceptance(t *testing.T) {
 			t.Fatal("правка ТЗ должна давать stale", view["freshness"])
 		}
 		candidates := view["candidates"].([]checkedCandidate)
-		want := matchHint{"REQ-AI-001", 1, 1, 1, 1, true}
+		want := matchHint{"REQ-AI-001", 1, 1, 1, 1, true, true}
 		if len(candidates[0].Matches) != 1 || candidates[0].Matches[0] != want {
 			t.Fatal("сдвиг строк не должен мешать подсказке", candidates[0].Matches)
 		}
 		if len(candidates[1].Matches) != 1 || candidates[1].Matches[0].FieldsEqual || candidates[1].Matches[0].Overlap != 1 {
 			t.Fatal("иной statement — та же цитата, fields_equal=false", candidates[1].Matches)
 		}
-		if len(candidates[2].Matches) != 1 || candidates[2].Matches[0].Overlap != 0.25 || candidates[2].Matches[0].SharedLines != 1 {
+		// tool-spec §41.3: half the lines shared → likely the same text; a quarter → a hint only.
+		if len(candidates[2].Matches) != 1 || candidates[2].Matches[0].Overlap != 0.25 || candidates[2].Matches[0].SharedLines != 1 || candidates[2].Matches[0].LikelyDuplicate {
 			t.Fatal("добавленный контекст снижает overlap, но подсказка остаётся", candidates[2].Matches)
 		}
 		if len(candidates[3].Matches) != 0 {

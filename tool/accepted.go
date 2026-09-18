@@ -558,8 +558,9 @@ func recordRequirements(records []AcceptedRecord) []Requirement {
 // first replay to 43/49, so ranking stays plain Jaccard and unique_shared exposes header-only matches instead.
 // A hint is never semantic equivalence and never a decision.
 const (
-	matchHintThreshold = 0.1
-	matchHintLimit     = 4
+	matchHintThreshold     = 0.1
+	matchHintLimit         = 4
+	likelyDuplicateOverlap = 0.5 // §41.3: a candidate sharing half its lines with an accepted norm is probably the same text
 )
 
 type matchHint struct {
@@ -569,6 +570,9 @@ type matchHint struct {
 	SharedLines  int     `json:"shared_lines"`
 	UniqueShared int     `json:"unique_shared"`
 	FieldsEqual  bool    `json:"fields_equal"`
+	// LikelyDuplicate marks a hint whose candidate repeats an accepted norm almost verbatim (tool-spec §41.3): the
+	// usual outcome is defer/merge/reject, never a second accept. A hint, not a decision.
+	LikelyDuplicate bool `json:"likely_duplicate"`
 }
 
 // lineFrequency counts, per exact citation line, how many active records cite it; frequency 1 marks a line unique to one norm.
@@ -646,7 +650,7 @@ func matchHints(candidate legacyCandidate, records []AcceptedRecord, frequency m
 		if overlap < matchHintThreshold {
 			continue
 		}
-		hints = append(hints, matchHint{record.Requirement.ID, record.Revision, overlap, shared, unique, fieldsEqual(candidate, record.Requirement)})
+		hints = append(hints, matchHint{record.Requirement.ID, record.Revision, overlap, shared, unique, fieldsEqual(candidate, record.Requirement), overlap >= likelyDuplicateOverlap})
 	}
 	sort.Slice(hints, func(i, j int) bool {
 		if hints[i].Overlap != hints[j].Overlap {

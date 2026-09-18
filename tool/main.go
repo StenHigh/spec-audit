@@ -723,7 +723,23 @@ func requiredJSON(data json.RawMessage, typ reflect.Type) error {
 			return err
 		}
 		if len(fields) != typ.NumField() {
-			return errors.New("неполный или неизвестный набор полей результата")
+			// tool-spec §41.1: name what is missing or unknown instead of a bare count mismatch.
+			expected := map[string]bool{}
+			missing, unknown := []string{}, []string{}
+			for i := 0; i < typ.NumField(); i++ {
+				key := typ.Field(i).Tag.Get("json")
+				expected[key] = true
+				if _, ok := fields[key]; !ok {
+					missing = append(missing, key)
+				}
+			}
+			for key := range fields {
+				if !expected[key] {
+					unknown = append(unknown, key)
+				}
+			}
+			sort.Strings(unknown)
+			return fmt.Errorf("неполный или неизвестный набор полей результата: нет %v, лишние %v", missing, unknown)
 		}
 		for i := 0; i < typ.NumField(); i++ {
 			field := typ.Field(i)

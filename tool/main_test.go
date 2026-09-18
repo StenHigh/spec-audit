@@ -973,3 +973,11 @@ func TestOverview(t *testing.T) {
 	}
 	runFail(t, "overview")
 }
+
+// tool-spec §41.1: a field-set mismatch names the missing and unknown keys.
+func TestRequiredJSONNamesFields(t *testing.T) {
+	err := requiredJSON(json.RawMessage(`{"candidate":"C001","extra":1}`), reflect.TypeOf(AcceptedTarget{}))
+	if err == nil || !strings.Contains(err.Error(), "нет [title verification]") || !strings.Contains(err.Error(), "лишние [extra]") {
+		t.Fatal("отказ должен назвать поля", err)
+	}
+}
