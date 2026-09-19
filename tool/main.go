@@ -283,6 +283,7 @@ type Report struct {
 	HostReview                 *ReviewSummary      `json:"host_review,omitempty"`
 	RawProvenance              []RawProvenance     `json:"raw_provenance"`
 	SDK                        *SDKSummary         `json:"sdk,omitempty"`
+	Incremental                *IncrementalSummary `json:"incremental,omitempty"` // §50/§51: since_run, assessed, carried, reasons
 	ToolVersions               []ToolVersionRecord `json:"tool_versions,omitempty"`
 	Navigation                 ReportNavigation    `json:"navigation"`
 }
@@ -1053,6 +1054,27 @@ var roleBriefs = map[string]string{
 
 // rolePrompt renders dispatch/<task_id>/prompt.md: the role's brief, absolute paths and the working order; rules come from the protocol.
 func rolePrompt(task Task, p dispatchPrompt) []byte {
+	return rolePromptFor(task, p, nil)
+}
+
+// rolePromptFor adds the incremental note (§51.3) when the run carries norms: the role learns the run is partial and why
+// its norms were reassessed, so it does not search for the rest of the subsection.
+func rolePromptFor(task Task, p dispatchPrompt, plan *IncrementalPlan) []byte {
+	body := string(rolePromptBase(task, p))
+	if plan == nil {
+		return []byte(body)
+	}
+	reasons := []string{}
+	for _, req := range task.Requirements {
+		if r := plan.Reasons[req.ID]; r != "" {
+			reasons = append(reasons, req.ID+" ("+r+")")
+		}
+	}
+	note := fmt.Sprintf("\nИНКРЕМЕНТАЛЬНЫЙ RUN: этот run продолжает %s. Тебе выданы только нормы, которые нужно переоценить — %s; причины: new — норма новая или пересмотрена, gap — прежний вердикт не был clear/supported/relevant, changed — цитируемые строки изменились. Остальные %d норм scope перенесены хостом с прежними вердиктами и в TASK не входят: не ищи их и не оценивай. Оценивай выданные нормы полностью и независимо, как в обычном run.\n", plan.SinceRun, strings.Join(reasons, ", "), len(plan.Carried))
+	return []byte(body + note)
+}
+
+func rolePromptBase(task Task, p dispatchPrompt) []byte {
 	dir := filepath.Join(p.ReportsDir, p.RunID, "dispatch")
 	own := filepath.Join(dir, task.TaskID)
 	output := filepath.Join(own, "result.json")
@@ -1080,7 +1102,7 @@ func rolePrompt(task Task, p dispatchPrompt) []byte {
 
 // writeDispatch materializes the role's directory (tool-spec §24.2, §30.1): task.json and prompt.md; the shared file list
 // and protocol live in dispatch/ (§26.3, §30.1). Other files in the directory belong to the role and stay untouched.
-func writeDispatch(run *os.Root, task Task, prompt dispatchPrompt) error {
+func writeDispatch(run *os.Root, task Task, prompt dispatchPrompt, plan *IncrementalPlan) error {
 	dir := "dispatch/" + task.TaskID
 	if err := run.MkdirAll(dir, 0700); err != nil {
 		return err
@@ -1088,7 +1110,7 @@ func writeDispatch(run *os.Root, task Task, prompt dispatchPrompt) error {
 	if err := writeJSON(run, dir+"/task.json", task, 0600); err != nil {
 		return err
 	}
-	if err := atomicWrite(run, dir+"/prompt.md", rolePrompt(task, prompt), 0600); err != nil {
+	if err := atomicWrite(run, dir+"/prompt.md", rolePromptFor(task, prompt, plan), 0600); err != nil {
 		return err
 	}
 	slog.Debug("dispatch: каталог задания", "task_id", task.TaskID, "role", task.Role)
@@ -1224,24 +1246,56 @@ func checkStateSize(state State) error {
 
 func newState(m Manifest) State {
 	state := State{Entries: []Entry{}, Executions: []Receipt{}}
-	assessed := map[string]bool{}
 	if m.Incremental != nil {
+		// tool-spec §51.5: the reassessed norms of every scope are regrouped into as few tasks as the size
+		// recommendation allows (a role's cost is nearly fixed per task, not per norm); the original scopes are named
+		// in the focus and carried norms get no tasks at all.
+		assessed := map[string]bool{}
 		for _, id := range m.Incremental.Assessed {
 			assessed[id] = true
 		}
+		byID := map[string]Requirement{}
+		for _, req := range m.Requirements {
+			byID[req.ID] = req
+		}
+		type member struct {
+			req   Requirement
+			scope string
+		}
+		members := []member{}
+		for _, scope := range m.Config.Scopes {
+			for _, id := range scope.Requirements {
+				if assessed[id] {
+					members = append(members, member{byID[id], scope.ID})
+				}
+			}
+		}
+		for start, n := 0, 0; start < len(members); start, n = start+scopeAdvisoryRequirements, n+1 {
+			end := min(start+scopeAdvisoryRequirements, len(members))
+			reqs, scopes, seen := []Requirement{}, []string{}, map[string]bool{}
+			for _, mem := range members[start:end] {
+				reqs = append(reqs, mem.req)
+				if !seen[mem.scope] {
+					seen[mem.scope] = true
+					scopes = append(scopes, mem.scope)
+				}
+			}
+			id := fmt.Sprintf("incremental-%d", n+1)
+			focus := fmt.Sprintf("Переоценка после изменения кода (since %s): нормы scope %s; остальные нормы этих scope перенесены без переоценки", m.Incremental.SinceRun, strings.Join(scopes, ", "))
+			for _, role := range []string{"mapper", "redteam"} {
+				state.Entries = append(state.Entries, Entry{Task: Task{TaskID: id + "-" + role, Attempt: 1, SnapshotID: m.SnapshotID, Role: role, Scope: id, Focus: focus, Requirements: reqs}})
+			}
+		}
+		return state
 	}
 	for _, scope := range m.Config.Scopes {
 		reqs := []Requirement{}
 		for _, req := range m.Requirements {
 			for _, id := range scope.Requirements {
-				if req.ID == id && (m.Incremental == nil || assessed[id]) {
+				if req.ID == id {
 					reqs = append(reqs, req)
 				}
 			}
-		}
-		if len(reqs) == 0 {
-			// tool-spec §50: a scope whose norms are all carried gets no tasks.
-			continue
 		}
 		for _, role := range []string{"mapper", "redteam"} {
 			state.Entries = append(state.Entries, Entry{Task: Task{
@@ -1288,7 +1342,7 @@ func validReviewArgs(args []string) bool {
 }
 
 // usage is the command list of tool-spec §1–10 with later extensions; help prints it, wrong arguments refuse with it (§24.4).
-const usage = "команды: help; init/index CONFIG; index CONFIG summary; anchors CONFIG [PATH...]; overview CONFIG...; corpus OUT_HTML CONFIG...; publish OUT_DIR CONFIG...; cite CONFIG PATH A B; reconcile CONFIG [RAW DECISION]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION|REQ-ID [text|brief]|summary|citations [PATH|REQ-ID|ROLE]]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; validate CONFIG RUN_ID host DECISION; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]"
+const usage = "команды: help; init/index CONFIG; index CONFIG summary; anchors CONFIG [PATH...]; overview CONFIG...; corpus OUT_HTML CONFIG...; publish OUT_DIR CONFIG...; plan CONFIG PREV_RUN; cite CONFIG PATH A B; reconcile CONFIG [RAW DECISION]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION|REQ-ID [text|brief]|summary|citations [PATH|REQ-ID|ROLE]]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; validate CONFIG RUN_ID host DECISION; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]"
 
 func execute(args []string) (any, error) {
 	if len(args) > 0 && args[0] == "reconcile" {
@@ -1319,6 +1373,28 @@ func execute(args []string) (any, error) {
 	}
 	if len(args) >= 3 && args[0] == "publish" {
 		return publish(args[1], args[2:])
+	}
+	if len(args) == 3 && args[0] == "plan" && slugRE.MatchString(args[2]) {
+		// tool-spec §51.4: the incremental plan without creating a run — what `prepare … since` would give the roles.
+		cfg, err := loadConfig(args[1], true)
+		if err != nil {
+			return nil, err
+		}
+		m, err := snapshot(cfg)
+		if err != nil {
+			return nil, err
+		}
+		reports, err := os.OpenRoot(cfg.ReportsDir)
+		if err != nil {
+			return nil, err
+		}
+		defer reports.Close()
+		plan, err := incrementalPlan(reports, args[2], m)
+		if err != nil {
+			return nil, err
+		}
+		m.Incremental = plan
+		return map[string]any{"since_run": plan.SinceRun, "review_id": plan.ReviewID, "assessed": plan.Assessed, "reasons": plan.Reasons, "carried": len(plan.Carried), "tasks": pending(newState(m))}, nil
 	}
 	if len(args) >= 2 && args[0] == "anchors" {
 		cfg, err := loadConfig(args[1], true)
@@ -1497,7 +1573,7 @@ func execute(args []string) (any, error) {
 			return nil, err
 		}
 		for _, entry := range state.Entries {
-			if err := writeDispatch(run, entry.Task, prompt); err != nil {
+			if err := writeDispatch(run, entry.Task, prompt, m.Incremental); err != nil {
 				return nil, err
 			}
 		}
@@ -1708,7 +1784,7 @@ func execute(args []string) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := writeDispatch(run, entry.Task, prompt); err != nil {
+		if err := writeDispatch(run, entry.Task, prompt, m.Incremental); err != nil {
 			return nil, err
 		}
 		return entry.Task, nil
@@ -1815,8 +1891,18 @@ func makeReport(runID string, m Manifest, state State, fresh bool) Report {
 			report.RawProvenance = append(report.RawProvenance, RawProvenance{entry.Task.TaskID, entry.Task.Attempt, kind, entry.RawSHA256})
 		}
 	}
+	report.Incremental = incrementalSummary(m)
 	for _, req := range m.Requirements {
 		row := RequirementReport{Requirement: req, Roles: []RoleReport{}}
+		if carriedVerdict(m, req.ID) != nil {
+			for _, scope := range m.Config.Scopes {
+				for _, id := range scope.Requirements {
+					if id == req.ID {
+						row.Scope = scope.ID
+					}
+				}
+			}
+		}
 		for _, entry := range state.Entries {
 			for _, assigned := range entry.Task.Requirements {
 				if assigned.ID != req.ID {
@@ -1900,6 +1986,32 @@ func incrementalPlan(reports *os.Root, sinceRun string, m Manifest) (*Incrementa
 	for _, a := range record.Assessments {
 		verdicts[a.RequirementID] = a
 	}
+	// §51.1: a changed or new tests file anywhere is the only signal that a verification gap may have closed.
+	testsChanged := false
+	for _, file := range m.Files {
+		if file.Kind == "tests" && prevFiles[file.Path] != file.SHA256 {
+			testsChanged = true
+			break
+		}
+	}
+	root, err := os.OpenRoot(m.Config.ProjectRoot)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	contents := map[string][]byte{}
+	quoteHolds := func(c Citation) bool {
+		data, ok := contents[c.Path]
+		if !ok {
+			data, err = readRoot(root, c.Path, maxFile)
+			if err != nil {
+				return false
+			}
+			contents[c.Path] = data
+		}
+		quote, err := lineQuote(data, c.LineStart, c.LineEnd)
+		return err == nil && quote == c.Quote
+	}
 	plan := &IncrementalPlan{SinceRun: sinceRun, ReviewID: record.ReviewID, Assessed: []string{}, Carried: []CarriedVerdict{}, Reasons: map[string]string{}}
 	for _, req := range m.Requirements {
 		verdict, decided := verdicts[req.ID]
@@ -1907,33 +2019,30 @@ func incrementalPlan(reports *os.Root, sinceRun string, m Manifest) (*Incrementa
 		switch {
 		case !decided || prevKeys[req.ID] != sameNorm(req):
 			reason = "new"
-		case isGap(NormBrief{Specification: verdict.Specification, Implementation: verdict.Implementation, Assertion: verdict.Assertion}):
-			reason = "gap"
+		case verdict.Implementation != "supported":
+			reason = "gap" // implementation gap: contradicted or unknown — always reassessed
+		case verdict.Assertion != "relevant" && testsChanged:
+			reason = "gap" // verification gap: reassessed only when some tests file changed (§51.1)
 		}
 		files := []SourceFile{}
 		if reason == "" {
+			// §51.1: «changed» means a cited quote no longer stands at its lines, not that the file's hash moved.
 			seen := map[string]bool{}
-			paths := []string{}
-			for _, c := range verdict.Spec {
-				paths = append(paths, c.Path)
-			}
-			for _, c := range verdict.Code {
-				paths = append(paths, c.Path)
-			}
+			citations := append([]Citation{}, verdict.Spec...)
+			citations = append(citations, verdict.Code...)
 			for _, t := range verdict.Tests {
-				paths = append(paths, t.Citation.Path)
+				citations = append(citations, t.Citation)
 			}
-			for _, path := range paths {
-				if seen[path] {
-					continue
-				}
-				seen[path] = true
-				current, ok := currentFiles[path]
-				if !ok || current.SHA256 != prevFiles[path] {
+			for _, c := range citations {
+				current, ok := currentFiles[c.Path]
+				if !ok || !quoteHolds(c) {
 					reason = "changed"
 					break
 				}
-				files = append(files, SourceFile{Path: path, Kind: current.Kind, SHA256: current.SHA256, Bytes: current.Bytes, Reference: current.Reference})
+				if !seen[c.Path] {
+					seen[c.Path] = true
+					files = append(files, SourceFile{Path: c.Path, Kind: current.Kind, SHA256: current.SHA256, Bytes: current.Bytes, Reference: current.Reference})
+				}
 			}
 		}
 		if reason != "" {

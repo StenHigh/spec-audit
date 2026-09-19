@@ -1189,11 +1189,13 @@ func TestIncrementalRerun(t *testing.T) {
 	decision := filepath.Join(base, "host-r1.json")
 	writeFixture(t, decision, legacyMarshal(t, ReviewDecision{1, "decision-r1", "r1", view.SnapshotID, view.BasisSHA256, "host", "s", rows, []string{}}))
 	runOK(t, "review", config, "r1", decision)
+	// §51.1: with unchanged sources only implementation gaps come back to the roles; supported norms — including weak
+	// ones while no tests file changed — are carried.
 	gap, sound := map[string]bool{}, []string{}
 	for _, a := range rows {
-		if a.Implementation != "supported" || a.Assertion != "relevant" || a.Specification != "ambiguous" && a.Specification != "clear" {
+		if a.Implementation != "supported" {
 			gap[a.RequirementID] = true
-		} else if a.Specification == "clear" {
+		} else {
 			sound = append(sound, a.RequirementID)
 		}
 	}
@@ -1286,7 +1288,7 @@ func TestIncrementalRerun(t *testing.T) {
 	wrong.Verdicts = append([]ReviewVerdictV3{}, draft.Verdicts...)
 	for i := range wrong.Verdicts {
 		if wrong.Verdicts[i].RequirementID == carriedID {
-			wrong.Verdicts[i].Assertion = "weak"
+			wrong.Verdicts[i].Implementation, wrong.Verdicts[i].Assertion = "unknown", "unknown"
 		}
 	}
 	wrong.Counts = countVerdicts(baseVerdicts(wrong.Verdicts))
@@ -1321,9 +1323,26 @@ func TestIncrementalRerun(t *testing.T) {
 	if ov := runOK(t, "overview", config).(Overview); ov.Scopes[0].Decided.RunID != "r3" || ov.Scopes[0].Decided.Carried != batch.Incremental.Carried || ov.Scopes[0].Decided.SinceRun != "r1" || ov.Scopes[0].Delta == nil || ov.Scopes[0].Delta.BaselineRun != "r1" {
 		t.Fatal("overview: инкрементальный run решён, динамика против r1", ov.Scopes[0].Decided.Carried, ov.Scopes[0].Delta)
 	}
-	// r4 after touching the file every verdict cites: the sound norm returns to the roles, nothing is carried.
-	writeFixture(t, filepath.Join(source, "source.go"), append(readFixture(t, filepath.Join(source, "source.go")), []byte("\n// touched\n")...))
-	if batch := runOK(t, "prepare", config, "r4", "since", "r3").(TaskBatch); batch.Incremental.Reasons["changed"] == 0 || batch.Incremental.Carried != 0 {
-		t.Fatal("изменённый цитируемый файл возвращает норму ролям", batch.Incremental)
+	// r4 after appending to the tests file: the cited quotes still stand at their lines (nothing «changed»), but a
+	// verification gap (the weak norm) is reassessed because a tests file changed (§51.1).
+	writeFixture(t, filepath.Join(source, "source_test.go"), append(readFixture(t, filepath.Join(source, "source_test.go")), []byte("\n// new test below\n")...))
+	weak := 0
+	for _, a := range rows {
+		if a.Implementation == "supported" && a.Assertion != "relevant" {
+			weak++
+		}
+	}
+	if batch := runOK(t, "prepare", config, "r4", "since", "r3").(TaskBatch); batch.Incremental.Reasons["changed"] != 0 || batch.Incremental.Reasons["gap"] != len(gap)+weak || batch.Incremental.Carried != len(sound)-weak {
+		t.Fatal("изменённый файл тестов возвращает weak-нормы ролям, дописанный файл не считается changed", batch.Incremental)
+	}
+	// r5 after inserting a line at the top of the code file: every cited quote moved — all carried norms come back.
+	writeFixture(t, filepath.Join(source, "source.go"), append([]byte("// shifted\n"), readFixture(t, filepath.Join(source, "source.go"))...))
+	if batch := runOK(t, "prepare", config, "r5", "since", "r3").(TaskBatch); batch.Incremental.Reasons["changed"] == 0 || batch.Incremental.Carried != 0 {
+		t.Fatal("сдвиг цитируемых строк возвращает нормы ролям", batch.Incremental)
+	}
+	// The role prompt of an incremental run names the source run and the reasons.
+	prompt := string(readFixture(t, filepath.Join(base, "runs/r5/dispatch", batch.Tasks[0].TaskID, "prompt.md")))
+	if !strings.Contains(prompt, "ИНКРЕМЕНТАЛЬНЫЙ RUN") || !strings.Contains(prompt, "(changed)") {
+		t.Fatal("промпт роли называет инкрементальный run и причины")
 	}
 }

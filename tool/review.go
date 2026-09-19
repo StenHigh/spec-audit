@@ -227,8 +227,8 @@ type PreviousHost struct {
 	Assertion      string   `json:"assertion"`
 	Statement      string   `json:"statement"`
 	Limitations    []string `json:"limitations"`
-	// SameFiles is false when the earlier run audited different source bytes (§40.1 as of 1.32): the norm is the same,
-	// the code may not be — read the verdict as history, not as a current reading.
+	// SameFiles is false when a file the earlier verdict cites changed since (§40.1 as of 1.33 — per norm, not per
+	// source set): the norm is the same, its evidence may not be — read the verdict as history, not as a current reading.
 	SameFiles bool `json:"same_files"`
 }
 
@@ -247,6 +247,8 @@ type Outcome struct {
 	ContradictedElsewhere []ElsewhereHit `json:"contradicted_elsewhere"`
 	// Carried names the run and decision a norm was carried from in an incremental run (§50): no role assessed it here.
 	Carried *CarriedRef `json:"carried,omitempty"`
+	// Reassessed is why the roles got this norm in an incremental run (§51.2): new | gap | changed; empty in a full run.
+	Reassessed string `json:"reassessed,omitempty"`
 }
 
 type CarriedRef struct {
@@ -311,6 +313,9 @@ func outcomes(m Manifest, state State, previous map[string]PreviousHost, elsewhe
 	differing := map[string]bool{}
 	for _, req := range m.Requirements {
 		row := Outcome{RequirementID: req.ID, Roles: map[string]RoleOutcome{}, AmbiguousOverClear: []string{}, ContradictedElsewhere: []ElsewhereHit{}}
+		if m.Incremental != nil {
+			row.Reassessed = m.Incremental.Reasons[req.ID]
+		}
 		if carried := carriedVerdict(m, req.ID); carried != nil {
 			row.Carried = &CarriedRef{m.Incremental.SinceRun, m.Incremental.ReviewID, carried.Specification, carried.Implementation, carried.Assertion}
 			for _, scope := range m.Config.Scopes {
@@ -497,14 +502,17 @@ func previousHostRun(reports *os.Root, other string, m Manifest) (map[string]Pre
 	if err != nil {
 		return nil, "", "", err
 	}
-	var brief struct {
-		Files        []SourceFile  `json:"files"`
-		Requirements []Requirement `json:"requirements"`
-	}
-	if err := json.Unmarshal(manifest, &brief); err != nil {
+	var brief Manifest
+	if err := strictJSON(manifest, &brief); err != nil {
 		return nil, "", "", err
 	}
-	sameFiles := filesDigest(brief.Files) == filesDigest(m.Files)
+	prevFiles, currentFiles := map[string]string{}, map[string]string{}
+	for _, file := range brief.Files {
+		prevFiles[file.Path] = file.SHA256
+	}
+	for _, file := range m.Files {
+		currentFiles[file.Path] = file.SHA256
+	}
 	comparable := map[string]bool{}
 	for _, req := range brief.Requirements {
 		comparable[sameNorm(req)] = true
@@ -532,30 +540,45 @@ func previousHostRun(reports *os.Root, other string, m Manifest) (map[string]Pre
 	if len(journal.Records) == 0 {
 		return nil, "", "", nil
 	}
-	type row struct {
-		RequirementID  string   `json:"requirement_id"`
-		Specification  string   `json:"specification"`
-		Implementation string   `json:"implementation"`
-		Assertion      string   `json:"assertion"`
-		Statement      string   `json:"statement"`
-		Limitations    []string `json:"limitations"`
-	}
-	var last struct {
-		ReviewID    string `json:"review_id"`
-		Assessments []row  `json:"assessments"`
-		Verdicts    []row  `json:"verdicts"`
-	}
-	if err := json.Unmarshal([]byte(journal.Records[len(journal.Records)-1]), &last); err != nil {
+	// The verdict with the roles' evidence merged in (version 2/3 records carry only the host's own citations), so the
+	// per-norm same_files check sees every file the verdict actually rests on; the replay form is the fallback.
+	raw := []byte(journal.Records[len(journal.Records)-1])
+	last, err := validateReview(raw, other, brief, nil, false)
+	if err != nil {
 		return nil, "", "", err
 	}
+	if stateData, err := readRoot(run, "state.json", maxState); err == nil {
+		var prevState State
+		if strictJSON(stateData, &prevState) == nil {
+			if merged, err := validateReview(raw, other, brief, &prevState, false); err == nil {
+				last = merged
+			}
+		}
+	}
 	states := map[string]PreviousHost{}
-	for _, r := range append(last.Assessments, last.Verdicts...) {
+	for _, r := range last.Assessments {
 		if !shared[r.RequirementID] {
 			continue
 		}
 		limitations := r.Limitations
 		if limitations == nil {
 			limitations = []string{}
+		}
+		sameFiles := true
+		paths := []string{}
+		for _, c := range r.Spec {
+			paths = append(paths, c.Path)
+		}
+		for _, c := range r.Code {
+			paths = append(paths, c.Path)
+		}
+		for _, t := range r.Tests {
+			paths = append(paths, t.Citation.Path)
+		}
+		for _, path := range paths {
+			if currentFiles[path] != prevFiles[path] {
+				sameFiles = false
+			}
 		}
 		states[r.RequirementID] = PreviousHost{Specification: r.Specification, Implementation: r.Implementation, Assertion: r.Assertion, Statement: r.Statement, Limitations: limitations, SameFiles: sameFiles}
 	}
@@ -1266,7 +1289,9 @@ func requirementText(view RequirementView, brief bool) string {
 		b.WriteString("\n")
 	}
 	if c := view.Outcome.Carried; c != nil {
-		fmt.Fprintf(&b, "\nПеренесено из %s/%s без переоценки: %s/%s/%s (цитируемые файлы не менялись)", c.RunID, c.ReviewID, c.Specification, c.Implementation, c.Assertion)
+		fmt.Fprintf(&b, "\nПеренесено из %s/%s без переоценки: %s/%s/%s (цитируемые строки не менялись)", c.RunID, c.ReviewID, c.Specification, c.Implementation, c.Assertion)
+	} else if view.Outcome.Reassessed != "" {
+		fmt.Fprintf(&b, "\nПереоценена в инкрементальном run: причина %s", view.Outcome.Reassessed)
 	}
 	fmt.Fprintf(&b, "\nИтог ролей: agree=%t", view.Outcome.Agree)
 	// tool-spec §44.2: one line per sibling norm with the number of overlapping citations, not one per line pair.
