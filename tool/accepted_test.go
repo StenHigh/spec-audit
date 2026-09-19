@@ -907,6 +907,32 @@ func TestReferenceSources(t *testing.T) {
 		if !strings.Contains(html, "справочный источник — кандидаты не извлекались") || !strings.Contains(html, `data-reference="yes"`) {
 			t.Fatal("HTML не помечает справочный источник")
 		}
+		// Review 2.6 / §59: справочная цитата первой не делает справочный файл владельцем нормы в сводке.
+		config, base = referenceFixture(t)
+		refFirst := candidateAt(t, base, "clarification.md", "C002", "Срок задержки — рабочий день", 3, 3)
+		refFirst.Citations = append(refFirst.Citations, candidateAt(t, base, "rules.md", "C002", "", 4, 4).Citations[0])
+		mixed := candidateAt(t, base, "rules.md", "C001", "Уведомить при задержке", 4, 4)
+		mixed.Citations = append(mixed.Citations, candidateAt(t, base, "clarification.md", "C001", "", 3, 3).Citations[0])
+		raw, decision := acceptedInputs(t, config, "ref-first", []legacyCandidate{mixed, refFirst}, acceptOperation("accept", []string{}, "C001"), acceptOperation("accept", []string{}, "C002"))
+		runOK(t, "reconcile", config, raw, decision)
+		runOK(t, "prepare", config, "ref-run-2")
+		runOK(t, "report", config, "ref-run-2")
+		if err := json.Unmarshal(readFixture(t, filepath.Join(base, "runs/ref-run-2/report.json")), &report); err != nil {
+			t.Fatal(err)
+		}
+		sections = map[string]AuditSection{}
+		for _, section := range report.Navigation.Sections {
+			sections[section.Path] = section
+		}
+		var refFirstRow *RequirementReport
+		for i := range report.Requirements {
+			if report.Requirements[i].Requirement.Source.Path == "clarification.md" {
+				refFirstRow = &report.Requirements[i]
+			}
+		}
+		if refFirstRow == nil || refFirstRow.Navigation.Section != "rules.md" || sections["clarification.md"].Total != 0 || sections["rules.md"].Total != 2 {
+			t.Fatal("владелец нормы в сводке — первая нормативная цитата, source не меняется", report.Navigation.Sections)
+		}
 		// In-memory: карта без run различает группы по признаку, а не по kind.
 		m := Manifest{Config: Config{ProjectRoot: "/work", References: &Sources{Paths: []string{"TZ/defs.md"}}}, Files: []SourceFile{
 			{Path: "TZ/defs.md", Kind: "spec", Reference: true}, {Path: "TZ/spec.md", Kind: "spec"}, {Path: "src/code.go", Kind: "code"},
