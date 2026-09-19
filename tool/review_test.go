@@ -874,8 +874,10 @@ func TestReviewPreviousHost(t *testing.T) {
 	}
 	writeFixture(t, filepath.Join(base, "source/rules.md"), append(readFixture(t, filepath.Join(base, "source/rules.md")), []byte("\n<!-- другой snapshot -->\n")...))
 	submitAll("c")
-	if view := runOK(t, "review", config, "c").(ReviewContext); view.Outcomes[0].PreviousHost != nil {
-		t.Fatal("другой snapshot — previous_host отсутствует", view.Outcomes[0].PreviousHost)
+	// tool-spec 1.32: a comment appended to the spec file changes the snapshot but not the norms — the previous verdict
+	// stays, marked same_files: false.
+	if view := runOK(t, "review", config, "c").(ReviewContext); view.Outcomes[0].PreviousHost == nil || view.Outcomes[0].PreviousHost.SameFiles {
+		t.Fatal("другой snapshot при тех же нормах — previous_host с same_files: false", view.Outcomes[0].PreviousHost)
 	}
 }
 
@@ -956,11 +958,18 @@ func TestReviewPreviousHostAccepted(t *testing.T) {
 	if !reflect.DeepEqual(flagged.Outcomes[1].AmbiguousOverClear, []string{"redteam"}) || flagged.Outcomes[1].Agree || len(flagged.Outcomes[0].AmbiguousOverClear) != 0 {
 		t.Fatal("ambiguous над принятой clear назван по роли", flagged.Outcomes[1].AmbiguousOverClear, flagged.Outcomes[0].AmbiguousOverClear)
 	}
-	// Changed sources: no carry-over even for an identical norm.
+	// Changed sources (tool-spec 1.32): the identical norm still gets its previous verdict, marked same_files: false —
+	// exactly the «rerun after the fix» reading aid; the delta and the host decide what it means.
 	writeFixture(t, filepath.Join(base, "source/source.go"), append(readFixture(t, filepath.Join(base, "source/source.go")), []byte("\n// изменение\n")...))
 	submitAll("e")
-	if view := runOK(t, "review", config, "e").(ReviewContext); view.Outcomes[0].PreviousHost != nil {
-		t.Fatal("другие файлы — previous_host отсутствует", view.Outcomes[0].PreviousHost)
+	if view := runOK(t, "review", config, "e").(ReviewContext); view.Outcomes[0].PreviousHost == nil || view.Outcomes[0].PreviousHost.SameFiles || view.Outcomes[0].PreviousHost.RunID != "c" {
+		t.Fatal("другие файлы — previous_host остаётся с same_files: false", view.Outcomes[0].PreviousHost)
+	}
+	if text := runOK(t, "review", config, "e", view.Requirements[0].ID, "brief").(map[string]string)["text"]; !strings.Contains(text, "источники с тех пор изменились") {
+		t.Fatalf("brief предупреждает об изменившихся источниках:\n%s", text)
+	}
+	if same := runOK(t, "review", config, "d").(ReviewContext); same.Outcomes[0].PreviousHost == nil || !same.Outcomes[0].PreviousHost.SameFiles {
+		t.Fatal("те же файлы — same_files: true", same.Outcomes[0].PreviousHost)
 	}
 }
 

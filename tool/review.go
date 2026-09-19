@@ -227,6 +227,9 @@ type PreviousHost struct {
 	Assertion      string   `json:"assertion"`
 	Statement      string   `json:"statement"`
 	Limitations    []string `json:"limitations"`
+	// SameFiles is false when the earlier run audited different source bytes (§40.1 as of 1.32): the norm is the same,
+	// the code may not be — read the verdict as history, not as a current reading.
+	SameFiles bool `json:"same_files"`
 }
 
 // Outcome is the derived per-norm row of the review context: both roles side by side and whether they agree.
@@ -501,9 +504,7 @@ func previousHostRun(reports *os.Root, other string, m Manifest) (map[string]Pre
 	if err := json.Unmarshal(manifest, &brief); err != nil {
 		return nil, "", "", err
 	}
-	if filesDigest(brief.Files) != filesDigest(m.Files) {
-		return nil, "", "", nil
-	}
+	sameFiles := filesDigest(brief.Files) == filesDigest(m.Files)
 	comparable := map[string]bool{}
 	for _, req := range brief.Requirements {
 		comparable[sameNorm(req)] = true
@@ -556,7 +557,7 @@ func previousHostRun(reports *os.Root, other string, m Manifest) (map[string]Pre
 		if limitations == nil {
 			limitations = []string{}
 		}
-		states[r.RequirementID] = PreviousHost{Specification: r.Specification, Implementation: r.Implementation, Assertion: r.Assertion, Statement: r.Statement, Limitations: limitations}
+		states[r.RequirementID] = PreviousHost{Specification: r.Specification, Implementation: r.Implementation, Assertion: r.Assertion, Statement: r.Statement, Limitations: limitations, SameFiles: sameFiles}
 	}
 	recordedAt := ""
 	if versions, err := readToolVersions(run); err == nil {
@@ -1296,7 +1297,11 @@ func requirementText(view RequirementView, brief bool) string {
 	}
 	if view.Outcome.PreviousHost != nil {
 		p := view.Outcome.PreviousHost
-		fmt.Fprintf(&b, "; прошлый хост %s/%s: %s/%s/%s — %s", p.RunID, p.ReviewID, p.Specification, p.Implementation, p.Assertion, p.Statement)
+		note := ""
+		if !p.SameFiles {
+			note = " [источники с тех пор изменились]"
+		}
+		fmt.Fprintf(&b, "; прошлый хост %s/%s%s: %s/%s/%s — %s", p.RunID, p.ReviewID, note, p.Specification, p.Implementation, p.Assertion, p.Statement)
 	}
 	b.WriteString("\n")
 	locate := func(c Citation) string { return fmt.Sprintf("%s:%d-%d", c.Path, c.LineStart, c.LineEnd) }
