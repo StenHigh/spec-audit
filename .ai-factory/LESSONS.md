@@ -100,6 +100,7 @@
 | Сводная HTML-карта корпуса `corpus` (§45) | 2026-09-18 | tool-spec 1.25, `TestCorpus`; README «Приёмка и ограничения»; `.spec-audit/corpus.html` на пилоте |
 | Сужение statement при принятии — DECISION version 2 (§46, REQ-SA-049); GAP на карте корпуса (§45.1) | 2026-09-18 | tool-spec 1.27, `TestAcceptNarrowed`, `TestCorpus`; README «Приёмка и ограничения» |
 | Динамика GAP между решёнными run, `baseline_run` (§47) | 2026-09-18 | tool-spec 1.28, `TestCorpusDelta`; README «Приёмка и ограничения» |
+| Подсказки `hints.json`, advisory о supported с limitations, правило модели ролей (§62) | 2026-09-19 | tool-spec 1.44, `TestReviewPreviousHost`, `TestReviewBrief`, SKILL.md; adoption двадцатый–двадцать первый циклы |
 | Токены ролей — состав контекста и `dispatch/files.txt` (§61) | 2026-09-19 | tool-spec 1.43, `TestPrepareDispatch`; README «Приёмка и ограничения»; эффект проверяется на следующем живом прогоне |
 | Бенчмарки и кэш проверенных источников (§60) | 2026-09-19 | tool-spec 1.42, `tool/bench_test.go`, `TestSourceCache`; README «Приёмка и ограничения» |
 | Контракт первой справочной цитаты (§59) | 2026-09-19 | tool-spec 1.41, `TestReferenceSources/report`; README «Приёмка и ограничения» |
