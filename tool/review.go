@@ -1165,11 +1165,22 @@ type ReviewBrief struct {
 	Carried           int             `json:"carried"`       // norms carried from an earlier run (§50)
 	KnownDefects      int             `json:"known_defects"` // carried contradicted verdicts (§52.1)
 	Assessed          int             `json:"assessed"`
+	// Advisories warn before the decision (§53.2): a previous verdict the host cannot repeat without its own citations.
+	Advisories []string `json:"advisories"`
 }
 
 func reviewBrief(context ReviewContext) ReviewBrief {
-	brief := ReviewBrief{context.RunID, context.SnapshotID, context.DeliveryComplete, context.Freshness, context.State, context.BasisSHA256, context.History, context.Form, len(context.Requirements), context.Roles, context.Outcomes, 0, []string{}, 0, 0, 0}
+	brief := ReviewBrief{context.RunID, context.SnapshotID, context.DeliveryComplete, context.Freshness, context.State, context.BasisSHA256, context.History, context.Form, len(context.Requirements), context.Roles, context.Outcomes, 0, []string{}, 0, 0, 0, []string{}}
 	for _, row := range context.Outcomes {
+		if p := row.PreviousHost; p != nil && row.Carried == nil && oneOf(p.Assertion, "relevant", "weak", "contradicts") {
+			tests := 0
+			for _, role := range row.Roles {
+				tests += role.Citations.Tests
+			}
+			if tests == 0 {
+				brief.Advisories = append(brief.Advisories, fmt.Sprintf("%s: прошлый хост %s/%s — assertion %s, а роли этого run тестов не цитируют; повторить вердикт можно только с собственной тестовой цитатой (version 3)", row.RequirementID, p.RunID, p.ReviewID, p.Assertion))
+			}
+		}
 		if row.Carried != nil {
 			brief.Carried++
 			if row.Carried.KnownDefect {
