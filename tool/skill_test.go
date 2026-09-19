@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"path"
@@ -398,6 +399,14 @@ func TestSkill(t *testing.T) {
 		{name: "escape_host_parent", prepare: func(t *testing.T, dir string) {
 			link(t, t.TempDir(), filepath.Join(dir, ".agents"))
 		}, sub: "install", host: "codex", fail: true},
+		{name: "leftover_staging_ignored", prepare: func(t *testing.T, dir string) {
+			write(t, filepath.Join(dir, ".spec-audit", skillStagingPrefix+"old", "SKILL.md"), []byte("half"))
+		}, sub: "install", host: "codex", updated: true, links: map[string]string{codex: "created"}, check: func(t *testing.T, dir string) {
+			checkInstalled(t, dir, codex)
+			if data, err := os.ReadFile(filepath.Join(dir, ".spec-audit", skillStagingPrefix+"old", "SKILL.md")); err != nil || string(data) != "half" {
+				t.Fatal("чужой staging-каталог удалён или изменён")
+			}
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -437,8 +446,33 @@ func TestSkill(t *testing.T) {
 			if entries, _ := filepath.Glob(filepath.Join(skillPath(dir), ".tmp-*")); len(entries) != 0 {
 				t.Fatalf("временные файлы: %v", entries)
 			}
+			if entries, _ := filepath.Glob(filepath.Join(dir, ".spec-audit", skillStagingPrefix+"*")); len(entries) != 0 && tc.name != "leftover_staging_ignored" {
+				t.Fatalf("staging-каталог остался: %v", entries)
+			}
 		})
 	}
+	// An I/O failure while the fresh copy is being built leaves no skill directory at all — never a copy without receipt.
+	t.Run("interrupted_install_leaves_nothing", func(t *testing.T) {
+		dir := t.TempDir()
+		dirRoot, err := os.OpenRoot(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer dirRoot.Close()
+		broken := map[string][]byte{"a": []byte("file"), "a/b": []byte("needs a directory")}
+		if err := writeSkill(dirRoot, broken, sortedKeys(broken), "absent", "0.1.0"); err == nil {
+			t.Fatal("ожидался отказ ввода-вывода")
+		}
+		if _, err := os.Lstat(skillPath(dir)); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("частичный каталог skill опубликован: %v", err)
+		}
+		if entries, _ := filepath.Glob(filepath.Join(dir, ".spec-audit", skillStagingPrefix+"*")); len(entries) != 0 {
+			t.Fatalf("staging-каталог остался: %v", entries)
+		}
+		if got, err := runSkill("install", dir, "codex", false, "0.1.0"); err != nil || got["updated"] != true {
+			t.Fatalf("повторная установка: %v %v", err, got)
+		}
+	})
 }
 
 func hasCreated(links map[string]string) bool {
