@@ -851,12 +851,26 @@ func TestReviewPreviousHost(t *testing.T) {
 		writeFixture(t, path, legacyMarshal(t, decision))
 		runOK(t, "review", config, runID, path)
 	}
-	submitAll("a")
+	batchA := submitAll("a")
 	if view := runOK(t, "review", config, "a").(ReviewContext); view.Outcomes[0].PreviousHost != nil || len(view.Outcomes[0].Roles["mapper"].Limitations) != 0 {
 		t.Fatal("без соседей previous_host отсутствует; limitations — пустой массив", view.Outcomes[0])
 	}
+	// §62.1: before any decision the hints are empty; after run a is decided, run b's hints name the cited code/tests.
+	var hints DispatchHints
+	if err := json.Unmarshal(readFixture(t, filepath.Join(base, "runs/a/dispatch", batchA.Tasks[0].TaskID, "hints.json")), &hints); err != nil || len(hints.Requirements) != 0 || hints.SourceRun != "" {
+		t.Fatal("hints без истории должны быть пустыми", err, hints)
+	}
 	decide("a", "host-review-001")
-	submitAll("b")
+	batchB := submitAll("b")
+	if err := json.Unmarshal(readFixture(t, filepath.Join(base, "runs/b/dispatch", batchB.Tasks[0].TaskID, "hints.json")), &hints); err != nil || hints.SourceRun != "a" || hints.ReviewID != "host-review-001" {
+		t.Fatal("hints должны ссылаться на решённый run", err, hints)
+	}
+	if paths := hints.Requirements[batchB.Tasks[0].Requirements[0].ID]; len(paths) == 0 || paths[0] != "source.go" || strings.Contains(strings.Join(paths, ","), "rules.md") {
+		t.Fatal("hints — пути кода/тестов из решения, без ТЗ и вердиктов", hints)
+	}
+	if prompt := string(readFixture(t, filepath.Join(base, "runs/b/dispatch", batchB.Tasks[0].TaskID, "prompt.md"))); !strings.Contains(prompt, "hints.json") || !strings.Contains(prompt, "HINTS") {
+		t.Fatal("prompt.md должен называть HINTS")
+	}
 	writeFixture(t, filepath.Join(base, "runs/broken/manifest.json"), []byte("{not json"))
 	view := runOK(t, "review", config, "b").(ReviewContext)
 	prior := view.Outcomes[0].PreviousHost
@@ -1296,6 +1310,8 @@ func TestReviewBrief(t *testing.T) {
 		result := sampleResult(t, task, filepath.Join(base, "source"))
 		if task.Role == "redteam" {
 			result.Assessments[0].Assertion = "weak"
+			// §62.2: a supported verdict with a limitation is flagged for the host.
+			result.Assessments[1].Limitations = []string{"ветка отката не читалась"}
 		}
 		path := filepath.Join(base, task.TaskID+".json")
 		writeFixture(t, path, legacyMarshal(t, result))
@@ -1311,6 +1327,15 @@ func TestReviewBrief(t *testing.T) {
 	raw, err := json.Marshal(brief)
 	if err != nil || bytes.Contains(raw, []byte(`"entries"`)) || bytes.Contains(raw, []byte(`"quote"`)) {
 		t.Fatal("сводка не несёт entries и цитат", err)
+	}
+	limited := 0
+	for _, advisory := range brief.Advisories {
+		if strings.Contains(advisory, "supported с 1 limitations") && strings.HasPrefix(advisory, full.Outcomes[1].RequirementID+": redteam") {
+			limited++
+		}
+	}
+	if limited != 1 {
+		t.Fatal("advisory о supported с limitations", brief.Advisories)
 	}
 	if !bytes.Equal(versionsBefore, readFixture(t, versionsPath)) {
 		t.Fatal("сводка не должна писать провенанс")
