@@ -115,7 +115,17 @@ type AcceptedDecision struct {
 	Operations []AcceptedOperation `json:"operations"`
 }
 
+// acceptedCommit is one package of the ledger. Ledger version 2 (tool-spec §55) records which source_set files were
+// references when the package was applied; version 1 commits have no classification and are replayed as
+// `classified: false` — freshness then compares bytes only, as before.
 type acceptedCommit struct {
+	Raw        string   `json:"raw"`
+	Decision   string   `json:"decision"`
+	References []string `json:"references"`
+	Classified bool     `json:"classified"`
+}
+
+type acceptedCommitV1 struct {
 	Raw      string `json:"raw"`
 	Decision string `json:"decision"`
 }
@@ -123,6 +133,48 @@ type acceptedCommit struct {
 type acceptedLedger struct {
 	Version int              `json:"version"`
 	Commits []acceptedCommit `json:"commits"`
+}
+
+type acceptedLedgerV1 struct {
+	Version int                `json:"version"`
+	Commits []acceptedCommitV1 `json:"commits"`
+}
+
+const ledgerVersion = 2
+
+// decodeLedger reads a version 1 or 2 ledger into the current form; any other version is refused.
+func decodeLedger(data []byte) (acceptedLedger, error) {
+	var head struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &head); err != nil {
+		return acceptedLedger{}, errors.New("недопустимый JSON журнала индекса")
+	}
+	switch head.Version {
+	case 1:
+		var old acceptedLedgerV1
+		if err := strictJSON(data, &old); err != nil {
+			return acceptedLedger{}, err
+		}
+		if err := requiredJSON(data, reflect.TypeOf(old)); err != nil {
+			return acceptedLedger{}, err
+		}
+		ledger := acceptedLedger{Version: 1, Commits: []acceptedCommit{}}
+		for _, c := range old.Commits {
+			ledger.Commits = append(ledger.Commits, acceptedCommit{c.Raw, c.Decision, []string{}, false})
+		}
+		return ledger, nil
+	case ledgerVersion:
+		var ledger acceptedLedger
+		if err := strictJSON(data, &ledger); err != nil {
+			return acceptedLedger{}, err
+		}
+		if err := requiredJSON(data, reflect.TypeOf(ledger)); err != nil {
+			return acceptedLedger{}, err
+		}
+		return ledger, nil
+	}
+	return acceptedLedger{}, errors.New("неверная версия или размер журнала индекса")
 }
 
 type AcceptedRecord struct {
@@ -162,12 +214,15 @@ type acceptedState struct {
 	AcceptedSummary
 	Records   []AcceptedRecord `json:"records"`
 	SourceSet []legacySource   `json:"source_set"`
-	nextID    int
+	// References/Classified come from the last package's commit (§55): which source_set files were references then.
+	References []string `json:"references"`
+	Classified bool     `json:"classified"`
+	nextID     int
 }
 
 func emptyAccepted() acceptedState {
 	return acceptedState{AcceptedSummary: AcceptedSummary{digest([]byte("accepted-index/1")), []AcceptedHistory{}},
-		Records: []AcceptedRecord{}, SourceSet: []legacySource{}, nextID: 1}
+		Records: []AcceptedRecord{}, SourceSet: []legacySource{}, References: []string{}, nextID: 1}
 }
 
 func acceptedRequirement(candidate legacyCandidate, target AcceptedTarget) Requirement {
@@ -328,13 +383,10 @@ func readAccepted(reportsDir string) (acceptedLedger, acceptedState, error) {
 	if err != nil {
 		return ledger, state, err
 	}
-	if err := strictJSON(data, &ledger); err != nil {
+	if ledger, err = decodeLedger(data); err != nil {
 		return ledger, state, err
 	}
-	if err := requiredJSON(data, reflect.TypeOf(ledger)); err != nil {
-		return ledger, state, err
-	}
-	if ledger.Version != 1 || len(ledger.Commits) > 128 {
+	if len(ledger.Commits) > 128 {
 		return ledger, state, errors.New("неверная версия или размер журнала индекса")
 	}
 	for _, commit := range ledger.Commits {
@@ -350,6 +402,9 @@ func readAccepted(reportsDir string) (acceptedLedger, acceptedState, error) {
 			return ledger, state, err
 		}
 		state, err = applyAccepted(state, raw, decision, []byte(commit.Raw), []byte(commit.Decision))
+		if err == nil {
+			state.References, state.Classified = commit.References, commit.Classified
+		}
 		if err != nil {
 			return ledger, state, err
 		}
@@ -427,10 +482,13 @@ func normativeAnchor(raw legacyRaw, decision AcceptedDecision, reference map[str
 }
 
 func acceptedFresh(state acceptedState, files []SourceFile) bool {
-	selected := map[string]string{}
+	selected, references := map[string]string{}, []string{}
 	for _, file := range files {
 		if file.Kind == "spec" {
 			selected[file.Path] = file.SHA256
+			if file.Reference {
+				references = append(references, file.Path)
+			}
 		}
 	}
 	if len(state.History) == 0 || len(selected) != len(state.SourceSet) {
@@ -438,6 +496,13 @@ func acceptedFresh(state acceptedState, files []SourceFile) bool {
 	}
 	for _, source := range state.SourceSet {
 		if selected[source.Path] != source.SHA256 {
+			return false
+		}
+	}
+	// §55: a file moved between specs and references with the same bytes changes what the norms may rest on.
+	if state.Classified {
+		sort.Strings(references)
+		if !slices.Equal(references, state.References) {
 			return false
 		}
 	}
@@ -570,9 +635,19 @@ func stageAcceptance(cfg Config, ledger acceptedLedger, state acceptedState, dec
 	if err != nil {
 		return staged, err
 	}
-	// A copied commit list: the caller's ledger keeps its backing array untouched.
-	commits := append(append([]acceptedCommit{}, ledger.Commits...), acceptedCommit{string(rawBytes), string(decisionBytes)})
-	staged.ledger = acceptedLedger{Version: ledger.Version, Commits: commits}
+	// §55: the package records which source_set files were references; a later regrouping makes the index stale.
+	references := []string{}
+	for _, source := range raw.SourceSet {
+		if reference[source.Path] {
+			references = append(references, source.Path)
+		}
+	}
+	sort.Strings(references)
+	next.References, next.Classified = references, true
+	// A copied commit list: the caller's ledger keeps its backing array untouched; the file is always written in the
+	// current ledger version (older commits stay unclassified).
+	commits := append(append([]acceptedCommit{}, ledger.Commits...), acceptedCommit{string(rawBytes), string(decisionBytes), references, true})
+	staged.ledger = acceptedLedger{Version: ledgerVersion, Commits: commits}
 	data, err := json.MarshalIndent(staged.ledger, "", "  ")
 	if err != nil || len(data)+1 > maxState {
 		return staged, errors.New("журнал превышает 32 MiB; индекс не опубликован")

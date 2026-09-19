@@ -562,7 +562,7 @@ func TestAcceptedAppendBounds(t *testing.T) {
 		}
 		rawValue := legacyRaw{1, set, []legacyCandidate{}, []string{}}
 		plain := legacyMarshal(t, rawValue)
-		state, ledger := emptyAccepted(), acceptedLedger{1, []acceptedCommit{}}
+		state, ledger := emptyAccepted(), acceptedLedger{ledgerVersion, []acceptedCommit{}}
 		// Valid large whitespace in old raw strings, not a corrupt padded ledger.
 		for i := 0; i < 4; i++ {
 			raw := append(append([]byte{}, plain...), bytes.Repeat([]byte("\t"), 3<<20)...)
@@ -572,7 +572,7 @@ func TestAcceptedAppendBounds(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ledger.Commits = append(ledger.Commits, acceptedCommit{string(raw), string(encoded)})
+			ledger.Commits = append(ledger.Commits, acceptedCommit{string(raw), string(encoded), []string{}, true})
 		}
 		// Two large raw strings in the next commit's raw and decision can fill the remaining space.
 		decision := AcceptedDecision{1, "exact-bytes", state.Head, digest(plain), []AcceptedOperation{}}
@@ -583,9 +583,9 @@ func TestAcceptedAppendBounds(t *testing.T) {
 			if len(raw) > maxResult || len(encoded) > maxResult {
 				t.Fatal("некорректная fixture: input превышает 4 MiB")
 			}
-			return acceptedCommit{string(raw), string(encoded)}
+			return acceptedCommit{string(raw), string(encoded), []string{}, true}
 		}
-		probe := acceptedLedger{1, append(append([]acceptedCommit{}, ledger.Commits...), makeCommit(0))}
+		probe := acceptedLedger{ledgerVersion, append(append([]acceptedCommit{}, ledger.Commits...), makeCommit(0))}
 		encoded, err := json.MarshalIndent(probe, "", "  ")
 		if err != nil {
 			t.Fatal(err)
@@ -1108,4 +1108,56 @@ func TestAcceptNarrowed(t *testing.T) {
 	bad := filepath.Join(base, "v3.json")
 	writeFixture(t, bad, []byte(`{"version":3,"decision_id":"x","base_index":"y","raw_sha256":"z","operations":[]}`))
 	runFail(t, "check", config, rawPath, bad)
+}
+
+// tool-spec §55: moving an unchanged file between specs and references makes the index stale; a version 1 ledger
+// (no classification) is still read and compares bytes only.
+func TestReferenceGroupFreshness(t *testing.T) {
+	config, base := referenceFixture(t)
+	c := candidateAt(t, base, "rules.md", "C001", "Лимит 8 МиБ", 2, 2)
+	raw, decision := acceptedInputs(t, config, "initial", []legacyCandidate{c}, acceptOperation("accept", []string{}, "C001"))
+	applied := runOK(t, "reconcile", config, raw, decision).(map[string]any)
+	if applied["freshness"] != "fresh" {
+		t.Fatal("после применения индекс fresh", applied["freshness"])
+	}
+	var ledger acceptedLedger
+	if err := json.Unmarshal(readFixture(t, filepath.Join(base, "runs", acceptedFile)), &ledger); err != nil || ledger.Version != ledgerVersion || !ledger.Commits[0].Classified || !reflect.DeepEqual(ledger.Commits[0].References, []string{"clarification.md"}) {
+		t.Fatal("журнал версии 2 записывает классификацию источников", err, ledger)
+	}
+	// Same bytes, clarification.md regrouped into specs: stale.
+	plain := readFixture(t, config)
+	regrouped := bytes.Replace(plain, []byte("specs: {paths: [rules.md]}"), []byte("specs: {paths: [rules.md, clarification.md]}"), 1)
+	regrouped = bytes.Replace(regrouped, []byte("references: {paths: [clarification.md]}\n"), nil, 1)
+	writeFixture(t, config, regrouped)
+	if view := runOK(t, "reconcile", config).(map[string]any); view["freshness"] != "stale" {
+		t.Fatal("перенос файла между группами при тех же байтах — stale", view["freshness"])
+	}
+	runFail(t, "index", config)
+	writeFixture(t, config, plain)
+	if view := runOK(t, "reconcile", config).(map[string]any); view["freshness"] != "fresh" {
+		t.Fatal("прежняя группировка — снова fresh", view["freshness"])
+	}
+	// A version 1 ledger of the same commits: readable, unclassified, fresh under either grouping.
+	old := acceptedLedgerV1{1, []acceptedCommitV1{}}
+	for _, commit := range ledger.Commits {
+		old.Commits = append(old.Commits, acceptedCommitV1{commit.Raw, commit.Decision})
+	}
+	writeFixture(t, filepath.Join(base, "runs", acceptedFile), legacyMarshal(t, old))
+	if view := runOK(t, "reconcile", config).(map[string]any); view["freshness"] != "fresh" || view["journal"].(acceptedLedger).Commits[0].Classified {
+		t.Fatal("журнал версии 1 читается без классификации", view["freshness"])
+	}
+	writeFixture(t, config, regrouped)
+	if view := runOK(t, "reconcile", config).(map[string]any); view["freshness"] != "fresh" {
+		t.Fatal("без классификации сравниваются только байты", view["freshness"])
+	}
+	writeFixture(t, config, plain)
+	// The next package rewrites the ledger in version 2, keeping the old commit unclassified.
+	second := candidateAt(t, base, "rules.md", "C001", "Название карточки обязательно", 3, 3)
+	raw, decision = acceptedInputs(t, config, "second", []legacyCandidate{second}, acceptOperation("keep", []string{"REQ-AI-001"}), acceptOperation("accept", []string{}, "C001"))
+	runOK(t, "reconcile", config, raw, decision)
+	if err := json.Unmarshal(readFixture(t, filepath.Join(base, "runs", acceptedFile)), &ledger); err != nil || ledger.Version != ledgerVersion || ledger.Commits[0].Classified || !ledger.Commits[1].Classified {
+		t.Fatal("после нового пакета журнал версии 2, старый commit без классификации", err, ledger.Version)
+	}
+	writeFixture(t, filepath.Join(base, "runs", acceptedFile), []byte(`{"version":3,"commits":[]}`))
+	runFail(t, "reconcile", config)
 }
