@@ -901,7 +901,7 @@ func TestTypedReportEndToEnd(t *testing.T) {
 
 // externalTypedRun выполняет prepare и php-typed настоящим бинарником против синтетического примера
 // в его собственном контейнере. Требует Docker и переменную окружения с CONFIG примера; иначе skip.
-func externalTypedRun(t *testing.T, envName, fixtureName string) []byte {
+func externalTypedRun(t *testing.T, envName, fixtureName string) (artifact []byte, config string) {
 	t.Helper()
 	configPath := os.Getenv(envName)
 	if configPath == "" {
@@ -915,7 +915,7 @@ func externalTypedRun(t *testing.T, envName, fixtureName string) []byte {
 	reports := filepath.Join(t.TempDir(), "reports")
 	raw = strings.Replace(raw, "project_root: .", "project_root: "+root, 1)
 	raw = regexp.MustCompile(`(?m)^reports_dir: .*$`).ReplaceAllString(raw, "reports_dir: "+reports)
-	config := filepath.Join(t.TempDir(), "config.yaml")
+	config = filepath.Join(t.TempDir(), "config.yaml")
 	writeFixture(t, config, []byte(raw))
 	cfg, err := loadConfig(config)
 	if err != nil {
@@ -935,7 +935,7 @@ func externalTypedRun(t *testing.T, envName, fixtureName string) []byte {
 	started := time.Now()
 	response := runOK(t, append([]string{"php-typed", config, "external"}, files...)...).(map[string]any)
 	t.Logf("php-typed: %d файлов за %s, facts=%v diagnostics=%v", len(files), time.Since(started).Round(time.Millisecond), response["facts"], response["diagnostics"])
-	artifact := readFixture(t, response["artifact"].(string))
+	artifact = readFixture(t, response["artifact"].(string))
 	if os.Getenv("SPEC_AUDIT_TYPED_RECORD") == "1" {
 		writeFixture(t, filepath.Join("testdata", fixtureName), artifact)
 		t.Logf("фикстура %s перезаписана", fixtureName)
@@ -945,16 +945,41 @@ func externalTypedRun(t *testing.T, envName, fixtureName string) []byte {
 		t.Fatal("state должен содержать запись SDK", err)
 	}
 	t.Logf("versions: phpstan=%s larastan=%s", state.SDK[0].PHPStanVersion, state.SDK[0].LarastanVersion)
-	return artifact
+	return artifact, config
 }
 
 func TestExternalTypedPlain(t *testing.T) {
-	artifact := externalTypedRun(t, "SPEC_AUDIT_TYPED_PLAIN_CONFIG", "typed-plain.json")
+	artifact, config := externalTypedRun(t, "SPEC_AUDIT_TYPED_PLAIN_CONFIG", "typed-plain.json")
 	var envelope TypedEnvelope
 	if err := json.Unmarshal(artifact, &envelope); err != nil || envelope.Profile != "php" || len(envelope.BootstrapFiles) != 0 {
 		t.Fatal("профиль php без bootstrap", err)
 	}
 	checkControlCases(t, "plain", "positive", envelope.Facts)
+	// Review 2.7: класс с трейтом вне запрошенного множества — факты трейта отбрасываются, envelope принимается.
+	t.Run("trait_outside_files", func(t *testing.T) {
+		const trait, user = "src/Support/Audited.php", "src/AuditedStore.php"
+		if !hasCitationPath(envelope.Facts, trait) {
+			t.Fatal("полный прогон должен содержать факты трейта")
+		}
+		runOK(t, "prepare", config, "subset")
+		response := runOK(t, "php-typed", config, "subset", user).(map[string]any)
+		var subset TypedEnvelope
+		if err := json.Unmarshal(readFixture(t, response["artifact"].(string)), &subset); err != nil {
+			t.Fatal(err)
+		}
+		if len(subset.Files) != 1 || subset.Files[0].Path != user || hasCitationPath(subset.Facts, trait) || !hasCitationPath(subset.Facts, user) {
+			t.Fatalf("факты по одному файлу: files=%v facts=%d", subset.Files, len(subset.Facts))
+		}
+	})
+}
+
+func hasCitationPath(facts []TypedFact, path string) bool {
+	for _, fact := range facts {
+		if fact.Citation.Path == path {
+			return true
+		}
+	}
+	return false
 }
 
 type controlCase struct {
@@ -1168,7 +1193,7 @@ func TestExternalTypedLaravel(t *testing.T) {
 	}
 	dir := filepath.Dir(configPath)
 	composeApp(t, dir)
-	artifact := externalTypedRun(t, "SPEC_AUDIT_TYPED_LARAVEL_CONFIG", "typed-laravel.json")
+	artifact, _ := externalTypedRun(t, "SPEC_AUDIT_TYPED_LARAVEL_CONFIG", "typed-laravel.json")
 	var envelope TypedEnvelope
 	if err := json.Unmarshal(artifact, &envelope); err != nil || envelope.Profile != "laravel" || !oneOf(larastanBoot, envelope.BootstrapFiles...) {
 		t.Fatal("профиль laravel с bootstrap Larastan", err)

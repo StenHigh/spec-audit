@@ -328,6 +328,9 @@ final class FactSink implements Rule
                 }
             }
         }
+        // Факт из трейта цитирует файл трейта; если трейт не входит в запрошенное множество, факт отбрасывается
+        // (контракт: путь цитаты ∈ files), иначе Go отклонил бы весь envelope.
+        $facts = array_values(array_filter($facts, static fn (array $fact): bool => isset($files[$fact['citation']['path']])));
         $basisPaths = [];
         foreach ([$this->allConfigFiles, $this->bootstrapFiles, $this->scanFiles, $this->stubFilesProvider->getStubFiles()] as $list) {
             foreach ($list as $path) {
