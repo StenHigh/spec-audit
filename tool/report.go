@@ -240,6 +240,21 @@ func assessmentExecutions(assessment Assessment, receipts []Receipt) []TestExecu
 	return result
 }
 
+// primarySection is the derived owner of a norm for the summary (tool-spec §16.1, §59): the first normative citation.
+// A reference file never owns a norm (REQ-SA-041); Source itself stays the first citation of the package.
+func primarySection(req Requirement, reference map[string]bool) string {
+	citations := []Citation{req.Source}
+	if req.Accepted != nil {
+		citations = req.Accepted.Citations
+	}
+	for _, c := range citations {
+		if !reference[c.Path] {
+			return c.Path
+		}
+	}
+	return req.Source.Path
+}
+
 func buildNavigation(report *Report, m Manifest) {
 	slog.Debug("начало карты отчёта", "files", len(m.Files), "requirements", len(report.Requirements))
 	groups := []NavigationGroup{{Kind: "spec", Selection: m.Config.Specs}}
@@ -270,8 +285,10 @@ func buildNavigation(report *Report, m Manifest) {
 	specDir := ""
 	evidence := map[string]int{}
 	referenceSections := 0
+	reference := map[string]bool{}
 	for _, file := range m.Files {
 		files[file.Path] = len(nav.Files)
+		reference[file.Path] = file.Reference
 		nav.Files = append(nav.Files, NavigationFile{SourceFile: file, ID: "f-" + digest([]byte(file.Path)), Evidence: []NavigationEvidence{}})
 		if file.Kind == "spec" {
 			sections[file.Path] = len(nav.Sections)
@@ -325,7 +342,7 @@ func buildNavigation(report *Report, m Manifest) {
 	for i := range report.Requirements {
 		row := &report.Requirements[i]
 		req := row.Requirement
-		row.Navigation = RequirementNavigation{Section: req.Source.Path, Basis: "roles", Flags: []string{}, Host: host[req.ID], HostExecutions: []TestExecution{}}
+		row.Navigation = RequirementNavigation{Section: primarySection(req, reference), Basis: "roles", Flags: []string{}, Host: host[req.ID], HostExecutions: []TestExecution{}}
 		if report.HostReview != nil && host[req.ID] != nil {
 			a := host[req.ID]
 			row.Navigation.HostStates = a.Specification + "/" + a.Implementation + "/" + a.Assertion
