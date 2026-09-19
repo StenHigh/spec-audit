@@ -680,7 +680,16 @@ func validateReview(data []byte, runID string, m Manifest, state *State, checkSo
 	}
 	task := Task{TaskID: "host-review", Attempt: 1, SnapshotID: m.SnapshotID, Role: "host", Scope: "host", Requirements: m.Requirements}
 	result := Result{task.TaskID, 1, m.SnapshotID, task.Role, task.Scope, decision.Summary, decision.Assessments, decision.Limitations}
-	if err := validateResult(result, task, m, checkSources); err != nil {
+	var sources *sourceCache
+	if checkSources {
+		root, err := os.OpenRoot(m.Config.ProjectRoot)
+		if err != nil {
+			return reviewRecord{}, err
+		}
+		defer root.Close()
+		sources = newSourceCache(root)
+	}
+	if err := validateResult(result, task, m, sources); err != nil {
 		return reviewRecord{}, err
 	}
 	return reviewRecord{1, decision.ReviewID, decision.RunID, decision.SnapshotID, decision.Reviewer, decision.BasisSHA256, decision.Summary, decision.Assessments, nil, nil, decision.Limitations}, nil
@@ -771,16 +780,16 @@ func validateVerdicts(record reviewRecord, verdicts []ReviewVerdictV3, counts Re
 	for _, req := range m.Requirements {
 		requirements[req.ID] = req
 	}
-	var root *os.Root
+	var sources *sourceCache
 	if checkSources {
 		for _, verdict := range verdicts {
 			if len(verdict.Spec)+len(verdict.Code)+len(verdict.Tests) > 0 {
-				opened, err := os.OpenRoot(m.Config.ProjectRoot)
+				root, err := os.OpenRoot(m.Config.ProjectRoot)
 				if err != nil {
 					return reviewRecord{}, err
 				}
-				root = opened
 				defer root.Close()
+				sources = newSourceCache(root)
 				break
 			}
 		}
@@ -796,7 +805,7 @@ func validateVerdicts(record reviewRecord, verdicts []ReviewVerdictV3, counts Re
 		if err := checkVerdict(verdict.base(), req); err != nil {
 			return reviewRecord{}, fmt.Errorf("%s: %w", verdict.RequirementID, err)
 		}
-		if err := checkCitations(verdict.Spec, verdict.Code, verdict.Tests, req, m, root, checkSources); err != nil {
+		if err := checkCitations(verdict.Spec, verdict.Code, verdict.Tests, req, m, sources); err != nil {
 			return reviewRecord{}, fmt.Errorf("%s: цитаты хоста: %w", verdict.RequirementID, err)
 		}
 		bases = append(bases, verdict.base())

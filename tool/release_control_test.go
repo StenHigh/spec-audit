@@ -199,7 +199,12 @@ func TestReleasePairSources(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := validateResult(result, batch.Tasks[0], m, true); err != nil {
+			root, err := os.OpenRoot(m.Config.ProjectRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer root.Close()
+			if err := validateResult(result, batch.Tasks[0], m, newSourceCache(root)); err != nil {
 				t.Fatal(err)
 			}
 		})

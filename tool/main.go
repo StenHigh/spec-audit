@@ -588,7 +588,7 @@ func lineQuote(data []byte, start, end int) (string, error) {
 	}
 	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
 	if start < 1 || end < start || end > len(lines) {
-		return "", errors.New("диапазон цитаты вне источника")
+		return "", errQuoteRange
 	}
 	return strings.TrimSuffix(strings.Join(lines[start-1:end], "\n"), "\r"), nil
 }
@@ -870,7 +870,8 @@ func requiredJSON(data json.RawMessage, typ reflect.Type) error {
 	return nil
 }
 
-func validateResult(result Result, task Task, m Manifest, checkSources bool) error {
+// validateResult checks one role answer against its task; sources == nil skips the source checks (stale run).
+func validateResult(result Result, task Task, m Manifest, sources *sourceCache) error {
 	if result.TaskID != task.TaskID || result.Scope != task.Scope || result.Role != task.Role {
 		return errors.New("task_id, scope или role не совпадают с заданием")
 	}
@@ -888,15 +889,6 @@ func validateResult(result Result, task Task, m Manifest, checkSources bool) err
 			return errors.New("limitation не может быть пустой строкой")
 		}
 	}
-	var root *os.Root
-	if checkSources {
-		var err error
-		root, err = os.OpenRoot(m.Config.ProjectRoot)
-		if err != nil {
-			return err
-		}
-		defer root.Close()
-	}
 	assigned := map[string]Requirement{}
 	for _, req := range task.Requirements {
 		assigned[req.ID] = req
@@ -911,7 +903,7 @@ func validateResult(result Result, task Task, m Manifest, checkSources bool) err
 			return fmt.Errorf("%s: assessment требует назначенный уникальный requirement_id и statement", req.ID)
 		}
 		seen[req.ID] = true
-		if err := checkAssessment(assessment, req, m, root, checkSources); err != nil {
+		if err := checkAssessment(assessment, req, m, sources); err != nil {
 			return fmt.Errorf("%s: %w", req.ID, err)
 		}
 	}
@@ -919,7 +911,7 @@ func validateResult(result Result, task Task, m Manifest, checkSources bool) err
 }
 
 // Per-requirement checks; the caller prefixes the requirement ID so a role can locate the failing assessment.
-func checkAssessment(assessment Assessment, req Requirement, m Manifest, root *os.Root, checkSources bool) error {
+func checkAssessment(assessment Assessment, req Requirement, m Manifest, sources *sourceCache) error {
 	if !oneOf(assessment.Specification, "clear", "ambiguous") || !oneOf(assessment.Implementation, "supported", "contradicted", "unknown") || !oneOf(assessment.Assertion, "relevant", "weak", "contradicts", "missing", "unknown") {
 		return errors.New("недопустимое состояние specification/implementation/assertion")
 	}
@@ -937,11 +929,46 @@ func checkAssessment(assessment Assessment, req Requirement, m Manifest, root *o
 			return errors.New("пустое limitation")
 		}
 	}
-	return checkCitations(assessment.Spec, assessment.Code, assessment.Tests, req, m, root, checkSources)
+	return checkCitations(assessment.Spec, assessment.Code, assessment.Tests, req, m, sources)
+}
+
+// sourceCache serves citation checks within one command (tool-spec §60): a cited file is read, hashed against
+// the manifest and split into lines once, not once per citation. nil means the sources are not checked.
+var errQuoteRange = errors.New("диапазон цитаты вне источника")
+
+type sourceCache struct {
+	root  *os.Root
+	lines map[string][]string
+}
+
+func newSourceCache(root *os.Root) *sourceCache {
+	return &sourceCache{root: root, lines: map[string][]string{}}
+}
+
+func (c *sourceCache) quote(file SourceFile, start, end int) (string, error) {
+	lines, ok := c.lines[file.Path]
+	if !ok {
+		data, err := readRoot(c.root, file.Path, maxFile)
+		if err != nil {
+			return "", err
+		}
+		if digest(data) != file.SHA256 {
+			return "", errors.New("снимок источников изменился")
+		}
+		if _, err := lineQuote(data, 1, 1); err != nil {
+			return "", fmt.Errorf("%w: %v", errQuoteRange, err)
+		}
+		lines = strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+		c.lines[file.Path] = lines
+	}
+	if start < 1 || end < start || end > len(lines) {
+		return "", errQuoteRange
+	}
+	return strings.TrimSuffix(strings.Join(lines[start-1:end], "\n"), "\r"), nil
 }
 
 // checkCitations applies the §7 citation rules to one group set; a host's own citations (§25) pass the same checks.
-func checkCitations(spec, code []Citation, testCitations []TestCitation, req Requirement, m Manifest, root *os.Root, checkSources bool) error {
+func checkCitations(spec, code []Citation, testCitations []TestCitation, req Requirement, m Manifest, sources *sourceCache) error {
 	tests := []Citation{}
 	for _, test := range testCitations {
 		if strings.TrimSpace(test.TestID) == "" || len(test.TestID) > 1024 {
@@ -968,17 +995,13 @@ func checkCitations(spec, code []Citation, testCitations []TestCitation, req Req
 				// tool-spec §42.3: name the accepted ranges (locations only, never quotes — REQ-SA-015) so the role fixes it once.
 				return fmt.Errorf("цитата вне блока назначенного требования; допустимые диапазоны: %s", strings.Join(sourceRanges(req), ", "))
 			}
-			if !checkSources {
+			if sources == nil {
 				continue
 			}
-			data, err := readRoot(root, citation.Path, maxFile)
-			if err != nil {
+			quote, err := sources.quote(file, citation.LineStart, citation.LineEnd)
+			if err != nil && !errors.Is(err, errQuoteRange) {
 				return err
 			}
-			if digest(data) != file.SHA256 {
-				return errors.New("снимок источников изменился")
-			}
-			quote, err := lineQuote(data, citation.LineStart, citation.LineEnd)
 			if err != nil || quote != citation.Quote {
 				return fmt.Errorf("цитата не совпадает с полными строками %s:%d-%d", citation.Path, citation.LineStart, citation.LineEnd)
 			}
@@ -1614,13 +1637,23 @@ func execute(args []string) (any, error) {
 		if len(savedState.Entries) != len(state.Entries) {
 			return nil, errors.New("повреждено число заданий в state")
 		}
+		var sources *sourceCache
+		if fresh {
+			// One cache for every stored answer: a cited file is read and hashed once per command (tool-spec §60).
+			root, err := os.OpenRoot(m.Config.ProjectRoot)
+			if err != nil {
+				return nil, err
+			}
+			defer root.Close()
+			sources = newSourceCache(root)
+		}
 		for i, entry := range savedState.Entries {
 			state.Entries[i].Task.Attempt = entry.Task.Attempt
 			if entry.Task.Attempt < 1 || !reflect.DeepEqual(entry.Task, state.Entries[i].Task) {
 				return nil, errors.New("повреждено описание задания в state")
 			}
 			if entry.Result != nil {
-				if err := validateResult(*entry.Result, entry.Task, m, fresh); err != nil {
+				if err := validateResult(*entry.Result, entry.Task, m, sources); err != nil {
 					return nil, fmt.Errorf("сохранённый результат повреждён: %w", err)
 				}
 			}
@@ -1811,7 +1844,12 @@ func execute(args []string) (any, error) {
 	if err := requiredJSON(data, reflect.TypeOf(result)); err != nil {
 		return nil, err
 	}
-	if err := validateResult(result, entry.Task, m, true); err != nil {
+	root, err := os.OpenRoot(m.Config.ProjectRoot)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	if err := validateResult(result, entry.Task, m, newSourceCache(root)); err != nil {
 		return nil, err
 	}
 	canonical, err := json.MarshalIndent(result, "", "  ")
