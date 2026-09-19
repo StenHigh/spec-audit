@@ -257,6 +257,7 @@ type CarriedRef struct {
 	Specification  string `json:"specification"`
 	Implementation string `json:"implementation"`
 	Assertion      string `json:"assertion"`
+	KnownDefect    bool   `json:"known_defect"` // §52.1
 }
 
 type ElsewhereHit struct {
@@ -317,7 +318,7 @@ func outcomes(m Manifest, state State, previous map[string]PreviousHost, elsewhe
 			row.Reassessed = m.Incremental.Reasons[req.ID]
 		}
 		if carried := carriedVerdict(m, req.ID); carried != nil {
-			row.Carried = &CarriedRef{m.Incremental.SinceRun, m.Incremental.ReviewID, carried.Specification, carried.Implementation, carried.Assertion}
+			row.Carried = &CarriedRef{m.Incremental.SinceRun, m.Incremental.ReviewID, carried.Specification, carried.Implementation, carried.Assertion, carried.KnownDefect}
 			for _, scope := range m.Config.Scopes {
 				for _, id := range scope.Requirements {
 					if id == req.ID {
@@ -1161,15 +1162,19 @@ type ReviewBrief struct {
 	Outcomes          []Outcome       `json:"outcomes"`
 	Agree             int             `json:"agree"`
 	Disagree          []string        `json:"disagree"`
-	Carried           int             `json:"carried"` // norms carried from an earlier run (§50)
+	Carried           int             `json:"carried"`       // norms carried from an earlier run (§50)
+	KnownDefects      int             `json:"known_defects"` // carried contradicted verdicts (§52.1)
 	Assessed          int             `json:"assessed"`
 }
 
 func reviewBrief(context ReviewContext) ReviewBrief {
-	brief := ReviewBrief{context.RunID, context.SnapshotID, context.DeliveryComplete, context.Freshness, context.State, context.BasisSHA256, context.History, context.Form, len(context.Requirements), context.Roles, context.Outcomes, 0, []string{}, 0, 0}
+	brief := ReviewBrief{context.RunID, context.SnapshotID, context.DeliveryComplete, context.Freshness, context.State, context.BasisSHA256, context.History, context.Form, len(context.Requirements), context.Roles, context.Outcomes, 0, []string{}, 0, 0, 0}
 	for _, row := range context.Outcomes {
 		if row.Carried != nil {
 			brief.Carried++
+			if row.Carried.KnownDefect {
+				brief.KnownDefects++
+			}
 			continue
 		}
 		brief.Assessed++
@@ -1289,7 +1294,11 @@ func requirementText(view RequirementView, brief bool) string {
 		b.WriteString("\n")
 	}
 	if c := view.Outcome.Carried; c != nil {
-		fmt.Fprintf(&b, "\nПеренесено из %s/%s без переоценки: %s/%s/%s (цитируемые строки не менялись)", c.RunID, c.ReviewID, c.Specification, c.Implementation, c.Assertion)
+		kind := "цитируемые строки не менялись"
+		if c.KnownDefect {
+			kind = "известный дефект: противоречащие строки не менялись"
+		}
+		fmt.Fprintf(&b, "\nПеренесено из %s/%s без переоценки: %s/%s/%s (%s)", c.RunID, c.ReviewID, c.Specification, c.Implementation, c.Assertion, kind)
 	} else if view.Outcome.Reassessed != "" {
 		fmt.Fprintf(&b, "\nПереоценена в инкрементальном run: причина %s", view.Outcome.Reassessed)
 	}

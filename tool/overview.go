@@ -126,12 +126,14 @@ type RunOverview struct {
 	Disagree         []string       `json:"disagree"`
 	// Attention lists the host verdicts that are not supported+relevant (contradicted, unknown, ambiguous, weak/missing/
 	// contradicts) with title and statement — what the corpus page shows per scope (§45).
-	Attention []NormBrief          `json:"attention"`
-	Gap       Gap                  `json:"gap"`
-	Carried   int                  `json:"carried"` // norms carried from an earlier run without reassessment (§50)
-	SinceRun  string               `json:"since_run,omitempty"`
-	verdicts  map[string]NormBrief // id → host verdict, for the scope delta (§47)
-	keys      map[string]string    // id → content_hash|revision, so only the same norm is compared
+	Attention    []NormBrief `json:"attention"`
+	Gap          Gap         `json:"gap"`
+	Carried      int         `json:"carried"` // norms carried from an earlier run without reassessment (§50)
+	KnownDefects int         `json:"known_defects"`
+	SinceRun     string      `json:"since_run,omitempty"`
+	carriedIDs   map[string]bool
+	verdicts     map[string]NormBrief // id → host verdict, for the scope delta (§47)
+	keys         map[string]string    // id → content_hash|revision, so only the same norm is compared
 }
 
 // Delta is the change between the two latest decided runs of a scope (tool-spec §47): what the product fix closed,
@@ -143,6 +145,7 @@ type Delta struct {
 	Opened       []NormChange `json:"opened"`  // was not a gap, is one now
 	Changed      []NormChange `json:"changed"` // a gap in both, but the states differ
 	Unchanged    int          `json:"unchanged"`
+	Carried      int          `json:"carried"`      // of the unchanged, how many were carried without reassessment (§52.2)
 	Incomparable []string     `json:"incomparable"` // new, retired or revised norms — no like-for-like comparison
 	GapBefore    Gap          `json:"gap_before"`
 	GapAfter     Gap          `json:"gap_after"`
@@ -181,6 +184,9 @@ func scopeDelta(baseline, current RunOverview) *Delta {
 			d.Changed = append(d.Changed, change)
 		default:
 			d.Unchanged++
+			if current.carriedIDs[id] {
+				d.Carried++
+			}
 		}
 	}
 	for id := range baseline.verdicts {
@@ -378,7 +384,13 @@ func runOverview(reports *os.Root, runID, current string) (RunOverview, []Contra
 		view.PreparedAt, view.ToolVersion = versions.Records[0].RecordedAt, versions.Records[0].ToolVersion
 	}
 	if m.Incremental != nil {
-		view.Carried, view.SinceRun = len(m.Incremental.Carried), m.Incremental.SinceRun
+		view.Carried, view.SinceRun, view.carriedIDs = len(m.Incremental.Carried), m.Incremental.SinceRun, map[string]bool{}
+		for _, c := range m.Incremental.Carried {
+			view.carriedIDs[c.RequirementID] = true
+			if c.KnownDefect {
+				view.KnownDefects++
+			}
+		}
 	}
 	status := makeStatus(runID, m, state, view.SnapshotCurrent)
 	view.DeliveryComplete, view.Expected, view.Submitted = status.DeliveryComplete, status.Expected, status.Submitted

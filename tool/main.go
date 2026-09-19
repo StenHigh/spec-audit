@@ -137,6 +137,7 @@ type CarriedVerdict struct {
 	Code           []Citation     `json:"code"`
 	Tests          []TestCitation `json:"tests"`
 	Files          []SourceFile   `json:"files"`
+	KnownDefect    bool           `json:"known_defect"` // carried contradicted verdict on unchanged lines (§52.1)
 }
 
 type Task struct {
@@ -213,10 +214,11 @@ type TaskBatch struct {
 }
 
 type IncrementalSummary struct {
-	SinceRun string         `json:"since_run"`
-	Assessed int            `json:"assessed"`
-	Carried  int            `json:"carried"`
-	Reasons  map[string]int `json:"reasons"`
+	SinceRun     string         `json:"since_run"`
+	Assessed     int            `json:"assessed"`
+	Carried      int            `json:"carried"`
+	KnownDefects int            `json:"known_defects"` // carried contradicted verdicts (§52.1)
+	Reasons      map[string]int `json:"reasons"`
 }
 
 func incrementalSummary(m Manifest) *IncrementalSummary {
@@ -227,7 +229,13 @@ func incrementalSummary(m Manifest) *IncrementalSummary {
 	for _, reason := range m.Incremental.Reasons {
 		reasons[reason]++
 	}
-	return &IncrementalSummary{m.Incremental.SinceRun, len(m.Incremental.Assessed), len(m.Incremental.Carried), reasons}
+	defects := 0
+	for _, c := range m.Incremental.Carried {
+		if c.KnownDefect {
+			defects++
+		}
+	}
+	return &IncrementalSummary{m.Incremental.SinceRun, len(m.Incremental.Assessed), len(m.Incremental.Carried), defects, reasons}
 }
 
 type Status struct {
@@ -1070,7 +1078,7 @@ func rolePromptFor(task Task, p dispatchPrompt, plan *IncrementalPlan) []byte {
 			reasons = append(reasons, req.ID+" ("+r+")")
 		}
 	}
-	note := fmt.Sprintf("\nИНКРЕМЕНТАЛЬНЫЙ RUN: этот run продолжает %s. Тебе выданы только нормы, которые нужно переоценить — %s; причины: new — норма новая или пересмотрена, gap — прежний вердикт не был clear/supported/relevant, changed — цитируемые строки изменились. Остальные %d норм scope перенесены хостом с прежними вердиктами и в TASK не входят: не ищи их и не оценивай. Оценивай выданные нормы полностью и независимо, как в обычном run.\n", plan.SinceRun, strings.Join(reasons, ", "), len(plan.Carried))
+	note := fmt.Sprintf("\nИНКРЕМЕНТАЛЬНЫЙ RUN: этот run продолжает %s. Тебе выданы только нормы, которые нужно переоценить — %s; причины: new — норма новая или пересмотрена, implementation_gap — реализация была contradicted/unknown, verification_gap — тесты были weak/missing/contradicts, changed — цитируемые строки изменились. Остальные %d норм scope перенесены хостом с прежними вердиктами и в TASK не входят: не ищи их и не оценивай. Оценивай выданные нормы полностью и независимо, как в обычном run.\n", plan.SinceRun, strings.Join(reasons, ", "), len(plan.Carried))
 	return []byte(body + note)
 }
 
@@ -2019,10 +2027,12 @@ func incrementalPlan(reports *os.Root, sinceRun string, m Manifest) (*Incrementa
 		switch {
 		case !decided || prevKeys[req.ID] != sameNorm(req):
 			reason = "new"
-		case verdict.Implementation != "supported":
-			reason = "gap" // implementation gap: contradicted or unknown — always reassessed
+		case verdict.Implementation == "unknown":
+			reason = "implementation_gap" // nothing cited to rest on — always reassessed
+		case verdict.Implementation == "contradicted":
+			// §52.1: a known defect is carried while its cited lines stand (checked below); tests cannot fix it.
 		case verdict.Assertion != "relevant" && testsChanged:
-			reason = "gap" // verification gap: reassessed only when some tests file changed (§51.1)
+			reason = "verification_gap" // reassessed only when some tests file changed (§51.1)
 		}
 		files := []SourceFile{}
 		if reason == "" {
@@ -2054,7 +2064,10 @@ func incrementalPlan(reports *os.Root, sinceRun string, m Manifest) (*Incrementa
 		if limitations == nil {
 			limitations = []string{}
 		}
-		plan.Carried = append(plan.Carried, CarriedVerdict{req.ID, verdict.Specification, verdict.Implementation, verdict.Assertion, verdict.Statement, limitations, verdict.Spec, verdict.Code, verdict.Tests, files})
+		// §52.1: a contradicted verdict whose cited lines still stand is carried as a known defect — a test cannot fix
+		// a contradiction and the contradicting lines have not moved — and is counted separately everywhere; it returns
+		// to the roles the moment any of its cited lines changes («changed» above).
+		plan.Carried = append(plan.Carried, CarriedVerdict{req.ID, verdict.Specification, verdict.Implementation, verdict.Assertion, verdict.Statement, limitations, verdict.Spec, verdict.Code, verdict.Tests, files, verdict.Implementation == "contradicted"})
 	}
 	slog.Info("prepare: инкрементальный run", "since", sinceRun, "review_id", record.ReviewID, "assessed", len(plan.Assessed), "carried", len(plan.Carried))
 	return plan, nil
