@@ -1113,9 +1113,21 @@ func TestCorpusDelta(t *testing.T) {
 	if d.Closed[0].To != "clear/supported/relevant" || !strings.Contains(d.Closed[0].From, "contradicted") || d.Opened[0].To != "clear/supported/weak" {
 		t.Fatal("переходы состояний", d.Closed, d.Opened)
 	}
+	// §53.1: a gap norm whose implementation got worse is listed as worsened, not only as changed.
+	decide("r2b", func(rows *[]Assessment) {
+		fixed(rows)
+		for i := range *rows {
+			if (*rows)[i].Implementation == "unknown" {
+				(*rows)[i].Implementation = "contradicted"
+			}
+		}
+	})
+	if w := runOK(t, "overview", config).(Overview); len(w.Scopes[0].Delta.Worsened) == 0 || w.Totals.Worsened != len(w.Scopes[0].Delta.Worsened) || !strings.Contains(w.Scopes[0].Delta.Worsened[0].To, "contradicted") {
+		t.Fatal("ухудшение внутри GAP выделяется отдельно", w.Scopes[0].Delta.Worsened)
+	}
 	// r3 repeats r2; the pinned baseline keeps comparing against r1.
 	decide("r3", fixed)
-	if d := runOK(t, "overview", config).(Overview).Scopes[0].Delta; d.BaselineRun != "r2" || len(d.Closed) != 0 || len(d.Opened) != 0 {
+	if d := runOK(t, "overview", config).(Overview).Scopes[0].Delta; d.BaselineRun != "r2b" || len(d.Closed) != 0 || len(d.Opened) != 0 {
 		t.Fatal("без baseline сравнение с предыдущим решённым", d.BaselineRun, len(d.Closed))
 	}
 	writeFixture(t, config, append(readFixture(t, config), []byte("baseline_run: r1\n")...))

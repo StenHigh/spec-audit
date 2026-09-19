@@ -47,6 +47,7 @@ type OverviewTotals struct {
 	Gap            Gap            `json:"gap"`
 	Closed         int            `json:"closed"` // sums of the scope deltas (§47)
 	Opened         int            `json:"opened"`
+	Worsened       int            `json:"worsened"` // §53.1
 }
 
 // Gap is the industry reading of a gap analysis over the host's verdicts (tool-spec §45.1): a norm is a gap when it is
@@ -140,10 +141,11 @@ type RunOverview struct {
 // what it opened, what moved inside the gap. Norms are compared only when their content and revision are identical.
 type Delta struct {
 	BaselineRun  string       `json:"baseline_run"`
-	Pinned       bool         `json:"pinned"`  // baseline named by CONFIG baseline_run rather than «the run before»
-	Closed       []NormChange `json:"closed"`  // was a gap in the baseline, is not one now
-	Opened       []NormChange `json:"opened"`  // was not a gap, is one now
-	Changed      []NormChange `json:"changed"` // a gap in both, but the states differ
+	Pinned       bool         `json:"pinned"`   // baseline named by CONFIG baseline_run rather than «the run before»
+	Closed       []NormChange `json:"closed"`   // was a gap in the baseline, is not one now
+	Opened       []NormChange `json:"opened"`   // was not a gap, is one now
+	Changed      []NormChange `json:"changed"`  // a gap in both, but the states differ
+	Worsened     []NormChange `json:"worsened"` // subset of changed where implementation or assertion got worse (§53.1)
 	Unchanged    int          `json:"unchanged"`
 	Carried      int          `json:"carried"`      // of the unchanged, how many were carried without reassessment (§52.2)
 	Incomparable []string     `json:"incomparable"` // new, retired or revised norms — no like-for-like comparison
@@ -158,6 +160,21 @@ type NormChange struct {
 	To    string `json:"to"`
 }
 
+// Severity orders for §53.1: a move to the right is a worsening even when the norm was already a gap.
+var (
+	implementationOrder = []string{"supported", "unknown", "contradicted"}
+	assertionOrder      = []string{"relevant", "weak", "unknown", "missing", "contradicts"}
+)
+
+func severity(state string, order []string) int {
+	for i, s := range order {
+		if s == state {
+			return i
+		}
+	}
+	return len(order)
+}
+
 func states(n NormBrief) string { return n.Specification + "/" + n.Implementation + "/" + n.Assertion }
 
 func isGap(n NormBrief) bool {
@@ -165,7 +182,7 @@ func isGap(n NormBrief) bool {
 }
 
 func scopeDelta(baseline, current RunOverview) *Delta {
-	d := &Delta{BaselineRun: baseline.RunID, Closed: []NormChange{}, Opened: []NormChange{}, Changed: []NormChange{}, Incomparable: []string{}, GapBefore: baseline.Gap, GapAfter: current.Gap}
+	d := &Delta{BaselineRun: baseline.RunID, Closed: []NormChange{}, Opened: []NormChange{}, Changed: []NormChange{}, Worsened: []NormChange{}, Incomparable: []string{}, GapBefore: baseline.Gap, GapAfter: current.Gap}
 	seen := map[string]bool{}
 	for id, now := range current.verdicts {
 		seen[id] = true
@@ -182,6 +199,9 @@ func scopeDelta(baseline, current RunOverview) *Delta {
 			d.Opened = append(d.Opened, change)
 		case states(was) != states(now):
 			d.Changed = append(d.Changed, change)
+			if severity(now.Implementation, implementationOrder) > severity(was.Implementation, implementationOrder) || severity(now.Assertion, assertionOrder) > severity(was.Assertion, assertionOrder) {
+				d.Worsened = append(d.Worsened, change)
+			}
 		default:
 			d.Unchanged++
 			if current.carriedIDs[id] {
@@ -194,7 +214,7 @@ func scopeDelta(baseline, current RunOverview) *Delta {
 			d.Incomparable = append(d.Incomparable, id)
 		}
 	}
-	for _, list := range []*[]NormChange{&d.Closed, &d.Opened, &d.Changed} {
+	for _, list := range []*[]NormChange{&d.Closed, &d.Opened, &d.Changed, &d.Worsened} {
 		sort.Slice(*list, func(i, j int) bool { return (*list)[i].ID < (*list)[j].ID })
 	}
 	sort.Strings(d.Incomparable)
@@ -224,6 +244,7 @@ func overview(paths []string) (Overview, error) {
 			if scope.Delta != nil {
 				view.Totals.Closed += len(scope.Delta.Closed)
 				view.Totals.Opened += len(scope.Delta.Opened)
+				view.Totals.Worsened += len(scope.Delta.Worsened)
 			}
 			g := scope.Decided.Gap
 			view.Totals.Gap.Total += g.Total
