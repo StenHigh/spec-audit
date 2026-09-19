@@ -1032,6 +1032,45 @@ func TestReviewValidateHost(t *testing.T) {
 		}
 	}
 	refuse("counts", func(d *ReviewDecisionV3) { d.Counts.Relevant++ }, "counts.relevant")
+	// review 2.5: the expected counts are a hand-written literal, not the production countVerdicts; every one of the
+	// nine fields refuses on its own when off by one.
+	literal := reviewV3Input(t, config, "v3-literal", "both")
+	for i := range literal.Verdicts {
+		literal.Verdicts[i].Concur = "mapper"
+	}
+	literal.Counts = ReviewCounts{Supported: 2, Contradicted: 1, ImplementationUnknown: 2, Relevant: 1, Weak: 1, Contradicts: 1, Missing: 1, AssertionUnknown: 1, Ambiguous: 1}
+	if !reflect.DeepEqual(literal.Counts, countVerdicts(baseVerdicts(literal.Verdicts))) {
+		t.Fatal("литеральный вектор расходится с фикстурой", countVerdicts(baseVerdicts(literal.Verdicts)))
+	}
+	for _, field := range []string{"supported", "contradicted", "implementation_unknown", "relevant", "weak", "contradicts", "missing", "assertion_unknown", "ambiguous"} {
+		off := literal
+		switch field {
+		case "supported":
+			off.Counts.Supported++
+		case "contradicted":
+			off.Counts.Contradicted++
+		case "implementation_unknown":
+			off.Counts.ImplementationUnknown++
+		case "relevant":
+			off.Counts.Relevant++
+		case "weak":
+			off.Counts.Weak++
+		case "contradicts":
+			off.Counts.Contradicts++
+		case "missing":
+			off.Counts.Missing++
+		case "assertion_unknown":
+			off.Counts.AssertionUnknown++
+		case "ambiguous":
+			off.Counts.Ambiguous++
+		}
+		if _, err := execute([]string{"validate", config, "review", "host", write(off, "literal-"+field)}); err == nil || !strings.Contains(err.Error(), "counts."+field) {
+			t.Fatalf("counts.%s: ожидался отказ по полю, получено %v", field, err)
+		}
+	}
+	if _, err := execute([]string{"validate", config, "review", "host", write(literal, "literal-ok")}); err != nil {
+		t.Fatal("литеральный вектор принимается", err)
+	}
 	refuse("quote", func(d *ReviewDecisionV3) { d.Verdicts[0].Code[0].Quote = "nope" }, "цитата не совпадает")
 	refuse("stale", func(d *ReviewDecisionV3) { d.BasisSHA256 = strings.Repeat("0", 64) }, "текущая база")
 	if _, err := os.Stat(journalPath); !os.IsNotExist(err) {
