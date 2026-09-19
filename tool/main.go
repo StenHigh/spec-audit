@@ -567,6 +567,19 @@ func cite(cfg Config, path, from, to string) (Citation, error) {
 }
 
 // sourceRanges lists a norm's citable spec ranges as path:A-B (tool-spec §42.3).
+// filesListing is dispatch/files.txt: `kind<TAB>path` per manifest file, `reference` for reference spec files (tool-spec §61).
+func filesListing(files []SourceFile) []byte {
+	var b strings.Builder
+	for _, file := range files {
+		kind := file.Kind
+		if file.Reference {
+			kind = "reference"
+		}
+		b.WriteString(kind + "\t" + file.Path + "\n")
+	}
+	return []byte(b.String())
+}
+
 func sourceRanges(req Requirement) []string {
 	sources := []Citation{req.Source}
 	if req.Accepted != nil {
@@ -1114,7 +1127,7 @@ func rolePromptBase(task Task, p dispatchPrompt) []byte {
 	fmt.Fprintf(&b, "%s Работаешь в свежем контексте. Хост — сессия; бинарник модель не вызывает.\n\n", roleBriefs[task.Role])
 	fmt.Fprintf(&b, "SOURCE_ROOT: %s\n", p.ProjectRoot)
 	fmt.Fprintf(&b, "TASK (JSON с точными requirements, метаданными и accepted-цитатами): %s\n", filepath.Join(own, "task.json"))
-	fmt.Fprintf(&b, "FILES (общий для всех ролей список разрешённых относительных путей с категориями spec/code/tests; файлы с `\"reference\": true` — справочные источники ТЗ, их можно цитировать только внутри accepted.citations нормы): %s\n", filepath.Join(dir, "files.json"))
+	fmt.Fprintf(&b, "FILES (общий для всех ролей список разрешённых относительных путей, по строке `категория<TAB>path`, категории spec/code/tests; `reference` — справочный источник ТЗ, его можно цитировать только внутри accepted.citations нормы; целиком не читай — проверяй путь `grep -F -- $'\\t'PATH FILES`, перечисляй нужную категорию или каталог `grep '^code' FILES | grep app/Billing`): %s\n", filepath.Join(dir, "files.txt"))
 	fmt.Fprintf(&b, "PROTOCOL (обязателен к прочтению первым): %s\n", filepath.Join(dir, "protocol.txt"))
 	fmt.Fprintf(&b, "OUTPUT_PATH (единственный итоговый файл, который ты пишешь): %s\n", output)
 	fmt.Fprintf(&b, "РАБОЧИЙ КАТАЛОГ для любых вспомогательных файлов/скриптов и подкаталогов (только он; общий scratchpad сессии не использовать; чужие каталоги dispatch/* не читать и не выполнять): %s/\n", own)
@@ -1592,6 +1605,10 @@ func execute(args []string) (any, error) {
 			return nil, err
 		}
 		if err := writeJSON(run, "dispatch/files.json", m.Files, 0600); err != nil {
+			return nil, err
+		}
+		// tool-spec §61: the role's copy of the same list — one line per file, no hashes — costs a fraction of the JSON to read.
+		if err := atomicWrite(run, "dispatch/files.txt", filesListing(m.Files), 0600); err != nil {
 			return nil, err
 		}
 		protocol, err := fs.ReadFile(dist.Files, protocolPath)
