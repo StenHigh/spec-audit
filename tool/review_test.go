@@ -1296,7 +1296,9 @@ func TestReviewBrief(t *testing.T) {
 		result := sampleResult(t, task, filepath.Join(base, "source"))
 		if task.Role == "redteam" {
 			result.Assessments[0].Assertion = "weak"
-			// §62.2: a supported verdict with a limitation is flagged for the host.
+			// §62.2: a supported verdict with a limitation is flagged only where the roles agree (row 1), not where they
+			// already disagree (row 0).
+			result.Assessments[0].Limitations = []string{"ветка отката не читалась"}
 			result.Assessments[1].Limitations = []string{"ветка отката не читалась"}
 		}
 		path := filepath.Join(base, task.TaskID+".json")
@@ -1316,8 +1318,11 @@ func TestReviewBrief(t *testing.T) {
 	}
 	limited := 0
 	for _, advisory := range brief.Advisories {
-		if strings.Contains(advisory, "supported с 1 limitations") && strings.HasPrefix(advisory, full.Outcomes[1].RequirementID+": redteam") {
+		if strings.Contains(advisory, "оставили limitations (redteam 1)") {
 			limited++
+			if !strings.HasPrefix(advisory, full.Outcomes[1].RequirementID+":") {
+				t.Fatal("advisory только по согласной норме", advisory)
+			}
 		}
 	}
 	if limited != 1 {

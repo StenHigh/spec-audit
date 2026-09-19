@@ -1197,10 +1197,17 @@ func reviewBrief(context ReviewContext) ReviewBrief {
 			}
 			continue
 		}
-		// §62.2: a supported verdict with limitations is where roles leave a reachable branch they did not condemn.
-		for _, name := range []string{"mapper", "redteam"} {
-			if role, ok := row.Roles[name]; ok && role.Implementation == "supported" && len(role.Limitations) > 0 {
-				brief.Advisories = append(brief.Advisories, fmt.Sprintf("%s: %s — supported с %d limitations; прочитай их: ветка или код вне модуля без incident/теста — это находка, не оговорка", row.RequirementID, name, len(role.Limitations)))
+		// §62.2 (as of 1.47): only where the roles agree — disagreement already sends the host to the norm; with agreement
+		// the roles' limitations are the last place a reachable branch they did not condemn can surface.
+		if row.Agree {
+			limited := []string{}
+			for _, name := range []string{"mapper", "redteam"} {
+				if role, ok := row.Roles[name]; ok && role.Implementation == "supported" && len(role.Limitations) > 0 {
+					limited = append(limited, fmt.Sprintf("%s %d", name, len(role.Limitations)))
+				}
+			}
+			if len(limited) > 0 {
+				brief.Advisories = append(brief.Advisories, fmt.Sprintf("%s: роли согласны (supported), но оставили limitations (%s); прочитай их: ветка или код вне модуля без incident/теста — это находка, не оговорка", row.RequirementID, strings.Join(limited, ", ")))
 			}
 		}
 		brief.Assessed++
