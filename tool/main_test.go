@@ -1099,6 +1099,23 @@ func TestCorpusDelta(t *testing.T) {
 	if view := runOK(t, "overview", config).(Overview); view.Scopes[0].Delta != nil {
 		t.Fatal("одно решение — динамики нет")
 	}
+	// §63: drift against the code as it is now — nothing cited moved yet, so the decision reads as current.
+	if view := runOK(t, "overview", config).(Overview); view.Scopes[0].Drift == nil || view.Scopes[0].Drift.SinceRun != "r1" || !view.Scopes[0].Drift.Current || view.Scopes[0].Drift.Changed != 0 || view.Totals.StaleScopes != 0 || view.Totals.Drifted != view.Scopes[0].Drift.Assessed {
+		t.Fatal("дрейф после решения", view.Scopes[0].Drift, view.Totals)
+	}
+	sourcePath := filepath.Join(base, "source/source.go")
+	sourceBefore := readFixture(t, sourcePath)
+	writeFixture(t, sourcePath, append([]byte("// moved\n"), sourceBefore...))
+	drifted := runOK(t, "overview", config).(Overview)
+	if d := drifted.Scopes[0].Drift; d == nil || d.Current || d.Changed == 0 || drifted.Totals.StaleScopes != 1 || drifted.Totals.Drifted < d.Changed {
+		t.Fatal("сдвиг цитируемых строк делает решение неактуальным", drifted.Scopes[0].Drift, drifted.Totals)
+	}
+	corpusOut := filepath.Join(base, "corpus-drift.html")
+	runOK(t, "corpus", corpusOut, config)
+	if html := string(readFixture(t, corpusOut)); !strings.Contains(html, fmt.Sprintf("затронуто %d норм", drifted.Scopes[0].Drift.Assessed)) || !strings.Contains(html, "scope требуют перепрогона") {
+		t.Fatal("карта корпуса должна показывать дрейф")
+	}
+	writeFixture(t, sourcePath, sourceBefore)
 	// r2: the host now finds the contradicted norm supported+relevant (closed) and a supported one weak (opened).
 	fixed := func(rows *[]Assessment) {
 		for i := range *rows {

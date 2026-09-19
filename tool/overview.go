@@ -49,6 +49,8 @@ type OverviewTotals struct {
 	Closed         int            `json:"closed"` // sums of the scope deltas (§47)
 	Opened         int            `json:"opened"`
 	Worsened       int            `json:"worsened"` // §53.1
+	Drifted        int            `json:"drifted"`  // norms across scopes a rerun would reassess (§63)
+	StaleScopes    int            `json:"stale_scopes"`
 }
 
 // Gap is the industry reading of a gap analysis over the host's verdicts (tool-spec §45.1): a norm is a gap when it is
@@ -89,6 +91,20 @@ type ScopeOverview struct {
 	Latest  *RunOverview `json:"latest"`  // the most recently prepared run: delivery progress
 	Decided *RunOverview `json:"decided"` // the most recent run with a host decision: verdict counts; totals come from here
 	Delta   *Delta       `json:"delta"`   // decided vs the decided run before it (§47); nil with fewer than two
+	// Drift says how current the decided verdicts are against the code as it is now (tool-spec §63): the norms an
+	// incremental run from the decided run would reassess, by reason. nil when there is no decision or no snapshot.
+	Drift *ScopeDrift `json:"drift"`
+}
+
+// ScopeDrift is the plan of an incremental run from the decided run, reduced to counts (tool-spec §63).
+type ScopeDrift struct {
+	SinceRun          string `json:"since_run"`
+	Assessed          int    `json:"assessed"`           // norms a rerun would reassess
+	Changed           int    `json:"changed"`            // a cited code/test line moved
+	VerificationGap   int    `json:"verification_gap"`   // tests changed under a weak/missing/contradicts verdict
+	ImplementationGap int    `json:"implementation_gap"` // unknown implementation, reassessed every run
+	New               int    `json:"new"`                // norms without a verdict in the decided run
+	Current           bool   `json:"current"`            // no cited line changed: the decision reads as current
 }
 
 // NormBrief is one norm of the decided run for the corpus page (tool-spec §45): the host's verdict in a sentence.
@@ -247,6 +263,12 @@ func overview(paths []string) (Overview, error) {
 				view.Totals.Opened += len(scope.Delta.Opened)
 				view.Totals.Worsened += len(scope.Delta.Worsened)
 			}
+			if scope.Drift != nil {
+				view.Totals.Drifted += scope.Drift.Assessed
+				if !scope.Drift.Current {
+					view.Totals.StaleScopes++
+				}
+			}
 			g := scope.Decided.Gap
 			view.Totals.Gap.Total += g.Total
 			view.Totals.Gap.Implementation += g.Implementation
@@ -364,11 +386,39 @@ func scopeOverview(path string, cfg Config) (ScopeOverview, []ContradictedCitati
 		scope.Delta.Pinned = cfg.BaselineRun != "" && baseline.RunID == cfg.BaselineRun
 		slog.Debug("overview: динамика scope", "config", path, "baseline", scope.Delta.BaselineRun, "closed", len(scope.Delta.Closed), "opened", len(scope.Delta.Opened))
 	}
+	if scope.Decided != nil && current != "" {
+		scope.Drift = scopeDrift(reports, scope.Decided.RunID, m)
+	}
 	for _, c := range decidedCode {
 		c.Config = path
 		cited = append(cited, c)
 	}
 	return scope, cited
+}
+
+// scopeDrift reduces the incremental plan from the decided run to counts (§63); a plan that cannot be built
+// (an old run without a journal) leaves the drift unknown rather than claiming currency.
+func scopeDrift(reports *os.Root, decided string, m Manifest) *ScopeDrift {
+	plan, err := incrementalPlan(reports, decided, m)
+	if err != nil {
+		slog.Debug("overview: дрейф не вычислен", "run_id", decided, "error", err.Error())
+		return nil
+	}
+	drift := &ScopeDrift{SinceRun: decided, Assessed: len(plan.Assessed)}
+	for _, reason := range plan.Reasons {
+		switch reason {
+		case "changed":
+			drift.Changed++
+		case "verification_gap":
+			drift.VerificationGap++
+		case "implementation_gap":
+			drift.ImplementationGap++
+		case "new":
+			drift.New++
+		}
+	}
+	drift.Current = drift.Changed == 0 && drift.VerificationGap == 0 && drift.New == 0
+	return drift
 }
 
 func runOverview(reports *os.Root, runID, current string) (RunOverview, []ContradictedCitation, error) {
