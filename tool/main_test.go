@@ -789,6 +789,14 @@ func TestPrepareDispatch(t *testing.T) {
 	if err := json.Unmarshal(readFixture(t, sharedPath), &files); err != nil || !reflect.DeepEqual(files, batch.Files) {
 		t.Fatalf("dispatch/files.json должен равняться списку файлов prepare: %v", err)
 	}
+	// tool-spec §61: the role's listing is the same set, one `kind<TAB>path` line per file, reference files marked.
+	listing := string(readFixture(t, filepath.Join(base, "runs/review/dispatch/files.txt")))
+	if lines := strings.Split(strings.TrimSuffix(listing, "\n"), "\n"); len(lines) != len(batch.Files) || lines[0] != batch.Files[0].Kind+"\t"+batch.Files[0].Path || strings.Contains(listing, "sha256") {
+		t.Fatalf("dispatch/files.txt: %q", listing)
+	}
+	if got := string(filesListing([]SourceFile{{Path: "TZ/defs.md", Kind: "spec", Reference: true}, {Path: "a.go", Kind: "code"}})); got != "reference\tTZ/defs.md\ncode\ta.go\n" {
+		t.Fatalf("filesListing: %q", got)
+	}
 	// tool-spec §30.1: the protocol and each role's prompt come from the binary, with absolute paths and no state/manifest paths.
 	if !bytes.Equal(readFixture(t, filepath.Join(base, "runs/review/dispatch/protocol.txt")), readFixture(t, "../skills/spec-audit/references/protocol.txt")) {
 		t.Fatal("dispatch/protocol.txt должен побайтно равняться протоколу skill")
@@ -797,7 +805,7 @@ func TestPrepareDispatch(t *testing.T) {
 	for _, task := range batch.Tasks {
 		dir := filepath.Join(base, "runs/review/dispatch", task.TaskID)
 		prompt := string(readFixture(t, filepath.Join(dir, "prompt.md")))
-		for _, want := range []string{"Задание роли " + task.Role, "SOURCE_ROOT: " + batch.ProjectRoot, filepath.Join(dir, "task.json"), filepath.Join(base, "runs/review/dispatch/files.json"),
+		for _, want := range []string{"Задание роли " + task.Role, "SOURCE_ROOT: " + batch.ProjectRoot, filepath.Join(dir, "task.json"), filepath.Join(base, "runs/review/dispatch/files.txt"), "целиком не читай",
 			filepath.Join(base, "runs/review/dispatch/protocol.txt"), filepath.Join(dir, "result.json"), " validate " + absConfig + " review " + task.TaskID + " ", filepath.Join(dir, "sdk_hints.json"),
 			" cite " + absConfig + " PATH A B", filepath.Join(dir, "validate.log"), "AGENTS.md, CLAUDE.md", "scratchpad", `Tests\Feature\ExampleTest::test_name`, "supported|contradicted|unknown", "ambiguous-норму нельзя объявлять clear", dir + "/\n"} {
 			if !strings.Contains(prompt, want) {
