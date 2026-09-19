@@ -6,6 +6,7 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -661,4 +662,71 @@ func corpusFiles(code []ContradictedCitation) []CorpusFile {
 		return files[i].Path < files[j].Path
 	})
 	return files
+}
+
+// RerunScope is one line of `rerun RUN_ID CONFIG...` (tool-spec §54): the incremental run prepared for a scope, or why not.
+type RerunScope struct {
+	Config       string   `json:"config"`
+	Since        string   `json:"since,omitempty"`
+	RunID        string   `json:"run_id,omitempty"`
+	Assessed     int      `json:"assessed"`
+	Carried      int      `json:"carried"`
+	KnownDefects int      `json:"known_defects"`
+	Tasks        []string `json:"tasks"`
+	Skipped      string   `json:"skipped,omitempty"`
+	Error        string   `json:"error,omitempty"`
+}
+
+// rerun prepares one incremental run per scope in a single call: the source run is the scope's baseline_run when the
+// CONFIG pins one, otherwise its latest decided run. RUN_ID is reused across scopes (each has its own reports_dir).
+// A scope without a decided run, or whose RUN_ID already exists, is reported as skipped; one scope's refusal does not
+// stop the others. The roles are dispatched by the host as usual.
+func rerun(runID string, paths []string) (any, error) {
+	if !slugRE.MatchString(runID) {
+		return nil, errors.New("rerun RUN_ID CONFIG...: недопустимый RUN_ID")
+	}
+	view, err := overview(paths)
+	if err != nil {
+		return nil, err
+	}
+	scopes, total := []RerunScope{}, 0
+	for _, scope := range view.Scopes {
+		line := RerunScope{Config: scope.Config, Tasks: []string{}}
+		cfg, err := loadConfig(scope.Config, true)
+		if err != nil {
+			line.Error = err.Error()
+			scopes = append(scopes, line)
+			continue
+		}
+		since := cfg.BaselineRun
+		if since == "" && scope.Decided != nil {
+			since = scope.Decided.RunID
+		}
+		if since == "" {
+			line.Skipped = "нет решённого run и baseline_run"
+			scopes = append(scopes, line)
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(cfg.ReportsDir, runID, "manifest.json")); err == nil {
+			line.Since, line.Skipped = since, "run уже существует"
+			scopes = append(scopes, line)
+			continue
+		}
+		answer, err := execute([]string{"prepare", scope.Config, runID, "since", since})
+		if err != nil {
+			line.Since, line.Error = since, err.Error()
+			scopes = append(scopes, line)
+			continue
+		}
+		batch := answer.(TaskBatch)
+		line.Since, line.RunID = since, runID
+		if batch.Incremental != nil {
+			line.Assessed, line.Carried, line.KnownDefects = batch.Incremental.Assessed, batch.Incremental.Carried, batch.Incremental.KnownDefects
+		}
+		line.Tasks = append(line.Tasks, batch.PendingIDs...)
+		total += len(batch.PendingIDs)
+		scopes = append(scopes, line)
+	}
+	slog.Info("rerun: инкрементальные run подготовлены", "run_id", runID, "scopes", len(scopes), "tasks", total)
+	return map[string]any{"run_id": runID, "scopes": scopes, "tasks_total": total}, nil
 }

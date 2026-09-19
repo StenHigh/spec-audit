@@ -1362,3 +1362,46 @@ func TestIncrementalRerun(t *testing.T) {
 		t.Fatal("промпт роли называет инкрементальный run и причины")
 	}
 }
+
+// tool-spec §54: rerun prepares one incremental run per scope from its baseline or latest decided run.
+func TestRerunBatch(t *testing.T) {
+	config, base := fixture(t)
+	source := filepath.Join(base, "source")
+	decide := func(cfg, runID string) {
+		batch := runOK(t, "prepare", cfg, runID).(TaskBatch)
+		for _, task := range batch.Tasks {
+			path := filepath.Join(base, filepath.Base(filepath.Dir(cfg))+"-"+runID+"-"+task.TaskID+".json")
+			writeFixture(t, path, legacyMarshal(t, sampleResult(t, task, source)))
+			runOK(t, "submit", cfg, runID, task.TaskID, path)
+		}
+		view := runOK(t, "review", cfg, runID).(ReviewContext)
+		rows := append([]Assessment{}, view.Entries[0].Result.Assessments...)
+		path := filepath.Join(base, filepath.Base(filepath.Dir(cfg))+"-host-"+runID+".json")
+		writeFixture(t, path, legacyMarshal(t, ReviewDecision{1, "decision-" + runID, runID, view.SnapshotID, view.BasisSHA256, "host", "s", rows, []string{}}))
+		runOK(t, "review", cfg, runID, path)
+	}
+	decide(config, "a1")
+	// A second scope over the same sources with its own reports_dir; a third one never decided.
+	other := filepath.Join(base, "other/config.yaml")
+	writeFixture(t, other, []byte("version: 1\nproject_root: ../source\nspecs: {paths: [rules.md]}\ncode: {paths: [source.go, go.mod]}\ntests: {paths: [source_test.go]}\nreports_dir: runs\nruntime: {kind: none}\nscopes: []\n"))
+	decide(other, "b1")
+	decide(other, "b2")
+	writeFixture(t, other, append(readFixture(t, other), []byte("baseline_run: b1\n")...))
+	third := filepath.Join(base, "third/config.yaml")
+	writeFixture(t, third, []byte("version: 1\nproject_root: ../source\nspecs: {paths: [rules.md]}\ncode: {paths: [source.go, go.mod]}\ntests: {paths: [source_test.go]}\nreports_dir: runs\nruntime: {kind: none}\nscopes: []\n"))
+	answer := runOK(t, "rerun", "incr-1", config, other, third).(map[string]any)
+	scopes := answer["scopes"].([]RerunScope)
+	if len(scopes) != 3 || scopes[0].Since != "a1" || scopes[0].RunID != "incr-1" || scopes[1].Since != "b1" || scopes[1].RunID != "incr-1" || scopes[2].Skipped == "" || answer["tasks_total"].(int) != len(scopes[0].Tasks)+len(scopes[1].Tasks) {
+		t.Fatal("rerun: baseline_run имеет приоритет, решённый run — по умолчанию, без решения — пропуск", scopes, answer["tasks_total"])
+	}
+	if _, err := os.Stat(filepath.Join(base, "other/runs/incr-1/manifest.json")); err != nil {
+		t.Fatal("run подготовлен в reports_dir второго scope", err)
+	}
+	again := runOK(t, "rerun", "incr-1", config, other).(map[string]any)
+	for _, line := range again["scopes"].([]RerunScope) {
+		if line.Skipped != "run уже существует" {
+			t.Fatal("повторный rerun с тем же RUN_ID пропускает готовые run", line)
+		}
+	}
+	runFail(t, "rerun", "bad id", config)
+}
