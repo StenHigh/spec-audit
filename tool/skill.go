@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -24,6 +25,7 @@ const (
 	skillSourceDir     = "skills/spec-audit"
 	skillReceiptName   = ".spec-audit-skill.json"
 	skillReceiptSchema = "spec-audit-skill/1"
+	skillStagingPrefix = ".skill-staging-"
 )
 
 // Contracts SKILL.md links to; bundled byte-for-byte under references/docs/ so the installed copy needs no checkout.
@@ -157,12 +159,11 @@ func runSkill(sub, dir, host string, replace bool, current string) (map[string]a
 	}
 	slog.Debug("skill: состояние", "skill_state", state.kind, "drift", len(state.drift), "stale", len(state.stale), "links", links)
 	var write []string
-	unlink := false
 	switch {
 	case state.kind == "absent" && sub == "install":
 		write = sortedKeys(files)
 	case state.kind == "symlink" && sub == "install" && replace:
-		unlink, write = true, sortedKeys(files)
+		write = sortedKeys(files)
 	case state.kind == "symlink" && sub == "install":
 		return nil, errors.New("на месте .spec-audit/skill находится символическая ссылка; повторите с --replace, чтобы заменить её реальной копией")
 	case state.kind == "foreign":
@@ -175,7 +176,7 @@ func runSkill(sub, dir, host string, replace bool, current string) (map[string]a
 		write = append(append(write, state.stale...), state.drift...)
 		sort.Strings(write)
 	}
-	if err := writeSkill(dirRoot, files, write, unlink, current); err != nil {
+	if err := writeSkill(dirRoot, files, write, state.kind, current); err != nil {
 		return nil, err
 	}
 	if err := applySkillLinks(dirRoot, links); err != nil {
@@ -276,19 +277,41 @@ func planSkillLinks(dirRoot *os.Root, rels []string, replace bool) (map[string]s
 	return links, nil
 }
 
-func writeSkill(dirRoot *os.Root, files map[string][]byte, write []string, unlink bool, current string) error {
+// A fresh copy (no directory of ours yet) is built in a staging directory beside the target and published by one rename,
+// so an interrupted install leaves no half-filled `skill` without a receipt; an existing copy of ours is updated in place,
+// where the old receipt keeps the directory ours until the new one lands last.
+func writeSkill(dirRoot *os.Root, files map[string][]byte, write []string, kind string, current string) error {
 	if len(write) == 0 {
 		return nil
 	}
-	if unlink {
+	if kind == "ours" {
+		return writeSkillFiles(dirRoot, skillInstallDir, files, write, current)
+	}
+	parent := path.Dir(skillInstallDir)
+	if err := dirRoot.MkdirAll(parent, 0755); err != nil {
+		return err
+	}
+	staging := parent + "/" + skillStagingPrefix + rand.Text()
+	if err := dirRoot.Mkdir(staging, 0755); err != nil {
+		return err
+	}
+	defer dirRoot.RemoveAll(staging)
+	if err := writeSkillFiles(dirRoot, staging, files, write, current); err != nil {
+		return err
+	}
+	if kind == "symlink" {
 		if err := dirRoot.Remove(skillInstallDir); err != nil {
 			return err
 		}
 	}
-	if err := dirRoot.MkdirAll(skillInstallDir, 0755); err != nil {
+	return dirRoot.Rename(staging, skillInstallDir)
+}
+
+func writeSkillFiles(dirRoot *os.Root, dir string, files map[string][]byte, write []string, current string) error {
+	if err := dirRoot.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	skillRoot, err := dirRoot.OpenRoot(skillInstallDir)
+	skillRoot, err := dirRoot.OpenRoot(dir)
 	if err != nil {
 		return err
 	}
