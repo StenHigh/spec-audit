@@ -230,8 +230,6 @@ type PreviousHost struct {
 	// SameFiles is false when a file the earlier verdict cites changed since (§40.1 as of 1.33 — per norm, not per
 	// source set): the norm is the same, its evidence may not be — read the verdict as history, not as a current reading.
 	SameFiles bool `json:"same_files"`
-	// paths are the code/tests files the earlier verdict cites — the dispatch hints of §62; never serialised.
-	paths []string
 }
 
 // Outcome is the derived per-norm row of the review context: both roles side by side and whether they agree.
@@ -583,14 +581,7 @@ func previousHostRun(reports *os.Root, other string, m Manifest) (map[string]Pre
 				sameFiles = false
 			}
 		}
-		hints := map[string]bool{}
-		for _, c := range r.Code {
-			hints[c.Path] = true
-		}
-		for _, t := range r.Tests {
-			hints[t.Citation.Path] = true
-		}
-		states[r.RequirementID] = PreviousHost{Specification: r.Specification, Implementation: r.Implementation, Assertion: r.Assertion, Statement: r.Statement, Limitations: limitations, SameFiles: sameFiles, paths: sortedKeys(hints)}
+		states[r.RequirementID] = PreviousHost{Specification: r.Specification, Implementation: r.Implementation, Assertion: r.Assertion, Statement: r.Statement, Limitations: limitations, SameFiles: sameFiles}
 	}
 	recordedAt := ""
 	if versions, err := readToolVersions(run); err == nil {

@@ -851,26 +851,12 @@ func TestReviewPreviousHost(t *testing.T) {
 		writeFixture(t, path, legacyMarshal(t, decision))
 		runOK(t, "review", config, runID, path)
 	}
-	batchA := submitAll("a")
+	submitAll("a")
 	if view := runOK(t, "review", config, "a").(ReviewContext); view.Outcomes[0].PreviousHost != nil || len(view.Outcomes[0].Roles["mapper"].Limitations) != 0 {
 		t.Fatal("без соседей previous_host отсутствует; limitations — пустой массив", view.Outcomes[0])
 	}
-	// §62.1: before any decision the hints are empty; after run a is decided, run b's hints name the cited code/tests.
-	var hints DispatchHints
-	if err := json.Unmarshal(readFixture(t, filepath.Join(base, "runs/a/dispatch", batchA.Tasks[0].TaskID, "hints.json")), &hints); err != nil || len(hints.Requirements) != 0 || hints.SourceRun != "" {
-		t.Fatal("hints без истории должны быть пустыми", err, hints)
-	}
 	decide("a", "host-review-001")
-	batchB := submitAll("b")
-	if err := json.Unmarshal(readFixture(t, filepath.Join(base, "runs/b/dispatch", batchB.Tasks[0].TaskID, "hints.json")), &hints); err != nil || hints.SourceRun != "a" || hints.ReviewID != "host-review-001" {
-		t.Fatal("hints должны ссылаться на решённый run", err, hints)
-	}
-	if paths := hints.Requirements[batchB.Tasks[0].Requirements[0].ID]; len(paths) == 0 || paths[0] != "source.go" || strings.Contains(strings.Join(paths, ","), "rules.md") {
-		t.Fatal("hints — пути кода/тестов из решения, без ТЗ и вердиктов", hints)
-	}
-	if prompt := string(readFixture(t, filepath.Join(base, "runs/b/dispatch", batchB.Tasks[0].TaskID, "prompt.md"))); !strings.Contains(prompt, "hints.json") || !strings.Contains(prompt, "HINTS") {
-		t.Fatal("prompt.md должен называть HINTS")
-	}
+	submitAll("b")
 	writeFixture(t, filepath.Join(base, "runs/broken/manifest.json"), []byte("{not json"))
 	view := runOK(t, "review", config, "b").(ReviewContext)
 	prior := view.Outcomes[0].PreviousHost
