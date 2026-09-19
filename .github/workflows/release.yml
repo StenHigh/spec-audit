@@ -26,8 +26,8 @@ jobs:
       PUB: ${{ vars.SPEC_AUDIT_RELEASE_PUBLIC_KEY }}
       ASSET: spec-audit-${{ matrix.os }}-${{ matrix.arch }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
       - name: Native runner matches the matrix platform
@@ -42,7 +42,7 @@ jobs:
         run: |
           go version
           go vet ./...
-          go test ./tool -short -count=1
+          go test ./tool -count=1  # полный набор: и нативная поставка (TestNativeDistribution), и реальный runtime
       - name: Build release binary
         run: |
           mkdir -p out
@@ -62,16 +62,18 @@ jobs:
           "$bin" skill install --dir "$tmp" --host both | jq -e '.updated == true'
           "$bin" skill update --dir "$tmp" --host both | jq -e '.updated == false'
           # update идёт по подписанному пути только у файла с именем spec-audit: копия против прежнего latest
-          # не должна измениться (отказ или updated:false).
+          # обязана ответить updated:false (новый тег ещё не опубликован) и не измениться; любой отказ — это отказ
+          # квалификации, а не допустимый исход (review 2.5).
           cp "$bin" "$tmp/spec-audit"
           before=$(shasum -a 256 "$tmp/spec-audit" | cut -d' ' -f1)
-          if "$tmp/spec-audit" update > update.json; then jq -e '.updated == false' update.json; fi
+          "$tmp/spec-audit" update > update.json
+          jq -e '.updated == false' update.json
           test "$(shasum -a 256 "$tmp/spec-audit" | cut -d' ' -f1)" = "$before"
           # dev-сборка отказывает в update до обращения к сети.
           go build -o out/spec-audit-dev ./tool
           if out/spec-audit-dev update; then echo "dev build must refuse update"; exit 1; fi
           rm -f out/spec-audit-dev
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ env.ASSET }}
           path: out/${{ env.ASSET }}
@@ -85,8 +87,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: spec-audit-*
           path: dist

@@ -100,6 +100,7 @@
 | Сводная HTML-карта корпуса `corpus` (§45) | 2026-09-18 | tool-spec 1.25, `TestCorpus`; README «Приёмка и ограничения»; `.spec-audit/corpus.html` на пилоте |
 | Сужение statement при принятии — DECISION version 2 (§46, REQ-SA-049); GAP на карте корпуса (§45.1) | 2026-09-18 | tool-spec 1.27, `TestAcceptNarrowed`, `TestCorpus`; README «Приёмка и ограничения» |
 | Динамика GAP между решёнными run, `baseline_run` (§47) | 2026-09-18 | tool-spec 1.28, `TestCorpusDelta`; README «Приёмка и ограничения» |
+| Релизная квалификация без `-short`, Actions по SHA (§56) | 2026-09-19 | tool-spec 1.38, `release.yml`, `ci.yml`, `TestReviewValidateHost` |
 | Свежесть accepted-индекса при смене группы файла — журнал version 2 (§55) | 2026-09-19 | tool-spec 1.37, `TestReferenceGroupFreshness`; README «Приёмка и ограничения» |
 | Перепрогон затронутых scope одной командой `rerun` (§54) | 2026-09-19 | tool-spec 1.36, `TestRerunBatch`; README «Приёмка и ограничения» |
 | Точность инкремента, известные дефекты, ухудшения (§51–§53) | 2026-09-19 | tool-spec 1.33–1.35, `TestIncrementalRerun`, `TestCorpusDelta`; adoption «семнадцатый–девятнадцатый цикл» |
