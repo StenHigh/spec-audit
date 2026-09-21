@@ -215,13 +215,15 @@ func TestIncrementalLegacyGrouping(t *testing.T) {
 		{ID: "b", Requirements: []string{"REQ-004", "REQ-005"}},
 		{ID: "c", Requirements: []string{"REQ-006"}},
 	}}, Incremental: &IncrementalPlan{SinceRun: "prev", Assessed: []string{"REQ-001", "REQ-003", "REQ-005"}}}
-	legacy := newState(m)
+	legacy := legacyIncrementalState(m)
 	if len(legacy.Entries) != 4 || legacy.Entries[0].Task.TaskID != "a-mapper" || len(legacy.Entries[0].Task.Requirements) != 2 || legacy.Entries[2].Task.TaskID != "b-mapper" || len(legacy.Entries[2].Task.Requirements) != 1 {
-		t.Fatalf("run без grouping читается в форме §50 (задание на scope, только переоцениваемые нормы): %+v", legacy.Entries)
+		t.Fatalf("форма §50: задание на scope, только переоцениваемые нормы: %+v", legacy.Entries)
 	}
-	m.Incremental.Grouping = incrementalGrouping
 	current := newState(m)
 	if len(current.Entries) != 2 || current.Entries[0].Task.TaskID != "incremental-1-mapper" || len(current.Entries[0].Task.Requirements) != 3 {
-		t.Fatalf("run с grouping читается в форме §51.5: %+v", current.Entries)
+		t.Fatalf("форма §51.5 по умолчанию (run без маркера, подготовленные 0.1.39–0.1.55): %+v", current.Entries)
+	}
+	if sameTaskIDs(legacy, current) || !sameTaskIDs(current, newState(m)) {
+		t.Fatal("sameTaskIDs различает формы")
 	}
 }

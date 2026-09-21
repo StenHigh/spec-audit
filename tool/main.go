@@ -1299,9 +1299,6 @@ func checkStateSize(state State) error {
 
 func newState(m Manifest) State {
 	state := State{Entries: []Entry{}, Executions: []Receipt{}}
-	if m.Incremental != nil && m.Incremental.Grouping != incrementalGrouping {
-		return legacyIncrementalState(m)
-	}
 	if m.Incremental != nil {
 		// tool-spec §51.5: the reassessed norms of every scope are regrouped into as few tasks as the size
 		// recommendation allows (a role's cost is nearly fixed per task, not per norm); the original scopes are named
@@ -1363,8 +1360,22 @@ func newState(m Manifest) State {
 	return state
 }
 
+// sameTaskIDs reports whether two states hold the same task IDs in the same order (the form a run was prepared in).
+func sameTaskIDs(a, b State) bool {
+	if len(a.Entries) != len(b.Entries) {
+		return false
+	}
+	for i := range a.Entries {
+		if a.Entries[i].Task.TaskID != b.Entries[i].Task.TaskID {
+			return false
+		}
+	}
+	return true
+}
+
 // legacyIncrementalState is the §50 task form of incremental runs prepared before §51.5 (0.1.39): one task pair per
-// CONFIG scope holding that scope's reassessed norms; a scope whose norms are all carried gets no tasks.
+// CONFIG scope holding that scope's reassessed norms; a scope whose norms are all carried gets no tasks. It is chosen
+// only when a run without the §64 marker was saved in that form (readState); newState itself yields §51.5.
 func legacyIncrementalState(m Manifest) State {
 	state := State{Entries: []Entry{}, Executions: []Receipt{}}
 	assessed := map[string]bool{}
@@ -1692,6 +1703,11 @@ func execute(args []string) (any, error) {
 		var savedState State
 		if err := strictJSON(data, &savedState); err != nil {
 			return nil, err
+		}
+		if m.Incremental != nil && m.Incremental.Grouping == "" && !sameTaskIDs(savedState, state) {
+			// tool-spec §64: runs prepared between 0.1.39 and 0.1.55 carry incremental-N tasks without the marker,
+			// earlier ones the §50 form — the saved task IDs decide which form the run was prepared in.
+			state = legacyIncrementalState(m)
 		}
 		if len(savedState.Entries) != len(state.Entries) {
 			return nil, errors.New("повреждено число заданий в state")
