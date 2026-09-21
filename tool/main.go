@@ -122,7 +122,13 @@ type IncrementalPlan struct {
 	Assessed []string          `json:"assessed"`
 	Carried  []CarriedVerdict  `json:"carried"`
 	Reasons  map[string]string `json:"reasons"` // norm → why it is assessed again: new | gap | changed
+	// Grouping names how the tasks of this run were formed (tool-spec §64): "incremental" — regrouped into
+	// incremental-N tasks (§51.5); absent — the §50 form of runs prepared before 0.1.39, one task pair per CONFIG
+	// scope with its reassessed norms. Reading a run must rebuild the tasks the way they were prepared.
+	Grouping string `json:"grouping,omitempty"`
 }
+
+const incrementalGrouping = "incremental"
 
 // CarriedVerdict is the host's verdict of the previous run with its evidence and the files that evidence rests on,
 // all byte-identical in the current snapshot (that is what carrying requires).
@@ -1290,6 +1296,9 @@ func checkStateSize(state State) error {
 
 func newState(m Manifest) State {
 	state := State{Entries: []Entry{}, Executions: []Receipt{}}
+	if m.Incremental != nil && m.Incremental.Grouping != incrementalGrouping {
+		return legacyIncrementalState(m)
+	}
 	if m.Incremental != nil {
 		// tool-spec §51.5: the reassessed norms of every scope are regrouped into as few tasks as the size
 		// recommendation allows (a role's cost is nearly fixed per task, not per norm); the original scopes are named
@@ -1340,6 +1349,36 @@ func newState(m Manifest) State {
 					reqs = append(reqs, req)
 				}
 			}
+		}
+		for _, role := range []string{"mapper", "redteam"} {
+			state.Entries = append(state.Entries, Entry{Task: Task{
+				TaskID: scope.ID + "-" + role, Attempt: 1, SnapshotID: m.SnapshotID,
+				Role: role, Scope: scope.ID, Focus: scope.Focus, Requirements: reqs,
+			}})
+		}
+	}
+	return state
+}
+
+// legacyIncrementalState is the §50 task form of incremental runs prepared before §51.5 (0.1.39): one task pair per
+// CONFIG scope holding that scope's reassessed norms; a scope whose norms are all carried gets no tasks.
+func legacyIncrementalState(m Manifest) State {
+	state := State{Entries: []Entry{}, Executions: []Receipt{}}
+	assessed := map[string]bool{}
+	for _, id := range m.Incremental.Assessed {
+		assessed[id] = true
+	}
+	for _, scope := range m.Config.Scopes {
+		reqs := []Requirement{}
+		for _, req := range m.Requirements {
+			for _, id := range scope.Requirements {
+				if req.ID == id && assessed[id] {
+					reqs = append(reqs, req)
+				}
+			}
+		}
+		if len(reqs) == 0 {
+			continue
 		}
 		for _, role := range []string{"mapper", "redteam"} {
 			state.Entries = append(state.Entries, Entry{Task: Task{
@@ -2078,7 +2117,7 @@ func incrementalPlan(reports *os.Root, sinceRun string, m Manifest) (*Incrementa
 		quote, err := lineQuote(data, c.LineStart, c.LineEnd)
 		return err == nil && quote == c.Quote
 	}
-	plan := &IncrementalPlan{SinceRun: sinceRun, ReviewID: record.ReviewID, Assessed: []string{}, Carried: []CarriedVerdict{}, Reasons: map[string]string{}}
+	plan := &IncrementalPlan{SinceRun: sinceRun, ReviewID: record.ReviewID, Assessed: []string{}, Carried: []CarriedVerdict{}, Reasons: map[string]string{}, Grouping: incrementalGrouping}
 	for _, req := range m.Requirements {
 		verdict, decided := verdicts[req.ID]
 		reason := ""

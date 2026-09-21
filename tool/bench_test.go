@@ -203,3 +203,25 @@ func TestSourceCache(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// tool-spec §64: a run keeps the task form it was prepared with — the §50 per-scope form before 0.1.39, incremental-N after.
+func TestIncrementalLegacyGrouping(t *testing.T) {
+	reqs := []Requirement{}
+	for i := 1; i <= 30; i++ {
+		reqs = append(reqs, Requirement{ID: fmt.Sprintf("REQ-%03d", i)})
+	}
+	m := Manifest{SnapshotID: "snap", Requirements: reqs, Config: Config{Scopes: []Scope{
+		{ID: "a", Requirements: []string{"REQ-001", "REQ-002", "REQ-003"}},
+		{ID: "b", Requirements: []string{"REQ-004", "REQ-005"}},
+		{ID: "c", Requirements: []string{"REQ-006"}},
+	}}, Incremental: &IncrementalPlan{SinceRun: "prev", Assessed: []string{"REQ-001", "REQ-003", "REQ-005"}}}
+	legacy := newState(m)
+	if len(legacy.Entries) != 4 || legacy.Entries[0].Task.TaskID != "a-mapper" || len(legacy.Entries[0].Task.Requirements) != 2 || legacy.Entries[2].Task.TaskID != "b-mapper" || len(legacy.Entries[2].Task.Requirements) != 1 {
+		t.Fatalf("run без grouping читается в форме §50 (задание на scope, только переоцениваемые нормы): %+v", legacy.Entries)
+	}
+	m.Incremental.Grouping = incrementalGrouping
+	current := newState(m)
+	if len(current.Entries) != 2 || current.Entries[0].Task.TaskID != "incremental-1-mapper" || len(current.Entries[0].Task.Requirements) != 3 {
+		t.Fatalf("run с grouping читается в форме §51.5: %+v", current.Entries)
+	}
+}
