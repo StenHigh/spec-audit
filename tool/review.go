@@ -38,7 +38,10 @@ type ReviewHistory struct {
 	Summary     string `json:"summary"`
 }
 type ReviewSummary struct {
-	State       string          `json:"state"`
+	State string `json:"state"`
+	// Complete (tool-spec §65): the latest decision covers the run's final state — every role delivered and the
+	// decision's basis equals the run's — regardless of whether the snapshot is still fresh. current ⇒ complete.
+	Complete    bool            `json:"complete"`
 	BasisSHA256 string          `json:"basis_sha256"`
 	History     []ReviewHistory `json:"history"`
 	Latest      *ReviewDecision `json:"latest"`
@@ -1049,7 +1052,8 @@ func summarizeReviews(runID string, m Manifest, state State, fresh bool, journal
 		summary.History = append(summary.History, ReviewHistory{record.ReviewID, record.Reviewer, digest([]byte(raw)), record.BasisSHA256, record.Summary})
 		summary.Latest, summary.Form, summary.Concur, summary.Own = record.decision(), record.form(), record.Concur, record.Own
 		summary.State = "outdated"
-		if fresh && len(pending(state)) == 0 && record.BasisSHA256 == reviewBasis(m.SnapshotID, state, previous) {
+		summary.Complete = len(pending(state)) == 0 && record.BasisSHA256 == reviewBasis(m.SnapshotID, state, previous)
+		if fresh && summary.Complete {
 			summary.State = "current"
 		}
 		previous = raw

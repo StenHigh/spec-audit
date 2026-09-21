@@ -331,7 +331,10 @@ func buildNavigation(report *Report, m Manifest) {
 		item.Links = append(item.Links, link)
 	}
 	fresh := report.Freshness == "fresh"
-	currentHost := fresh && report.HostReview != nil && report.HostReview.State == "current"
+	// tool-spec §65: the summary rests on a complete decision of this run; a stale snapshot marks it as history of
+	// that snapshot, it does not blank the numbers (that is what the corpus map's drift is for).
+	currentHost := report.HostReview != nil && (report.HostReview.Complete || report.HostReview.State == "current")
+	report.HostReviewComplete = currentHost
 	host := map[string]*Assessment{}
 	if report.HostReview != nil && report.HostReview.Latest != nil {
 		for i := range report.HostReview.Latest.Assessments {
@@ -349,10 +352,13 @@ func buildNavigation(report *Report, m Manifest) {
 			row.Navigation.HostConcur = hostConcurLabel(report.HostReview.Concur[req.ID], report.HostReview.Own[req.ID])
 		}
 		flags := map[string]bool{"unreviewed": !currentHost}
-		if !fresh {
-			row.Navigation.Basis = "history"
-		} else if currentHost {
+		switch {
+		case currentHost && fresh:
 			row.Navigation.Basis = "host-current"
+		case currentHost:
+			row.Navigation.Basis = "host-stale"
+		case !fresh:
+			row.Navigation.Basis = "history"
 		}
 		if carried := carriedVerdict(m, req.ID); carried != nil {
 			// tool-spec §50: the verdict was carried from an earlier run on unchanged evidence lines, not assessed here.
@@ -401,7 +407,7 @@ func buildNavigation(report *Report, m Manifest) {
 			assess(a, fmt.Sprintf("%s · attempt %d", role.Role, role.Attempt), fresh, !currentHost)
 		}
 		if a := row.Navigation.Host; a != nil {
-			assess(*a, "host · "+report.HostReview.Latest.ReviewID+" · "+report.HostReview.State, currentHost, currentHost)
+			assess(*a, "host · "+report.HostReview.Latest.ReviewID+" · "+report.HostReview.State, currentHost && fresh, currentHost)
 			row.Navigation.HostExecutions = assessmentExecutions(*a, report.Executions)
 		}
 		for j := range nav.Filters {

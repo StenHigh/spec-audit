@@ -235,12 +235,9 @@ func TestReportMetricsSeparateEvidenceAndFreshness(t *testing.T) {
 	if !oneOf("partial_test", r.Requirements[1].Navigation.Flags...) || !oneOf("missing_test", r.Requirements[3].Navigation.Flags...) {
 		t.Fatal("test insufficiency filters lost")
 	}
-	for _, phase := range []string{"outdated", "missing", "stale"} {
-		r.HostReview.State = phase
-		if phase == "stale" {
-			r.Freshness = "stale"
-			r.HostReview.State = "current"
-		}
+	decided := r.Navigation.Metrics
+	for _, phase := range []string{"outdated", "missing"} {
+		r.HostReview.State, r.HostReview.Complete = phase, false
 		buildNavigation(&r, m)
 		if r.Navigation.Metrics != (AuditMetrics{Total: 7, Unreviewed: 7}) {
 			t.Fatal("historical or preliminary data promoted to current", phase, r.Navigation.Metrics)
@@ -252,6 +249,20 @@ func TestReportMetricsSeparateEvidenceAndFreshness(t *testing.T) {
 		if !strings.Contains(page.String(), "не оценено") || strings.Contains(page.String(), "0.0%") {
 			t.Fatal("unreviewed represented as zero coverage")
 		}
+	}
+	// tool-spec §65: a complete decision keeps its numbers when the snapshot goes stale afterwards — the page says so
+	// instead of blanking them; the basis of every row names the stale snapshot.
+	r.Freshness, r.HostReview.State, r.HostReview.Complete = "stale", "outdated", true
+	buildNavigation(&r, m)
+	if r.Navigation.Metrics != decided || !r.HostReviewComplete || r.Requirements[0].Navigation.Basis != "host-stale" || oneOf("unreviewed", r.Requirements[0].Navigation.Flags...) {
+		t.Fatal("complete decision on a stale snapshot must keep its metrics", r.Navigation.Metrics, r.Requirements[0].Navigation)
+	}
+	var stalePage bytes.Buffer
+	if err := reportTemplate.Execute(&stalePage, r); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stalePage.String(), "Snapshot изменился после решения хоста") || strings.Contains(stalePage.String(), "Нет полного согласования") {
+		t.Fatal("stale page must explain the snapshot, not report «не оценено»")
 	}
 	for _, value := range []string{"relevant", "weak", "contradicts", "missing", "unknown"} {
 		if assertionLabel(value) == value || assertionLabel(value) == "" {

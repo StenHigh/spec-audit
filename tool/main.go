@@ -254,6 +254,9 @@ type Status struct {
 	Submitted         int    `json:"submitted"`
 	Pending           []Task `json:"pending"`
 	HostReviewState   string `json:"host_review_state,omitempty"`
+	// HostReviewComplete (tool-spec §65): the run has a decision on its final state; the summary rests on it even when
+	// the snapshot went stale afterwards — currency against the code as it is now is the corpus map's drift (§63).
+	HostReviewComplete bool `json:"host_review_complete"`
 }
 
 type TestExecution struct {
@@ -1782,6 +1785,7 @@ func execute(args []string) (any, error) {
 		}
 		report.HostReview = &view.ReviewSummary
 		report.HostReviewState = view.State
+		report.HostReviewComplete = view.Complete
 		report.HostReconciliationRequired = view.State != "current"
 		if view.State == "current" {
 			report.Conclusion = "Хост согласовал результаты по текущим свидетельствам. Это его обоснованная оценка, не автоматическое соответствие или доказательство полноты ТЗ."
