@@ -101,7 +101,7 @@
 | Сужение statement при принятии — DECISION version 2 (§46, REQ-SA-049); GAP на карте корпуса (§45.1) | 2026-09-18 | tool-spec 1.27, `TestAcceptNarrowed`, `TestCorpus`; README «Приёмка и ограничения» |
 | Динамика GAP между решёнными run, `baseline_run` (§47) | 2026-09-18 | tool-spec 1.28, `TestCorpusDelta`; README «Приёмка и ограничения» |
 | Сводка отчёта при устаревшем snapshot — `host_review.complete` (§65) | 2026-09-21 | tool-spec 1.49, `TestReportMetricsSeparateEvidenceAndFreshness`; наблюдение владельца по опубликованным отчётам |
-| Форма заданий инкремента в manifest (§64) — совместимость чтения старых run | 2026-09-21 | tool-spec 1.48, `TestIncrementalLegacyGrouping`; урок: `overview` глотает ошибку чтения run на уровне debug |
+| Форма заданий инкремента в manifest (§64) — совместимость чтения старых run | 2026-09-21 | tool-spec 1.48–1.49, `TestIncrementalLegacyGrouping`; уроки: `overview` глотает ошибку чтения run на уровне debug; первая правка сломала run 0.1.39–0.1.55 — совместимость проверять на всех формах пилота до релиза; перевыпуск тем же тегом не доходит до уже обновившихся хостов — только новая версия |
 | Актуальность решений по коду на карте корпуса — `drift` (§63) | 2026-09-20 | tool-spec 1.46, `TestCorpusDelta`; цель владельца «актуальная картина на срезах» |
 | Advisory о supported с limitations, правило модели ролей (§62); `hints.json` отозван после замера без выигрыша (62.1, 0.1.51) | 2026-09-19 | tool-spec 1.45, `TestReviewBrief`, SKILL.md; adoption двадцатый–двадцать второй циклы |
 | Токены ролей — состав контекста и `dispatch/files.txt` (§61) | 2026-09-19 | tool-spec 1.43, `TestPrepareDispatch`; README «Приёмка и ограничения»; эффект проверяется на следующем живом прогоне |
