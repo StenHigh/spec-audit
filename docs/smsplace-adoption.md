@@ -309,6 +309,12 @@ Run `rent-2026-09-19-hints` на том же snapshot; `hints.json` задани
 
 Урок для инструмента: advisory «supported с limitations» (§62.2) сработала почти на каждой норме (10 строк на 5 норм в 08) — сигнал полезен только при пороге или классификации; вернуть к рассмотрению после следующих прогонов.
 
+## Публикация сайта отчётов для заказчика на place1 (2026-09-21)
+
+Решение владельца: basic auth, домен `audit.yolo.zip` (пока не выделен — временный вход по IP и отдельному порту). Репозиторий `stenhigh/spec-audit-site` (private, `main` защищена; в группе `smsplace` у владельца прав на создание проектов нет — доступ к проектам выдан на уровне проектов, перенос позже меняет одну строку `project_path_encoded` в deploy-скрипте): `site/` — результат `spec-audit publish` (137 МБ, в git ~7 МБ), `deploy/` — root-скрипт по шаблону эмуляторов place1 (сверка SHA с защищённой `main` по GitLab API job-токеном, `git archive site` → `/opt/spec-audit-site/releases/<sha>`, атомарный симлинк `current`, healthcheck 401, пять последних релизов), vhost `/etc/nginx/conf.d/spec-audit-site.conf` + `.inc` (`https://5.188.19.57:8443/`, `server_name _`, parking-сертификат; второй блок `audit.yolo.zip:443` ждёт DNS), sudoers, `DEPLOY.md`, `scripts/publish.sh`. Общий раннер `place1-deploy` подключён; pipeline `verify-site` → `deploy-place1`. Пароли — `/etc/nginx/spec-audit-site.htpasswd`, в репозитории и документации их нет.
+
+Цикл публикации с хоста: `scripts/publish.sh <backend>/.spec-audit/scopes/*/config.yaml` → коммит → CI → сайт. `publish` копирует готовые `report.html` решённых run — после смены бинарника с изменением шаблона (палитра 0.1.54) отчёты решённых run перегенерируются `report` до публикации; перегенерация выявила дефект чтения первого инкрементального run (закрыт в 0.1.55, §64).
+
 ## Обычный рабочий цикл
 
 1. До снимка проверить ветку и чистоту checkout. Если требуется разрешённое владельцем обновление, на чистой `development` подготовка сессии выполняет `git pull --ff-only origin development`; при расхождении веток остановиться, не создавать merge/rebase автоматически. Spec-audit сам Git не изменяет. Затем выбрать GitLab-задачу: прочитать исполнителя, комментарии и связанные merge requests, сверить исправление с checkout. Открытый issue может ждать QA; статус не доказывает ни дефект, ни исправность. Выбранный CONFIG задаёт точные нормативные границы, живой `project_root` SMSPlace, полные файлы ТЗ, код/тесты и изолированный `reports_dir` в разрешённой рабочей области.
