@@ -2111,13 +2111,25 @@ func incrementalPlan(reports *os.Root, sinceRun string, m Manifest) (*Incrementa
 	for _, a := range record.Assessments {
 		verdicts[a.RequirementID] = a
 	}
-	// §51.1: a changed or new tests file anywhere is the only signal that a verification gap may have closed.
-	testsChanged := false
+	// §51.1/§66: a verification gap may have closed only when a tests file appeared in the snapshot or a tests file the
+	// decided verdict cites changed; edits to uncited tests and removed tests files are no signal.
+	newTests := false
 	for _, file := range m.Files {
-		if file.Kind == "tests" && prevFiles[file.Path] != file.SHA256 {
-			testsChanged = true
+		if _, known := prevFiles[file.Path]; file.Kind == "tests" && !known {
+			newTests = true
 			break
 		}
+	}
+	testsChanged := func(v Assessment) bool {
+		if newTests {
+			return true
+		}
+		for _, t := range v.Tests {
+			if current, ok := currentFiles[t.Citation.Path]; ok && current.SHA256 != prevFiles[t.Citation.Path] {
+				return true
+			}
+		}
+		return false
 	}
 	root, err := os.OpenRoot(m.Config.ProjectRoot)
 	if err != nil {
@@ -2148,8 +2160,8 @@ func incrementalPlan(reports *os.Root, sinceRun string, m Manifest) (*Incrementa
 			reason = "implementation_gap" // nothing cited to rest on — always reassessed
 		case verdict.Implementation == "contradicted":
 			// §52.1: a known defect is carried while its cited lines stand (checked below); tests cannot fix it.
-		case verdict.Assertion != "relevant" && testsChanged:
-			reason = "verification_gap" // reassessed only when some tests file changed (§51.1)
+		case verdict.Assertion != "relevant" && testsChanged(verdict):
+			reason = "verification_gap" // a cited tests file changed or a tests file appeared (§51.1, §66)
 		}
 		files := []SourceFile{}
 		if reason == "" {
