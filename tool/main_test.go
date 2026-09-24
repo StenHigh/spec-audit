@@ -1365,7 +1365,7 @@ func TestIncrementalRerun(t *testing.T) {
 		t.Fatal("overview: инкрементальный run решён, динамика против r1", ov.Scopes[0].Decided.Carried, ov.Scopes[0].Delta)
 	}
 	// r4 after appending to the tests file: the cited quotes still stand at their lines (nothing «changed»), but a
-	// verification gap (the weak norm) is reassessed because a tests file changed (§51.1).
+	// verification gap (the weak norm) is reassessed because the tests file it cites changed (§51.1, §66).
 	writeFixture(t, filepath.Join(source, "source_test.go"), append(readFixture(t, filepath.Join(source, "source_test.go")), []byte("\n// new test below\n")...))
 	weak := 0
 	for _, a := range rows {
@@ -1386,6 +1386,58 @@ func TestIncrementalRerun(t *testing.T) {
 	if !strings.Contains(prompt, "ИНКРЕМЕНТАЛЬНЫЙ RUN") || !strings.Contains(prompt, "(changed)") || !strings.Contains(prompt, "implementation_gap") {
 		t.Fatal("промпт роли называет инкрементальный run и причины")
 	}
+}
+
+// tool-spec §66: a verification gap is reassessed only when a tests file its decided verdict cites changed or a tests
+// file appeared in the snapshot; edits to other tests files and removed tests files carry it.
+func TestVerificationGapCitedTests(t *testing.T) {
+	config, base := fixture(t)
+	source := filepath.Join(base, "source")
+	other, fresh := filepath.Join(source, "extra/other_test.go"), filepath.Join(source, "extra/new_test.go")
+	writeFixture(t, other, []byte("package fixture\n"))
+	writeFixture(t, config, bytes.Replace(readFixture(t, config), []byte("tests: {paths: [source_test.go]}"), []byte("tests: {paths: [source_test.go, extra]}"), 1))
+	batch := runOK(t, "prepare", config, "r1").(TaskBatch)
+	for _, task := range batch.Tasks {
+		path := filepath.Join(base, "r1-"+task.TaskID+".json")
+		writeFixture(t, path, legacyMarshal(t, sampleResult(t, task, source)))
+		runOK(t, "submit", config, "r1", task.TaskID, path)
+	}
+	view := runOK(t, "review", config, "r1").(ReviewContext)
+	rows := append([]Assessment{}, view.Entries[0].Result.Assessments...)
+	// REQ-DEMO-002 is weak and cites source_test.go; the host makes REQ-DEMO-004 supported+missing with no tests cited.
+	const weak, missing = "REQ-DEMO-002", "REQ-DEMO-004"
+	for i := range rows {
+		if rows[i].RequirementID == missing {
+			rows[i].Implementation, rows[i].Assertion, rows[i].Tests = "supported", "missing", []TestCitation{}
+		}
+	}
+	decision := filepath.Join(base, "host-r1.json")
+	writeFixture(t, decision, legacyMarshal(t, ReviewDecision{1, "decision-r1", "r1", view.SnapshotID, view.BasisSHA256, "host", "s", rows, []string{}}))
+	runOK(t, "review", config, "r1", decision)
+	reasons := func() map[string]string {
+		return runOK(t, "plan", config, "r1").(map[string]any)["reasons"].(map[string]string)
+	}
+	expect := func(step string, weakReason, missingReason string) {
+		t.Helper()
+		got := reasons()
+		if got[weak] != weakReason || got[missing] != missingReason {
+			t.Fatal(step, got)
+		}
+	}
+	expect("без изменений обе нормы переносятся", "", "")
+	writeFixture(t, other, []byte("package fixture\n\n// unrelated assert\n"))
+	expect("правка непроцитированного тестового файла не возвращает нормы", "", "")
+	sourceTest := filepath.Join(source, "source_test.go")
+	before := readFixture(t, sourceTest)
+	writeFixture(t, sourceTest, append(append([]byte{}, before...), []byte("\n// new assert below\n")...))
+	expect("правка процитированного тестового файла возвращает только weak-норму", "verification_gap", "")
+	writeFixture(t, sourceTest, before)
+	if err := os.Remove(other); err != nil {
+		t.Fatal(err)
+	}
+	expect("удалённый тестовый файл не даёт причины", "", "")
+	writeFixture(t, fresh, []byte("package fixture\n"))
+	expect("новый тестовый файл возвращает обе нормы", "verification_gap", "verification_gap")
 }
 
 // tool-spec §54: rerun prepares one incremental run per scope from its baseline or latest decided run.
