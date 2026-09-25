@@ -51,6 +51,7 @@ type OverviewTotals struct {
 	Worsened       int            `json:"worsened"` // §53.1
 	Drifted        int            `json:"drifted"`  // norms across scopes a rerun would reassess (§63)
 	StaleScopes    int            `json:"stale_scopes"`
+	Questions      int            `json:"questions"` // open questions to the TZ owner across scopes (§68); not a gap class
 }
 
 // Gap is the industry reading of a gap analysis over the host's verdicts (tool-spec §45.1): a norm is a gap when it is
@@ -94,6 +95,71 @@ type ScopeOverview struct {
 	// Drift says how current the decided verdicts are against the code as it is now (tool-spec §63): the norms an
 	// incremental run from the decided run would reassess, by reason. nil when there is no decision or no snapshot.
 	Drift *ScopeDrift `json:"drift"`
+	// Questions are the open questions to the TZ owner in the current specification (tool-spec §68).
+	Questions []ScopeQuestion `json:"questions"`
+}
+
+// ScopeQuestion is one question of the «Вопросы к ТЗ» section (§68): its text, the norms it touches with the host's
+// latest verdict on each, and where it stands in the TZ.
+type ScopeQuestion struct {
+	ID     string         `json:"id"`
+	Title  string         `json:"title"`
+	Text   string         `json:"text"`
+	Norms  []QuestionNorm `json:"norms"`
+	Source string         `json:"source"`
+}
+
+type QuestionNorm struct {
+	ID      string     `json:"id"`
+	Title   string     `json:"title"`
+	Verdict *NormBrief `json:"verdict"` // nil without a decided run or when the decided run did not judge the norm
+}
+
+// specQuestions lists the open questions of the current snapshot: declared `### Q-…` blocks, or one question per
+// `accepted.unresolved` line of an active norm (§68).
+func specQuestions(m Manifest, decided *RunOverview) []ScopeQuestion {
+	titles := map[string]string{}
+	for _, req := range m.Requirements {
+		titles[req.ID] = req.Title
+	}
+	norm := func(id string) QuestionNorm {
+		n := QuestionNorm{ID: id, Title: titles[id]}
+		if decided != nil {
+			if v, ok := decided.verdicts[id]; ok {
+				n.Verdict = &v
+			}
+		}
+		return n
+	}
+	at := func(c Citation) string { return fmt.Sprintf("%s:%d-%d", c.Path, c.LineStart, c.LineEnd) }
+	questions := []ScopeQuestion{}
+	for _, q := range m.Questions {
+		sq := ScopeQuestion{ID: q.ID, Title: q.Title, Text: q.Text, Norms: []QuestionNorm{}, Source: at(q.Source)}
+		for _, id := range q.Requirements {
+			sq.Norms = append(sq.Norms, norm(id))
+		}
+		questions = append(questions, sq)
+	}
+	reference := map[string]bool{}
+	for _, f := range m.Files {
+		reference[f.Path] = f.Reference
+	}
+	for _, req := range m.Requirements {
+		if req.Accepted == nil {
+			continue
+		}
+		source := ""
+		for _, c := range req.Accepted.Citations {
+			if !reference[c.Path] {
+				source = at(c)
+				break
+			}
+		}
+		for i, text := range req.Accepted.Unresolved {
+			questions = append(questions, ScopeQuestion{ID: fmt.Sprintf("%s/%d", req.ID, i+1), Title: req.Title, Text: text, Norms: []QuestionNorm{norm(req.ID)}, Source: source})
+		}
+	}
+	return questions
 }
 
 // ScopeDrift is the plan of an incremental run from the decided run, reduced to counts (tool-spec §63).
@@ -251,6 +317,7 @@ func overview(paths []string) (Overview, error) {
 		view.Totals.Scopes++
 		view.Totals.Requirements += scope.Requirements
 		view.Totals.Runs += scope.Runs
+		view.Totals.Questions += len(scope.Questions)
 		if scope.Decided != nil {
 			for k, v := range scope.Decided.Implementation {
 				view.Totals.Implementation[k] += v
@@ -295,7 +362,7 @@ func overview(paths []string) (Overview, error) {
 
 // scopeOverview never fails the whole map for one scope: a stale or missing index is reported as its freshness/error.
 func scopeOverview(path string, cfg Config) (ScopeOverview, []ContradictedCitation) {
-	scope := ScopeOverview{Config: path, IndexMode: "declared", Freshness: "n/a", History: []RunRef{}}
+	scope := ScopeOverview{Config: path, IndexMode: "declared", Freshness: "n/a", History: []RunRef{}, Questions: []ScopeQuestion{}}
 	cited := []ContradictedCitation{}
 	if cfg.IndexMode == "accepted" {
 		scope.IndexMode = "accepted"
@@ -320,6 +387,7 @@ func scopeOverview(path string, cfg Config) (ScopeOverview, []ContradictedCitati
 		}
 	} else {
 		current, scope.Requirements = m.SnapshotID, len(m.Requirements)
+		scope.Questions = specQuestions(m, nil) // a scope without runs still shows its questions; verdicts are added below
 		if m.Accepted != nil {
 			scope.Freshness, scope.Head = "fresh", m.Accepted.Head
 		}
@@ -388,6 +456,9 @@ func scopeOverview(path string, cfg Config) (ScopeOverview, []ContradictedCitati
 	}
 	if scope.Decided != nil && current != "" {
 		scope.Drift = scopeDrift(reports, scope.Decided.RunID, m)
+	}
+	if current != "" && scope.Decided != nil {
+		scope.Questions = specQuestions(m, scope.Decided)
 	}
 	for _, c := range decidedCode {
 		c.Config = path

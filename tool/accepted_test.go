@@ -708,6 +708,81 @@ func referenceFixture(t *testing.T) (string, string) {
 	return config, base
 }
 
+// REQ-SA-051: справочные файлы в declared-профиле — без норм, цитируются любыми строками, входят в свежесть run.
+func TestDeclaredReferences(t *testing.T) {
+	config, base := fixture(t)
+	source := filepath.Join(base, "source")
+	jsonOf := func(v any) map[string]any {
+		t.Helper()
+		body, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]any{}
+		if err := json.Unmarshal(body, &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	plainIndex := jsonOf(runOK(t, "index", config))
+	defs := filepath.Join(source, "defs.md")
+	writeFixture(t, defs, []byte("# Термины\n\n### REQ-DEF-001 — Пример из чужого документа\n\nУсловие: пример.\nТребование: не норма этого проекта.\nПроверка: нет.\n\n* T-1: инверсия — логическое отрицание.\n"))
+	writeFixture(t, config, append(readFixture(t, config), []byte("references: {paths: [defs.md]}\n")...))
+	index := jsonOf(runOK(t, "index", config))
+	if index["snapshot_id"] == plainIndex["snapshot_id"] {
+		t.Fatal("группа references должна входить в идентичность snapshot")
+	}
+	requirements := index["requirements"].([]any)
+	if len(requirements) != len(plainIndex["requirements"].([]any)) {
+		t.Fatal("справочный файл породил нормы", len(requirements))
+	}
+	for _, r := range requirements {
+		if r.(map[string]any)["id"] == "REQ-DEF-001" {
+			t.Fatal("REQ-блок справочного файла стал нормой")
+		}
+	}
+	batch := runOK(t, "prepare", config, "ref").(TaskBatch)
+	listing := string(readFixture(t, filepath.Join(base, "runs", "ref", "dispatch", "files.txt")))
+	if !strings.Contains(listing, "reference\tdefs.md\n") || !strings.Contains(listing, "spec\trules.md\n") {
+		t.Fatal("files.txt не помечает справочный файл", listing)
+	}
+	task := batch.Tasks[0]
+	write := func(name string, result Result) string {
+		body, err := json.Marshal(result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(base, name+".json")
+		writeFixture(t, path, body)
+		return path
+	}
+	cite := func(path string, line int) Citation {
+		quote, err := lineQuote(readFixture(t, filepath.Join(source, path)), line, line)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Citation{path, line, line, quote}
+	}
+	withSpec := func(extra Citation) Result {
+		result := sampleResult(t, task, source)
+		result.Assessments[0].Spec = append(result.Assessments[0].Spec, extra)
+		return result
+	}
+	if got := runOK(t, "validate", config, "ref", task.TaskID, write("reference", withSpec(cite("defs.md", 9)))).(map[string]any); got["valid"] != true {
+		t.Fatal("цитата справочного файла отклонена", got)
+	}
+	if _, err := execute([]string{"validate", config, "ref", task.TaskID, write("outside", withSpec(cite("rules.md", 3)))}); err == nil || !strings.Contains(err.Error(), "допустимые диапазоны") {
+		t.Fatal("цитата нормативного файла вне блока нормы должна отклоняться", err)
+	}
+	writeFixture(t, defs, append(readFixture(t, defs), []byte("* T-2: новое определение.\n")...))
+	if _, err := execute([]string{"validate", config, "ref", task.TaskID, write("stale", sampleResult(t, task, source))}); err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatal("правка справочного файла должна делать run устаревшим", err)
+	}
+	overlap := filepath.Join(base, "overlap.yaml")
+	writeFixture(t, overlap, bytes.Replace(readFixture(t, config), []byte("references: {paths: [defs.md]}"), []byte("references: {paths: [rules.md]}"), 1))
+	runFail(t, "index", overlap)
+}
+
 func TestReferenceSources(t *testing.T) {
 	t.Run("config", func(t *testing.T) {
 		config, base := referenceFixture(t)
@@ -749,9 +824,8 @@ func TestReferenceSources(t *testing.T) {
 		if bytes.Contains(without, []byte("reference")) || bytes.Equal(withReferences, without) {
 			t.Fatal("без группы manifest должен остаться прежним и отличаться от manifest с группой")
 		}
-		// REQ-SA-041: только accepted-режим, непустой paths, файл в одной категории, непустая группа.
+		// REQ-SA-041: непустой paths, файл в одной категории, непустая группа (declared-профиль — §67, TestDeclaredReferences).
 		for name, mutate := range map[string]func([]byte) []byte{
-			"declared": func(c []byte) []byte { return bytes.Replace(c, []byte("index_mode: accepted\n"), nil, 1) },
 			"empty_paths": func(c []byte) []byte {
 				return bytes.Replace(c, []byte("references: {paths: [clarification.md]}"), []byte("references: {paths: []}"), 1)
 			},
@@ -1186,4 +1260,74 @@ func TestReferenceGroupFreshness(t *testing.T) {
 	}
 	writeFixture(t, filepath.Join(base, "runs", acceptedFile), []byte(`{"version":3,"commits":[]}`))
 	runFail(t, "reconcile", config)
+}
+
+// REQ-SA-052: вопросы к ТЗ — блоки Q в declared-профиле и unresolved принятых норм, раздел на карте корпуса.
+func TestSpecQuestions(t *testing.T) {
+	config, base := fixture(t)
+	rules := filepath.Join(base, "source", "rules.md")
+	plain := readFixture(t, rules)
+	cfg, err := loadConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := snapshot(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(mustJSON(t, before), []byte(`"questions"`)) {
+		t.Fatal("manifest без вопросов не должен содержать questions")
+	}
+	block := "\n### Q-DEMO-001 — Граница инверсии\n\nВопрос: что возвращает Flip для nil-указателя?\nНормы: REQ-DEMO-001\n\n### Q-DEMO-002 — Общий вопрос\n\nВопрос: кто владелец среза?\n"
+	writeFixture(t, rules, append(append([]byte{}, plain...), block...))
+	after, err := snapshot(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Requirements) != len(before.Requirements) || len(after.Questions) != 2 || after.Questions[0].ID != "Q-DEMO-001" ||
+		!reflect.DeepEqual(after.Questions[0].Requirements, []string{"REQ-DEMO-001"}) || len(after.Questions[1].Requirements) != 0 || after.Questions[0].Source.Path != "rules.md" {
+		t.Fatalf("вопросы разобраны неверно: %+v", after.Questions)
+	}
+	for name, broken := range map[string]string{
+		"duplicate":    block + "\n### Q-DEMO-001 — Повтор\n\nВопрос: ещё раз?\n",
+		"unknown_norm": "\n### Q-DEMO-003 — Чужая норма\n\nВопрос: что это?\nНормы: REQ-DEMO-999\n",
+		"empty":        "\n### Q-DEMO-004 — Пусто\n\nНормы: REQ-DEMO-001\n",
+	} {
+		writeFixture(t, rules, append(append([]byte{}, plain...), broken...))
+		if _, err := snapshot(cfg); err == nil {
+			t.Fatalf("%s: snapshot должен отклонить вопрос", name)
+		}
+	}
+	writeFixture(t, rules, append(append([]byte{}, plain...), block...))
+	view := runOK(t, "overview", config).(Overview)
+	if view.Totals.Questions != 2 || len(view.Scopes[0].Questions) != 2 || view.Scopes[0].Questions[0].Norms[0].ID != "REQ-DEMO-001" || view.Scopes[0].Questions[0].Norms[0].Verdict != nil {
+		t.Fatalf("overview: %+v", view.Scopes[0].Questions)
+	}
+	if view.Totals.Gap.Total != 0 {
+		t.Fatal("вопросы не входят в GAP")
+	}
+	decided := &RunOverview{verdicts: map[string]NormBrief{"REQ-DEMO-001": {ID: "REQ-DEMO-001", Specification: "clear", Implementation: "supported", Assertion: "weak"}}}
+	if got := specQuestions(after, decided); got[0].Norms[0].Verdict == nil || got[0].Norms[0].Verdict.Assertion != "weak" {
+		t.Fatalf("вердикт хоста у связанной нормы: %+v", got[0].Norms)
+	}
+	accepted := Manifest{Files: []SourceFile{{Path: "defs.md", Kind: "spec", Reference: true}, {Path: "rules.md", Kind: "spec"}}, Requirements: []Requirement{{ID: "REQ-AI-001", Title: "Срок",
+		Accepted: &AcceptedDetails{Clarity: "ambiguous", Unresolved: []string{"Какой срок?", "Кто уведомляет?"}, Citations: []Citation{{"defs.md", 1, 1, "x"}, {"rules.md", 2, 3, "y"}}}}}}
+	if got := specQuestions(accepted, nil); len(got) != 2 || got[1].ID != "REQ-AI-001/2" || got[1].Text != "Кто уведомляет?" || got[1].Source != "rules.md:2-3" || got[1].Norms[0].ID != "REQ-AI-001" {
+		t.Fatalf("unresolved принятой нормы: %+v", got)
+	}
+	page := filepath.Join(base, "corpus.html")
+	runOK(t, "corpus", page, config)
+	html := string(readFixture(t, page))
+	if !strings.Contains(html, `id="questions"`) || !strings.Contains(html, "кто владелец среза?") || !strings.Contains(html, `href="#questions"`) {
+		t.Fatal("страница корпуса без раздела вопросов")
+	}
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
