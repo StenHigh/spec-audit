@@ -48,8 +48,9 @@ type OverviewTotals struct {
 	Gap            Gap            `json:"gap"`
 	Closed         int            `json:"closed"` // sums of the scope deltas (§47)
 	Opened         int            `json:"opened"`
-	Worsened       int            `json:"worsened"` // §53.1
-	Drifted        int            `json:"drifted"`  // norms across scopes a rerun would reassess (§63)
+	Worsened       int            `json:"worsened"`         // §53.1
+	Drifted        int            `json:"drifted"`          // norms across scopes a rerun would reassess (§63)
+	Unchecked      int            `json:"unchecked_scopes"` // decided scopes whose currency was not checked (§69)
 	StaleScopes    int            `json:"stale_scopes"`
 	Questions      int            `json:"questions"` // open questions to the TZ owner across scopes (§68); not a gap class
 }
@@ -95,6 +96,9 @@ type ScopeOverview struct {
 	// Drift says how current the decided verdicts are against the code as it is now (tool-spec §63): the norms an
 	// incremental run from the decided run would reassess, by reason. nil when there is no decision or no snapshot.
 	Drift *ScopeDrift `json:"drift"`
+	// DriftUnchecked names why a decided scope's currency against the code could not be checked (tool-spec §69):
+	// no snapshot (stale accepted index, unreadable sources) or no incremental plan. Empty when Drift is set.
+	DriftUnchecked string `json:"drift_unchecked,omitempty"`
 	// Questions are the open questions to the TZ owner in the current specification (tool-spec §68).
 	Questions []ScopeQuestion `json:"questions"`
 }
@@ -336,6 +340,9 @@ func overview(paths []string) (Overview, error) {
 					view.Totals.StaleScopes++
 				}
 			}
+			if scope.DriftUnchecked != "" {
+				view.Totals.Unchecked++
+			}
 			g := scope.Decided.Gap
 			view.Totals.Gap.Total += g.Total
 			view.Totals.Gap.Implementation += g.Implementation
@@ -463,8 +470,16 @@ func scopeOverview(path string, cfg Config) (ScopeOverview, []ContradictedCitati
 		scope.Delta.Pinned = cfg.BaselineRun != "" && baseline.RunID == cfg.BaselineRun
 		slog.Debug("overview: динамика scope", "config", path, "baseline", scope.Delta.BaselineRun, "closed", len(scope.Delta.Closed), "opened", len(scope.Delta.Opened))
 	}
-	if scope.Decided != nil && current != "" {
-		scope.Drift = scopeDrift(reports, scope.Decided.RunID, m)
+	if scope.Decided != nil {
+		// §69: a decision whose currency cannot be checked is reported as such, never as current.
+		switch {
+		case current == "":
+			scope.DriftUnchecked = "snapshot недоступен: " + scope.Error
+		default:
+			if scope.Drift = scopeDrift(reports, scope.Decided.RunID, m); scope.Drift == nil {
+				scope.DriftUnchecked = "план инкремента от решённого run не построен"
+			}
+		}
 	}
 	if questions != nil && scope.Decided != nil {
 		scope.Questions = specQuestions(*questions, scope.Decided)

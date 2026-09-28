@@ -1116,6 +1116,22 @@ func TestCorpusDelta(t *testing.T) {
 		t.Fatal("карта корпуса должна показывать дрейф")
 	}
 	writeFixture(t, sourcePath, sourceBefore)
+	// §69: when the snapshot cannot be taken the decision's currency is unchecked — never reported as current.
+	rulesPath := filepath.Join(base, "source/rules.md")
+	rulesBefore := readFixture(t, rulesPath)
+	if err := os.Remove(rulesPath); err != nil {
+		t.Fatal(err)
+	}
+	unchecked := runOK(t, "overview", config).(Overview)
+	if u := unchecked.Scopes[0]; u.Drift != nil || !strings.HasPrefix(u.DriftUnchecked, "snapshot недоступен") || unchecked.Totals.Unchecked != 1 || unchecked.Totals.StaleScopes != 0 {
+		t.Fatal("недоступный snapshot — актуальность не проверена", u.Drift, u.DriftUnchecked, unchecked.Totals)
+	}
+	uncheckedOut := filepath.Join(base, "corpus-unchecked.html")
+	runOK(t, "corpus", uncheckedOut, config)
+	if html := string(readFixture(t, uncheckedOut)); !strings.Contains(html, "актуальность по коду не проверена") || !strings.Contains(html, "актуальность 1 scope не проверена") || strings.Contains(html, "все решения актуальны по коду") {
+		t.Fatal("карта не должна заявлять актуальность без проверки")
+	}
+	writeFixture(t, rulesPath, rulesBefore)
 	// r2: the host now finds the contradicted norm supported+relevant (closed) and a supported one weak (opened).
 	fixed := func(rows *[]Assessment) {
 		for i := range *rows {
