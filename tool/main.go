@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1379,6 +1380,28 @@ func sameTaskIDs(a, b State) bool {
 	return true
 }
 
+// relocateSpec finds a verdict's spec quote verbatim inside the norm's current citations (accepted citations, or the
+// declared source) and returns it at the lines it occupies now (tool-spec §70).
+func relocateSpec(req Requirement, c Citation) (Citation, bool) {
+	sources := []Citation{req.Source}
+	if req.Accepted != nil {
+		sources = req.Accepted.Citations
+	}
+	want := strings.Split(c.Quote, "\n")
+	for _, src := range sources {
+		if src.Path != c.Path {
+			continue
+		}
+		have := strings.Split(src.Quote, "\n")
+		for i := 0; i+len(want) <= len(have); i++ {
+			if slices.Equal(have[i:i+len(want)], want) {
+				return Citation{c.Path, src.LineStart + i, src.LineStart + i + len(want) - 1, c.Quote}, true
+			}
+		}
+	}
+	return Citation{}, false
+}
+
 // legacyIncrementalState is the §50 task form of incremental runs prepared before §51.5 (0.1.39): one task pair per
 // CONFIG scope holding that scope's reassessed norms; a scope whose norms are all carried gets no tasks. It is chosen
 // only when a run without the §64 marker was saved in that form (readState); newState itself yields §51.5.
@@ -2173,12 +2196,27 @@ func incrementalPlan(reports *os.Root, sinceRun string, m Manifest) (*Incrementa
 		if reason == "" {
 			// §51.1: «changed» means a cited quote no longer stands at its lines, not that the file's hash moved.
 			seen := map[string]bool{}
-			citations := append([]Citation{}, verdict.Spec...)
+			// §70: a spec citation follows its norm — when the TZ text around it moved (reanchor, a line inserted above),
+			// the quote is looked up verbatim in the norm's current citations and carried at its new lines.
+			spec := []Citation{}
+			for _, c := range verdict.Spec {
+				moved, ok := relocateSpec(req, c)
+				if !ok {
+					reason = "changed"
+					break
+				}
+				spec = append(spec, moved)
+			}
+			verdict.Spec = spec
+			citations := append([]Citation{}, spec...)
 			citations = append(citations, verdict.Code...)
 			for _, t := range verdict.Tests {
 				citations = append(citations, t.Citation)
 			}
 			for _, c := range citations {
+				if reason != "" {
+					break
+				}
 				current, ok := currentFiles[c.Path]
 				if !ok || !quoteHolds(c) {
 					reason = "changed"

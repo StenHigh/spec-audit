@@ -227,3 +227,89 @@ func TestIncrementalLegacyGrouping(t *testing.T) {
 		t.Fatal("sameTaskIDs различает формы")
 	}
 }
+
+// tool-spec §70: moving the TZ text of a decided norm (a line inserted above it) does not send the norm back to the
+// roles — its spec quote is found verbatim in the norm's current source and carried at the new lines, and the host's
+// decision on the incremental run accepts that carried verdict.
+func TestIncrementalSpecShift(t *testing.T) {
+	config, base := fixture(t)
+	source := filepath.Join(base, "source")
+	deliver := func(runID string, extra ...string) TaskBatch {
+		batch := runOK(t, append([]string{"prepare", config, runID}, extra...)...).(TaskBatch)
+		for _, task := range batch.Tasks {
+			path := filepath.Join(base, runID+"-"+task.TaskID+".json")
+			writeFixture(t, path, legacyMarshal(t, sampleResult(t, task, source)))
+			runOK(t, "submit", config, runID, task.TaskID, path)
+		}
+		return batch
+	}
+	deliver("r1")
+	view := runOK(t, "review", config, "r1").(ReviewContext)
+	rows := append([]Assessment{}, view.Entries[0].Result.Assessments...)
+	decision := filepath.Join(base, "host-r1.json")
+	writeFixture(t, decision, legacyMarshal(t, ReviewDecision{1, "decision-r1", "r1", view.SnapshotID, view.BasisSHA256, "host", "s", rows, []string{}}))
+	runOK(t, "review", config, "r1", decision)
+	planFrom := func() *IncrementalPlan {
+		t.Helper()
+		cfg, err := loadConfig(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, err := snapshot(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reports, err := os.OpenRoot(cfg.ReportsDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer reports.Close()
+		plan, err := incrementalPlan(reports, "r1", m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return plan
+	}
+	before := planFrom()
+	rules := filepath.Join(source, "rules.md")
+	writeFixture(t, rules, append([]byte("<!-- строка выше всех норм -->\n"), readFixture(t, rules)...))
+	after := planFrom()
+	for id, reason := range after.Reasons {
+		if reason == "changed" {
+			t.Fatalf("%s: сдвиг текста ТЗ не меняет норму — changed недопустим", id)
+		}
+	}
+	if len(after.Carried) != len(before.Carried) || len(after.Carried) == 0 {
+		t.Fatalf("перенос не должен уменьшиться: было %d, стало %d", len(before.Carried), len(after.Carried))
+	}
+	for i, carried := range after.Carried {
+		if carried.Spec[0].LineStart != before.Carried[i].Spec[0].LineStart+1 || carried.Spec[0].Quote != before.Carried[i].Spec[0].Quote {
+			t.Fatalf("%s: spec-цитата должна переехать на строку ниже с той же quote", carried.RequirementID)
+		}
+	}
+	deliver("r2", "since", "r1")
+	draft := runOK(t, "draft", config, "r2").(ReviewDecisionV3)
+	full := runOK(t, "review", config, "r2").(ReviewContext)
+	mapper := map[string]Assessment{}
+	for _, entry := range full.Entries {
+		if entry.Task.Role == "mapper" && entry.Result != nil {
+			for _, a := range entry.Result.Assessments {
+				mapper[a.RequirementID] = a
+			}
+		}
+	}
+	verdicts := []ReviewVerdict{}
+	for i, v := range draft.Verdicts {
+		if v.Concur != "carried" {
+			a := mapper[v.RequirementID]
+			draft.Verdicts[i] = ReviewVerdictV3{v.RequirementID, a.Specification, a.Implementation, a.Assertion, "mapper", "по mapper", []string{}, []Citation{}, []Citation{}, []TestCitation{}}
+		}
+		verdicts = append(verdicts, draft.Verdicts[i].base())
+	}
+	draft.Reviewer, draft.Summary, draft.Counts = "host", "сдвиг ТЗ", countVerdicts(verdicts)
+	path := filepath.Join(base, "host-r2.json")
+	raw, _ := json.Marshal(draft)
+	writeFixture(t, path, raw)
+	runOK(t, "review", config, "r2", path)
+	runOK(t, "report", config, "r2")
+}
