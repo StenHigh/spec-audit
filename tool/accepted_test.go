@@ -1331,3 +1331,27 @@ func mustJSON(t *testing.T, v any) []byte {
 	}
 	return data
 }
+
+// §68.1: устаревший принятый индекс не отвечает на вопросы — они остаются по последней приёмке с пометкой stale.
+func TestSpecQuestionsStaleIndex(t *testing.T) {
+	config, base := acceptedFixture(t)
+	unclear := candidateAt(t, base, "rules.md", "C001", "Уведомить", 4, 4)
+	unclear.Clarity, unclear.Unresolved = "ambiguous", []string{"Какой срок?"}
+	raw, decision := acceptedInputs(t, config, "initial", []legacyCandidate{unclear}, acceptOperation("accept", []string{}, "C001"))
+	runOK(t, "reconcile", config, raw, decision)
+	fresh := runOK(t, "overview", config).(Overview)
+	if fresh.Totals.Questions != 1 || fresh.Scopes[0].Questions[0].ID != "REQ-AI-001/1" || fresh.Scopes[0].Questions[0].Text != "Какой срок?" {
+		t.Fatalf("свежий индекс: %+v", fresh.Scopes[0].Questions)
+	}
+	rules := filepath.Join(base, "source", "rules.md")
+	writeFixture(t, rules, append(readFixture(t, rules), []byte("Новая строка ТЗ.\n")...))
+	stale := runOK(t, "overview", config).(Overview)
+	if stale.Scopes[0].Freshness != "stale" || stale.Totals.Questions != 1 || stale.Scopes[0].Questions[0].Text != "Какой срок?" {
+		t.Fatalf("устаревший индекс потерял вопросы: %s %+v", stale.Scopes[0].Freshness, stale.Scopes[0].Questions)
+	}
+	page := filepath.Join(base, "corpus.html")
+	runOK(t, "corpus", page, config)
+	if !strings.Contains(string(readFixture(t, page)), "список по последней приёмке") {
+		t.Fatal("раздел вопросов не помечает устаревший индекс")
+	}
+}

@@ -368,29 +368,38 @@ func scopeOverview(path string, cfg Config) (ScopeOverview, []ContradictedCitati
 		scope.IndexMode = "accepted"
 	}
 	current := ""
+	var questions *Manifest // where the «Вопросы к ТЗ» come from (§68): the current snapshot, else the last accepted state
 	m, err := snapshot(cfg)
 	if err != nil {
 		scope.Error = err.Error()
 		scope.Freshness = "unavailable"
 		if cfg.IndexMode == "accepted" {
 			if ledger, state, readErr := readAccepted(cfg.ReportsDir); readErr == nil {
+				last := Manifest{}
 				if files, scanErr := scanSnapshot(cfg); scanErr == nil {
 					scope.Freshness = acceptedFreshness(ledger, state, files.Files)
+					last.Files = files.Files
 				}
 				for _, record := range state.Records {
 					if record.Status == "active" {
 						scope.Requirements++
+						last.Requirements = append(last.Requirements, record.Requirement)
 					}
 				}
+				// A stale index does not answer the owner's questions: they stay open until a new acceptance (§68.1).
+				questions = &last
 				scope.Head = state.Head
 			}
 		}
 	} else {
 		current, scope.Requirements = m.SnapshotID, len(m.Requirements)
-		scope.Questions = specQuestions(m, nil) // a scope without runs still shows its questions; verdicts are added below
+		questions = &m
 		if m.Accepted != nil {
 			scope.Freshness, scope.Head = "fresh", m.Accepted.Head
 		}
+	}
+	if questions != nil {
+		scope.Questions = specQuestions(*questions, nil) // a scope without runs still shows its questions; verdicts are added below
 	}
 	reports, err := os.OpenRoot(cfg.ReportsDir)
 	if err != nil {
@@ -457,8 +466,8 @@ func scopeOverview(path string, cfg Config) (ScopeOverview, []ContradictedCitati
 	if scope.Decided != nil && current != "" {
 		scope.Drift = scopeDrift(reports, scope.Decided.RunID, m)
 	}
-	if current != "" && scope.Decided != nil {
-		scope.Questions = specQuestions(m, scope.Decided)
+	if questions != nil && scope.Decided != nil {
+		scope.Questions = specQuestions(*questions, scope.Decided)
 	}
 	for _, c := range decidedCode {
 		c.Config = path
