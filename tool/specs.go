@@ -50,10 +50,28 @@ func (req Requirement) containsSource(citation Citation) bool {
 	return false
 }
 
+// SpecQuestion is a question to the owner of the specification (tool-spec §68): declared by a `### Q-…` block in a
+// normative spec file, it names what the text leaves open and the norms it touches. It is a fact about the TZ, not a verdict.
+type SpecQuestion struct {
+	ID           string   `json:"id"`
+	Title        string   `json:"title"`
+	Text         string   `json:"text"`
+	Requirements []string `json:"requirements"`
+	Source       Citation `json:"source"`
+}
+
+var questionHeading = regexp.MustCompile(`^(Q-[A-Z0-9]+-[0-9]{3,}) — (.+)$`)
+
 func parseRequirements(path string, source []byte) ([]Requirement, error) {
-	result := []Requirement{}
+	reqs, _, err := parseSpec(path, source)
+	return reqs, err
+}
+
+// parseSpec reads the declared blocks of one spec file: REQ norms (§4) and Q questions (§68) share the block rules.
+func parseSpec(path string, source []byte) ([]Requirement, []SpecQuestion, error) {
+	result, questions := []Requirement{}, []SpecQuestion{}
 	if !utf8.Valid(source) {
-		return result, fmt.Errorf("Markdown не UTF-8: %s", path)
+		return result, questions, fmt.Errorf("Markdown не UTF-8: %s", path)
 	}
 	tree := goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser().Parse(text.NewReader(source))
 	lines := strings.Split(strings.TrimSuffix(string(source), "\n"), "\n")
@@ -66,16 +84,27 @@ func parseRequirements(path string, source []byte) ([]Requirement, error) {
 		segment := heading.Lines().At(0)
 		// Like the core pilot: use raw source ranges, not Segment.Value's synthetic bytes.
 		label := strings.TrimSpace(string(source[segment.Start:segment.Stop]))
-		if !strings.HasPrefix(label, "REQ-") {
+		pattern, kind := requirementHeading, "требования"
+		switch {
+		case strings.HasPrefix(label, "REQ-"):
+		case strings.HasPrefix(label, "Q-"):
+			pattern, kind = questionHeading, "вопроса"
+		default:
 			continue
 		}
-		match := requirementHeading.FindStringSubmatch(label)
+		match := pattern.FindStringSubmatch(label)
 		if heading.Level != 3 || match == nil {
-			return nil, fmt.Errorf("неверный заголовок требования: %s:%d", path, lineAt(segment.Start))
+			return nil, nil, fmt.Errorf("неверный заголовок %s: %s:%d", kind, path, lineAt(segment.Start))
 		}
-		req := Requirement{ID: match[1], Title: match[2]}
-		start, end := lineAt(segment.Start), len(lines)
+		id, start, end := match[1], lineAt(segment.Start), len(lines)
+		req := Requirement{ID: id, Title: match[2]}
+		question := SpecQuestion{ID: id, Title: match[2], Requirements: []string{}}
+		norms := ""
 		fields := map[string]*string{"Условие:": &req.Condition, "Требование:": &req.Statement, "Проверка:": &req.Verification}
+		required := []string{"Условие:", "Требование:", "Проверка:"}
+		if kind == "вопроса" {
+			fields, required = map[string]*string{"Вопрос:": &question.Text, "Нормы:": &norms}, []string{"Вопрос:"}
+		}
 		for sibling := node.NextSibling(); sibling != nil; sibling = sibling.NextSibling() {
 			if next, ok := sibling.(*ast.Heading); ok && next.Level <= 3 {
 				end = lineAt(next.Lines().At(0).Start) - 1
@@ -97,7 +126,7 @@ func parseRequirements(path string, source []byte) ([]Requirement, error) {
 					matched, hasField = true, true
 					body := strings.TrimSpace(strings.TrimPrefix(line, prefix))
 					if *value != "" || body == "" {
-						return nil, fmt.Errorf("повторное/пустое поле %s в %s", prefix, req.ID)
+						return nil, nil, fmt.Errorf("повторное/пустое поле %s в %s", prefix, id)
 					}
 					*value = body
 				}
@@ -106,12 +135,12 @@ func parseRequirements(path string, source []byte) ([]Requirement, error) {
 				}
 			}
 			if hasField && hasContinuation {
-				return nil, fmt.Errorf("многострочное поле в %s; отделите пояснение пустой строкой", req.ID)
+				return nil, nil, fmt.Errorf("многострочное поле в %s; отделите пояснение пустой строкой", id)
 			}
 		}
-		for name, value := range fields {
-			if *value == "" {
-				return nil, fmt.Errorf("нет поля %s в %s", name, req.ID)
+		for _, name := range required {
+			if *fields[name] == "" {
+				return nil, nil, fmt.Errorf("нет поля %s в %s", name, id)
 			}
 		}
 		for end > start && strings.TrimSpace(lines[end-1]) == "" {
@@ -119,13 +148,26 @@ func parseRequirements(path string, source []byte) ([]Requirement, error) {
 		}
 		quote, err := lineQuote(source, start, end)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+		if kind == "вопроса" {
+			for _, ref := range strings.Split(norms, ",") {
+				if ref = strings.TrimSpace(ref); ref != "" {
+					if !requirementID.MatchString(ref) {
+						return nil, nil, fmt.Errorf("неверный ID нормы %q в %s", ref, id)
+					}
+					question.Requirements = append(question.Requirements, ref)
+				}
+			}
+			question.Source = Citation{path, start, end, quote}
+			questions = append(questions, question)
+			continue
 		}
 		payload, _ := json.Marshal([]string{req.ID, req.Title, req.Condition, req.Statement, req.Verification})
 		req.ContentHash, req.Source = digest(payload), Citation{path, start, end, quote}
 		result = append(result, req)
 	}
-	return result, nil
+	return result, questions, nil
 }
 
 func assignRequirements(m *Manifest) error {
@@ -594,4 +636,24 @@ func anchorIndex(cfg Config, extra []string) (AnchorIndex, error) {
 	sort.Strings(index.Undefined)
 	slog.Debug("anchors: индекс якорей", "spec_files", specFiles, "outside_files", len(outside), "anchors", len(index.Anchors), "nested", len(nested), "undefined", len(index.Undefined))
 	return index, nil
+}
+
+// checkQuestions rejects a repeated question ID or a question naming a norm outside the snapshot (tool-spec §68).
+func checkQuestions(m Manifest) error {
+	norms, seen := map[string]bool{}, map[string]bool{}
+	for _, req := range m.Requirements {
+		norms[req.ID] = true
+	}
+	for _, q := range m.Questions {
+		if seen[q.ID] {
+			return fmt.Errorf("повторный ID вопроса %s", q.ID)
+		}
+		seen[q.ID] = true
+		for _, id := range q.Requirements {
+			if !norms[id] {
+				return fmt.Errorf("вопрос %s ссылается на норму вне snapshot: %s", q.ID, id)
+			}
+		}
+	}
+	return nil
 }

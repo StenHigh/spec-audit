@@ -89,6 +89,9 @@ AI Factory нужен только для разработки spec-audit, не 
 | [Форма заданий инкремента: §64](docs/tool-spec.md#64-форма-заданий-инкрементального-run-записывается-в-manifest) | `incremental.grouping` в manifest; старые run читаются в форме §50, новые — §51.5 |
 | [Сводка при устаревшем snapshot: §65](docs/tool-spec.md#65-сводка-отчёта-при-устаревшем-snapshot) | `host_review.complete`; показатели отчёта не обнуляются при `stale`, основа `host-stale`, уведомление о snapshot |
 | [Причина `verification_gap`: §66](docs/tool-spec.md#66-причина-verification_gap--только-процитированные-и-новые-тестовые-файлы) | переоценка weak/missing/contradicts только при изменении процитированного вердиктом тестового файла или появлении нового; правки чужих тестов переносятся |
+| [Справочные источники в declared-профиле: §67](docs/tool-spec.md#67-справочные-источники-в-declared-профиле) | REQ-SA-051 — `references` без `index_mode`: норм не порождают, цитируются любыми строками, входят в свежесть run; для ТЗ, сразу написанных в форме ISO |
+| [Вопросы к ТЗ: §68](docs/tool-spec.md#68-вопросы-к-тз--отдельный-раздел-карты-корпуса) | REQ-SA-052 — блоки `### Q-…` (`Вопрос:`, `Нормы:`) в declared-профиле и `unresolved` принятых норм; `overview.scopes[].questions`, `totals.questions` (не класс GAP); раздел «Вопросы к ТЗ» на карте корпуса и сайте |
+| [docs/spec-format.md](docs/spec-format.md) | Единый формат ТЗ для ИИ: блоки REQ/Q/DEF, шаблоны EARS, правила ISO 29148, структура файла, ссылки, перевод и сверка; проверяется профилем declared |
 | [docs/php-sdk-contract.md](docs/php-sdk-contract.md) | Контракт typed SDK: `php-typed`, формат `sdk/3`, изоляция bootstrap, подсказки в отчёте |
 | [docs/accepted-index.md](docs/accepted-index.md) | Принятие кандидатов, ID, редакции, reconcile |
 | [docs/legacy-extraction.md](docs/legacy-extraction.md) | Формат извлечения из обычного Markdown и ограничения эксперимента |
