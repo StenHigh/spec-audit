@@ -38,7 +38,7 @@ func acceptOperation(action string, previous []string, candidates ...string) Acc
 		}
 		targets = append(targets, target)
 	}
-	return AcceptedOperation{action, previous, targets, "Решение хоста по источникам"}
+	return AcceptedOperation{action, previous, targets, "Решение хоста по источникам", nil}
 }
 
 func acceptedInputs(t *testing.T, config, id string, candidates []legacyCandidate, ops ...AcceptedOperation) (string, string) {
@@ -1059,7 +1059,7 @@ func TestReanchor(t *testing.T) {
 	runOK(t, "reconcile", config, raw, decision)
 	before := acceptedRead(t, config).Records[0]
 	reanchor := func(previous string, candidate string) AcceptedOperation {
-		return AcceptedOperation{"reanchor", []string{previous}, []AcceptedTarget{{candidate, "", "", ""}}, "Та же норма в новой редакции текста"}
+		return AcceptedOperation{"reanchor", []string{previous}, []AcceptedTarget{{candidate, "", "", ""}}, "Та же норма в новой редакции текста", nil}
 	}
 	// The text moves and the extractor rephrases the norm; the host keeps the accepted wording.
 	writeFixture(t, rules, append([]byte("Вводная строка.\n"), readFixture(t, rules)...))
@@ -1353,5 +1353,48 @@ func TestSpecQuestionsStaleIndex(t *testing.T) {
 	runOK(t, "corpus", page, config)
 	if !strings.Contains(string(readFixture(t, page)), "список по последней приёмке") {
 		t.Fatal("раздел вопросов не помечает устаревший индекс")
+	}
+}
+
+// tool-spec §71: relocate moves an accepted norm to new lines of an edited TZ without a candidate — same quotes,
+// content, ID and revision; anything but a pure move is refused before the journal is written.
+func TestAcceptRelocate(t *testing.T) {
+	config, base := acceptedFixture(t)
+	raw, decision := acceptedInputs(t, config, "first", []legacyCandidate{candidateAt(t, base, "rules.md", "C001", "Лимит 8 МиБ включительно", 2, 2)}, acceptOperation("accept", []string{}, "C001"))
+	runOK(t, "reconcile", config, raw, decision)
+	before := acceptedRead(t, config).Records[0]
+	rules := filepath.Join(base, "source/rules.md")
+	writeFixture(t, rules, append([]byte("<!-- новая строка -->\n"), readFixture(t, rules)...))
+	v3 := func(id string, op map[string]any) (string, string) {
+		t.Helper()
+		rawPath, _ := acceptedInputs(t, config, id, []legacyCandidate{})
+		state := acceptedRead(t, config)
+		data := legacyMarshal(t, map[string]any{"version": 3, "decision_id": id, "base_index": state.Head, "raw_sha256": digest(readFixture(t, rawPath)), "operations": []any{op}})
+		path := filepath.Join(base, id+"-v3.json")
+		writeFixture(t, path, data)
+		return rawPath, path
+	}
+	quote := before.Requirement.Accepted.Citations[0].Quote
+	moved := []Citation{{"rules.md", 3, 3, quote}}
+	for name, op := range map[string]map[string]any{
+		"wrong_line":    {"action": "relocate", "previous": []string{before.Requirement.ID}, "targets": []any{}, "reason": "сдвиг", "citations": []Citation{{"rules.md", 2, 2, quote}}},
+		"other_text":    {"action": "relocate", "previous": []string{before.Requirement.ID}, "targets": []any{}, "reason": "сдвиг", "citations": []Citation{{"rules.md", 4, 4, "Название карточки обязательно."}}},
+		"keep_citation": {"action": "keep", "previous": []string{before.Requirement.ID}, "targets": []any{}, "reason": "сдвиг", "citations": moved},
+		"no_citations":  {"action": "relocate", "previous": []string{before.Requirement.ID}, "targets": []any{}, "reason": "сдвиг", "citations": []Citation{}},
+	} {
+		rawPath, path := v3("bad-"+strings.ReplaceAll(name, "_", "-"), op)
+		if _, err := execute([]string{"reconcile", config, rawPath, path}); err == nil {
+			t.Fatalf("%s: должно быть отклонено", name)
+		}
+	}
+	rawPath, path := v3("moved", map[string]any{"action": "relocate", "previous": []string{before.Requirement.ID}, "targets": []any{}, "reason": "Текст ТЗ сдвинулся на строку, норма та же", "citations": moved})
+	runOK(t, "check", config, rawPath, path)
+	runOK(t, "reconcile", config, rawPath, path)
+	after := acceptedRead(t, config).Records[0]
+	if after.Requirement.ID != before.Requirement.ID || after.Requirement.ContentHash != before.Requirement.ContentHash || after.Revision != before.Revision || after.Requirement.Source.LineStart != 3 || after.Requirement.Accepted.Citations[0].LineStart != 3 {
+		t.Fatalf("relocate переносит только строки: %+v", after)
+	}
+	if view := runOK(t, "reconcile", config).(map[string]any); view["freshness"] != "fresh" {
+		t.Fatal("после relocate индекс свежий", view["freshness"])
 	}
 }

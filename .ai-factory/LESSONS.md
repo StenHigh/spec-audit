@@ -101,6 +101,7 @@
 | Сужение statement при принятии — DECISION version 2 (§46, REQ-SA-049); GAP на карте корпуса (§45.1) | 2026-09-18 | tool-spec 1.27, `TestAcceptNarrowed`, `TestCorpus`; README «Приёмка и ограничения» |
 | Динамика GAP между решёнными run, `baseline_run` (§47) | 2026-09-18 | tool-spec 1.28, `TestCorpusDelta`; README «Приёмка и ограничения» |
 | Причина `verification_gap` — только процитированные и новые тестовые файлы (§66) | 2026-09-24 | tool-spec 1.50, `TestVerificationGapCitedTests`; на пилоте правка чужих тестов давала 140 из 258 «затронутых» норм; принятый риск — новый assert в непроцитированном старом файле ловит только полный run |
+| Перенос нормы без кандидата — `relocate`, DECISION v3 (§71) | 2026-09-28 | tool-spec 1.56, `TestAcceptRelocate`; переприёмка после сдвига текста ТЗ стала возможной |
 | Spec-цитата перенесённого вердикта следует за нормой (§70) | 2026-09-28 | tool-spec 1.55, `TestIncrementalSpecShift`; без неё переприёмка = полный переаудит |
 | Непроверенная актуальность решения по коду — `drift_unchecked` (§69) | 2026-09-28 | tool-spec 1.54, `TestCorpusDelta`; урок: отсутствие вычисленного сигнала нельзя показывать как «всё хорошо» |
 | Сводка отчёта при устаревшем snapshot — `host_review.complete` (§65) | 2026-09-21 | tool-spec 1.49, `TestReportMetricsSeparateEvidenceAndFreshness`; наблюдение владельца по опубликованным отчётам |

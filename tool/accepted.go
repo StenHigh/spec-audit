@@ -49,6 +49,24 @@ type acceptedOperationV2 struct {
 	Reason   string             `json:"reason"`
 }
 
+// Decision version 3 (tool-spec §71): version 2 plus citations on every operation — [] except for relocate, where they
+// are the norm's accepted citations at their new lines (same paths, quotes and spans, in the same order).
+type acceptedOperationV3 struct {
+	Action    string             `json:"action"`
+	Previous  []string           `json:"previous"`
+	Targets   []acceptedTargetV2 `json:"targets"`
+	Reason    string             `json:"reason"`
+	Citations []Citation         `json:"citations"`
+}
+
+type acceptedDecisionV3 struct {
+	Version    int                   `json:"version"`
+	DecisionID string                `json:"decision_id"`
+	BaseIndex  string                `json:"base_index"`
+	RawSHA256  string                `json:"raw_sha256"`
+	Operations []acceptedOperationV3 `json:"operations"`
+}
+
 type acceptedDecisionV2 struct {
 	Version    int                   `json:"version"`
 	DecisionID string                `json:"decision_id"`
@@ -66,6 +84,21 @@ func decodeDecision(data []byte, out *AcceptedDecision) error {
 	if err := json.Unmarshal(data, &head); err != nil {
 		return errors.New("недопустимый JSON решения")
 	}
+	if head.Version == 3 {
+		var v3 acceptedDecisionV3
+		if err := legacyDecode(data, &v3); err != nil {
+			return err
+		}
+		*out = AcceptedDecision{Version: 1, DecisionID: v3.DecisionID, BaseIndex: v3.BaseIndex, RawSHA256: v3.RawSHA256, Operations: []AcceptedOperation{}}
+		for _, op := range v3.Operations {
+			targets := []AcceptedTarget{}
+			for _, t := range op.Targets {
+				targets = append(targets, AcceptedTarget{t.Candidate, t.Title, t.Verification, t.NarrowedStatement})
+			}
+			out.Operations = append(out.Operations, AcceptedOperation{op.Action, op.Previous, targets, op.Reason, op.Citations})
+		}
+		return nil
+	}
 	if head.Version != 2 {
 		return legacyDecode(data, out)
 	}
@@ -79,7 +112,7 @@ func decodeDecision(data []byte, out *AcceptedDecision) error {
 		for _, t := range op.Targets {
 			targets = append(targets, AcceptedTarget{t.Candidate, t.Title, t.Verification, t.NarrowedStatement})
 		}
-		out.Operations = append(out.Operations, AcceptedOperation{op.Action, op.Previous, targets, op.Reason})
+		out.Operations = append(out.Operations, AcceptedOperation{op.Action, op.Previous, targets, op.Reason, nil})
 	}
 	return nil
 }
@@ -105,6 +138,9 @@ type AcceptedOperation struct {
 	Previous []string         `json:"previous"`
 	Targets  []AcceptedTarget `json:"targets"`
 	Reason   string           `json:"reason"`
+	// Citations are the relocated citations of a version 3 relocate (tool-spec §71); they live in the journal's
+	// decision bytes, not in the derived state.
+	Citations []Citation `json:"-"`
 }
 
 type AcceptedDecision struct {
@@ -274,6 +310,11 @@ func applyAccepted(state acceptedState, raw legacyRaw, decision AcceptedDecision
 			valid = p >= 2 && p <= 64 && n == 1
 		case "retire", "keep":
 			valid = p == 1 && n == 0
+		case "relocate":
+			valid = p == 1 && n == 0 && len(operation.Citations) > 0
+		}
+		if operation.Action != "relocate" && len(operation.Citations) > 0 {
+			valid = false
 		}
 		if !valid || strings.TrimSpace(operation.Reason) == "" {
 			return state, errors.New("недопустимая операция или пустая причина")
@@ -292,6 +333,20 @@ func applyAccepted(state acceptedState, raw legacyRaw, decision AcceptedDecision
 				}
 				state.Records[position].Reason = operation.Reason
 				slog.Debug("reconcile: keep", "id", id)
+				continue
+			}
+			if operation.Action == "relocate" {
+				// tool-spec §71: the TZ text moved, the norm did not — the same quotes stand at new lines. Content, ID,
+				// revision and hash stay; only the citations move (like reanchor, without a candidate or the raw limit).
+				req := state.Records[position].Requirement
+				if err := relocatable(req, operation.Citations); err != nil {
+					return state, fmt.Errorf("relocate %s: %w", id, err)
+				}
+				meta := *req.Accepted
+				meta.Citations = append([]Citation{}, operation.Citations...)
+				req.Accepted, req.Source = &meta, operation.Citations[0]
+				state.Records[position] = acceptedRecord(req, "active", operation.Reason)
+				slog.Debug("reconcile: relocate", "id", id)
 				continue
 			}
 			state.Records[position].Status, state.Records[position].Reason = "retired", operation.Reason
@@ -626,6 +681,9 @@ func stageAcceptance(cfg Config, ledger acceptedLedger, state acceptedState, dec
 		return staged, nil
 	}
 	if err := normativeAnchor(raw, *decision, reference); err != nil {
+		return staged, err
+	}
+	if err := relocatedQuotes(*decision, sources); err != nil {
 		return staged, err
 	}
 	if len(reference) > 0 {
@@ -1009,11 +1067,44 @@ func keepable(req Requirement, previous, current []legacySource) error {
 	return nil
 }
 
+// relocatable is the §71 guard: the relocated citations are the norm's accepted citations, one for one, with the same
+// path, quote and span — only the line numbers may differ. That the quotes stand at the new lines is checked against
+// the source bytes before apply (relocatedQuotes).
+func relocatable(req Requirement, citations []Citation) error {
+	if req.Accepted == nil || len(citations) != len(req.Accepted.Citations) {
+		return errors.New("число цитат должно совпадать с принятыми цитатами нормы")
+	}
+	for i, c := range citations {
+		old := req.Accepted.Citations[i]
+		if c.Path != old.Path || c.Quote != old.Quote || c.LineEnd-c.LineStart != old.LineEnd-old.LineStart {
+			return fmt.Errorf("цитата %d должна повторять путь, текст и длину принятой (%s:%d-%d); другой текст — reanchor/revise с кандидатом", i+1, old.Path, old.LineStart, old.LineEnd)
+		}
+	}
+	return nil
+}
+
+// relocatedQuotes checks every relocate citation against the current source bytes (tool-spec §71).
+func relocatedQuotes(decision AcceptedDecision, sources map[string][]byte) error {
+	for _, operation := range decision.Operations {
+		for _, c := range operation.Citations {
+			data, ok := sources[c.Path]
+			if !ok {
+				return fmt.Errorf("relocate %s: %s нет в source_set", strings.Join(operation.Previous, ","), c.Path)
+			}
+			quote, err := lineQuote(data, c.LineStart, c.LineEnd)
+			if err != nil || quote != c.Quote {
+				return fmt.Errorf("relocate %s: цитата не совпадает с полными строками %s:%d-%d", strings.Join(operation.Previous, ","), c.Path, c.LineStart, c.LineEnd)
+			}
+		}
+	}
+	return nil
+}
+
 // keptIDs lists the norms a decision carries over with keep (tool-spec §39).
 func keptIDs(decision AcceptedDecision) []string {
 	ids := []string{}
 	for _, operation := range decision.Operations {
-		if operation.Action == "keep" {
+		if oneOf(operation.Action, "keep", "relocate") {
 			ids = append(ids, operation.Previous...)
 		}
 	}
