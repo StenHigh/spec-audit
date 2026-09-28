@@ -1452,8 +1452,11 @@ func TestVerificationGapCitedTests(t *testing.T) {
 		t.Fatal(err)
 	}
 	expect("удалённый тестовый файл не даёт причины", "", "")
+	// §72: a new tests file counts only when it names the code under test (source.go → «source»).
 	writeFixture(t, fresh, []byte("package fixture\n"))
-	expect("новый тестовый файл возвращает обе нормы", "verification_gap", "verification_gap")
+	expect("новый тест чужого кода не даёт причины", "", "")
+	writeFixture(t, fresh, []byte("package fixture\n\n// covers source behaviour\n"))
+	expect("новый тест, называющий код нормы, возвращает обе нормы", "verification_gap", "verification_gap")
 }
 
 // tool-spec §54: rerun prepares one incremental run per scope from its baseline or latest decided run.

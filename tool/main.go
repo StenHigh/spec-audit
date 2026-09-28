@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -2140,31 +2141,50 @@ func incrementalPlan(reports *os.Root, sinceRun string, m Manifest) (*Incrementa
 	for _, a := range record.Assessments {
 		verdicts[a.RequirementID] = a
 	}
-	// §51.1/§66: a verification gap may have closed only when a tests file appeared in the snapshot or a tests file the
-	// decided verdict cites changed; edits to uncited tests and removed tests files are no signal.
-	newTests := false
+	// §51.1/§66/§72: a verification gap may have closed only when a tests file the decided verdict cites changed, or a
+	// new tests file names a file the verdict's code citations point at (the code under test). Edits to uncited tests,
+	// new tests of other code and removed tests files are no signal.
+	newTests := []string{}
 	for _, file := range m.Files {
 		if _, known := prevFiles[file.Path]; file.Kind == "tests" && !known {
-			newTests = true
-			break
+			newTests = append(newTests, file.Path)
 		}
-	}
-	testsChanged := func(v Assessment) bool {
-		if newTests {
-			return true
-		}
-		for _, t := range v.Tests {
-			if current, ok := currentFiles[t.Citation.Path]; ok && current.SHA256 != prevFiles[t.Citation.Path] {
-				return true
-			}
-		}
-		return false
 	}
 	root, err := os.OpenRoot(m.Config.ProjectRoot)
 	if err != nil {
 		return nil, err
 	}
 	defer root.Close()
+	newTestBytes := map[string][]byte{}
+	for _, p := range newTests {
+		if data, err := readRoot(root, p, maxFile); err == nil {
+			newTestBytes[p] = data
+		}
+	}
+	// The code under test is named by file name without extension (a class or module); stems under 4 characters are
+	// too generic to count.
+	namesCitedCode := func(v Assessment) bool {
+		for _, c := range v.Code {
+			stem := strings.TrimSuffix(path.Base(c.Path), path.Ext(c.Path))
+			if len(stem) < 4 {
+				continue
+			}
+			for _, data := range newTestBytes {
+				if bytes.Contains(data, []byte(stem)) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	testsChanged := func(v Assessment) bool {
+		for _, t := range v.Tests {
+			if current, ok := currentFiles[t.Citation.Path]; ok && current.SHA256 != prevFiles[t.Citation.Path] {
+				return true
+			}
+		}
+		return namesCitedCode(v)
+	}
 	contents := map[string][]byte{}
 	quoteHolds := func(c Citation) bool {
 		data, ok := contents[c.Path]
