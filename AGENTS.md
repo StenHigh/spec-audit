@@ -100,6 +100,7 @@ AI Factory нужен только для разработки spec-audit, не 
 | [docs/accepted-index.md](docs/accepted-index.md) | Принятие кандидатов, ID, редакции, reconcile |
 | [docs/legacy-extraction.md](docs/legacy-extraction.md) | Формат извлечения из обычного Markdown и ограничения эксперимента |
 | [skills/spec-audit/SKILL.md](skills/spec-audit/SKILL.md) | Поставляемый audit-лаунчер, не инструкция по разработке инструмента; протокол роли лежит рядом в references/ |
+| [skills/spec-format/SKILL.md](skills/spec-format/SKILL.md) | Навык правки ТЗ по [единому формату](docs/spec-format.md) для любой сессии Claude Code/Codex и для заказчика: блоки REQ/Q/DEF, EARS, выдача ID, перевод одного старого требования в блок; установка — README рядом; примеры проверяет TestSpecFormatSkill; меняется вместе с docs/spec-format.md |
 | [acceptance/](acceptance/) | Независимые эталоны, контракты и хэши приёмки |
 | [docs/smsplace-adoption.md](docs/smsplace-adoption.md) | Только работа с пилотом: бизнес-границы, локальная установка и разрешения |
 | [.ai-factory/PLAN.md](.ai-factory/PLAN.md) | Завершённый журнал 29 задач и исследований; исторические «следующие шаги» не являются текущей очередью |

@@ -538,3 +538,38 @@ func TestSkillDirNormalization(t *testing.T) {
 		t.Fatal("update через нормализованный --dir изменил дерево")
 	}
 }
+
+// The spec-format skill is handed to specification authors outside this repository: it must stay free of pilot
+// knowledge, and every block example it teaches must pass the declared profile it claims to follow.
+func TestSpecFormatSkill(t *testing.T) {
+	root := filepath.Join("..", "skills", "spec-format")
+	pilotRE := regexp.MustCompile(`(?i)smsplace|/Users/|/home/`)
+	for _, name := range []string{"SKILL.md", "README.md"} {
+		data, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pilotRE.Match(data) {
+			t.Fatalf("%s упоминает пилот или абсолютный путь", name)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(root, "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(data), "---\nname: spec-format\ndescription: ") {
+		t.Fatal("SKILL.md без frontmatter name/description")
+	}
+	fenceRE := regexp.MustCompile("(?s)```markdown\n(.*?)```")
+	reqs, questions := 0, 0
+	for _, m := range fenceRE.FindAllStringSubmatch(string(data), -1) {
+		r, q, err := parseSpec("example.md", []byte(m[1]))
+		if err != nil {
+			t.Fatalf("пример не проходит профиль declared: %v\n%s", err, m[1])
+		}
+		reqs, questions = reqs+len(r), questions+len(q)
+	}
+	if reqs < 1 || questions < 1 {
+		t.Fatalf("в примерах %d норм и %d вопросов, нужны оба вида", reqs, questions)
+	}
+}
