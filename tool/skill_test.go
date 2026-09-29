@@ -557,6 +557,9 @@ func TestSpecFormatSkill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(string(data), "\n## Правила проекта\n") {
+		t.Fatal("SKILL.md без секции оверлея «Правила проекта»: частное проекта некуда положить, кроме навыка")
+	}
 	if !strings.HasPrefix(string(data), "---\nname: spec-format\ndescription: ") {
 		t.Fatal("SKILL.md без frontmatter name/description")
 	}
