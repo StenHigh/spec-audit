@@ -560,6 +560,12 @@ func TestSpecFormatSkill(t *testing.T) {
 	if !strings.HasPrefix(string(data), "---\nname: spec-format\ndescription: ") {
 		t.Fatal("SKILL.md без frontmatter name/description")
 	}
+	// Examples come from one neutral domain: an ID from another namespace is a trace of the project the rule came from.
+	for _, id := range regexp.MustCompile(`\b(?:REQ|Q|DEF)-[A-Z0-9]+-[0-9]+`).FindAllString(string(data), -1) {
+		if !strings.Contains(id, "-ORD-") {
+			t.Fatalf("SKILL.md: пример %s вне нейтрального пространства ORD", id)
+		}
+	}
 	fenceRE := regexp.MustCompile("(?s)```markdown\n(.*?)```")
 	reqs, questions := 0, 0
 	for _, m := range fenceRE.FindAllStringSubmatch(string(data), -1) {
