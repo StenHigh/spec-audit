@@ -329,6 +329,24 @@ Run `rent-2026-09-19-hints` на том же snapshot; `hints.json` задани
 
 Актуальность по коду после переприёмки: затронуто 952 нормы в 28 scope — 401 `changed` (код сдвинулся за 47 коммитов `development`), 470 `verification_gap` (в `development` добавлено 58 тестовых файлов — правило §66(б) «появился новый тестовый файл» снова метит все weak-нормы), 64 `new` (revise), 17 unknown. Перепрогон — решение владельца.
 
+## Навык spec-format и статусы файлов ТЗ (2026-09-29)
+
+Навык `spec-format` (правка ТЗ по формату ISO/EARS) установлен в пилот MR !1202, обновлён !1209, !1210; частное пилота — в оверлее `.ai-factory/rules/spec-format.md`. Первый MR по навыку — !1208 (коды `FINISH_ACTIVATION`, блоки REQ-PAPI/COM/ACT, DEF-ACT): после слияния 16 scope станут stale — ≈674 `relocate`, 18 норм с изменённым текстом, 12+ новых блоков к извлечению.
+
+Файлы корня `TZ/` не аудирует ни одна система: корпус `tz:trace` — только `TZ/final_tz` (пин в коде пилота), в spec-audit `PartnerApi.md`, `DefaultApi.md`, `FinanceSystem.md` — только `references` (норм не порождают); REQ-PAPI-001…011 не проверяются никем. Классификация по содержимому (агент, со ссылками на строки): нормативны 19 файлов `final_tz` и `DefaultApi`, `PartnerApi`, `ModemAppProtocol`, `FinanceSystem`; справка — `FAQ`, `final_tz/index.md`, `swagger-quackr.json`; история — `PRICING-MODULE-UPDATE.md` (перенесён в `04-pricing-*`, подтверждено по 6–8 разделам), заглушка `04-pricing.md`; смешанные — `TechnicalDesign.md`, `ResellerProtocoles/{5SIM,GrizzlySMS,HeroSMS}` (блок норм Pricing v2 = `06:455-484`), `SMSBower.md` (две нормы, которых нет в `final_tz`).
+
+Решения владельца 2026-09-29:
+- раскладка: `TZ/final_tz/` — требования (имя сохраняется: 849 файлов пилота и 2 359 цитат принятых норм на эти пути), туда `protocols/{DefaultApi,PartnerApi,ModemAppProtocol}.md` и `FinanceSystem.md`; `TZ/references/` — `FAQ`, `TechnicalDesign`, `vendors/` (документы поставщиков, `swagger-quackr.json`); `TZ/archive/` — `PRICING-MODULE-UPDATE.md`; `TZ/README.md` — три статуса; живые ссылки перепривязываются, архивы и журналы `.ai-factory` — нет;
+- `FinanceSystem` первичен над `02-finance`; пересказы в `02-finance` постепенно заменяются ссылками на ID;
+- три правила только из `TechnicalDesign` (идемпотентность ban-outcome, запрет partial refund в MVP, dedupe-anchor reward/reversal) — пробел `final_tz`, переносятся блоками; `TechnicalDesign` целиком — справка;
+- две нормы `SMSBower` — блоками в `09`; блок Pricing v2 удаляется из документов поставщиков после сверки с `06`;
+- `ModemAppProtocol` — `final_tz/protocols/`, без нового раздела декомпозиции;
+- `PRICING-MODULE-UPDATE` — сначала полная сверка с `04-pricing-*`, затем архив;
+- `final_tz/index.md` и заглушка `04-pricing.md` остаются на месте (исключены пином кода пилота; заглушку удалит задача пилота);
+- порядок: `relocate` через смену пути в инструменте → разделение смешанных файлов (MR через навык) → перенос файлов одним MR → задача пилота на корпус `tz:reindex`/`tz:trace` (`final_tz` вместе с `protocols/`).
+
+Перенос ТЗ в wiki (планы владельца): `relocate` через смену пути экономит переприёмку, только если выгрузка страниц в Markdown побайтно сохраняет текст — проверить круг «выгрузить → загрузить → выгрузить» до выбора wiki. Нормы в блоках REQ (профиль `declared`) переезжают без переприёмки: норма опознаётся по ID.
+
 ## Обычный рабочий цикл
 
 1. До снимка проверить ветку и чистоту checkout. Если требуется разрешённое владельцем обновление, на чистой `development` подготовка сессии выполняет `git pull --ff-only origin development`; при расхождении веток остановиться, не создавать merge/rebase автоматически. Spec-audit сам Git не изменяет. Затем выбрать GitLab-задачу: прочитать исполнителя, комментарии и связанные merge requests, сверить исправление с checkout. Открытый issue может ждать QA; статус не доказывает ни дефект, ни исправность. Выбранный CONFIG задаёт точные нормативные границы, живой `project_root` SMSPlace, полные файлы ТЗ, код/тесты и изолированный `reports_dir` в разрешённой рабочей области.
