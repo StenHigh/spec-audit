@@ -339,7 +339,7 @@ func applyAccepted(state acceptedState, raw legacyRaw, decision AcceptedDecision
 				// tool-spec §71: the TZ text moved, the norm did not — the same quotes stand at new lines. Content, ID,
 				// revision and hash stay; only the citations move (like reanchor, without a candidate or the raw limit).
 				req := state.Records[position].Requirement
-				if err := relocatable(req, operation.Citations); err != nil {
+				if err := relocatable(req, operation.Citations, raw.SourceSet); err != nil {
 					return state, fmt.Errorf("relocate %s: %w", id, err)
 				}
 				meta := *req.Accepted
@@ -567,6 +567,9 @@ func acceptedFresh(state acceptedState, files []SourceFile) bool {
 func reconcile(cfg Config, paths []string) (any, error) {
 	if cfg.IndexMode != "accepted" {
 		return nil, errors.New("reconcile требует index_mode: accepted")
+	}
+	if len(paths) == 1 && paths[0] == "relocate" {
+		return relocationProposal(cfg)
 	}
 	if len(paths) == 0 {
 		ledger, state, err := readAccepted(cfg.ReportsDir)
@@ -1068,19 +1071,165 @@ func keepable(req Requirement, previous, current []legacySource) error {
 }
 
 // relocatable is the §71 guard: the relocated citations are the norm's accepted citations, one for one, with the same
-// path, quote and span — only the line numbers may differ. That the quotes stand at the new lines is checked against
-// the source bytes before apply (relocatedQuotes).
-func relocatable(req Requirement, citations []Citation) error {
+// quote and span — only the line numbers may differ, and the path only when the accepted file left the raw source_set
+// (§73: the file was moved or renamed). That the quotes stand at the new lines is checked against the source bytes
+// before apply (relocatedQuotes); the raw source_set is in the journal, so replay decides the same without sources.
+func relocatable(req Requirement, citations []Citation, current []legacySource) error {
 	if req.Accepted == nil || len(citations) != len(req.Accepted.Citations) {
 		return errors.New("число цитат должно совпадать с принятыми цитатами нормы")
 	}
+	present := map[string]bool{}
+	for _, source := range current {
+		present[source.Path] = true
+	}
 	for i, c := range citations {
 		old := req.Accepted.Citations[i]
-		if c.Path != old.Path || c.Quote != old.Quote || c.LineEnd-c.LineStart != old.LineEnd-old.LineStart {
-			return fmt.Errorf("цитата %d должна повторять путь, текст и длину принятой (%s:%d-%d); другой текст — reanchor/revise с кандидатом", i+1, old.Path, old.LineStart, old.LineEnd)
+		if c.Quote != old.Quote || c.LineEnd-c.LineStart != old.LineEnd-old.LineStart {
+			return fmt.Errorf("цитата %d должна повторять текст и длину принятой (%s:%d-%d); другой текст — reanchor/revise с кандидатом", i+1, old.Path, old.LineStart, old.LineEnd)
+		}
+		if c.Path != old.Path && present[old.Path] {
+			return fmt.Errorf("цитата %d меняет путь, хотя %s остаётся в source_set; путь меняется только у перенесённого файла", i+1, old.Path)
 		}
 	}
 	return nil
+}
+
+// relocationProposal answers `reconcile CONFIG relocate` (tool-spec §73.2), read-only: for every active norm the
+// operation a pure move of the TZ text needs — keep when its files are byte-identical, relocate when each accepted
+// quote stands verbatim at exactly one place — and the norms that need a candidate. A host computing new lines by
+// hand (or by script) is what this replaces; the operations still go through check and reconcile unchanged.
+func relocationProposal(cfg Config) (any, error) {
+	_, state, err := readAccepted(cfg.ReportsDir)
+	if err != nil {
+		return nil, err
+	}
+	set, contents, _, err := acceptedSources(cfg)
+	if err != nil {
+		return nil, err
+	}
+	lines := map[string][]string{}
+	paths := []string{}
+	for _, source := range set {
+		lines[source.Path] = strings.Split(strings.TrimSuffix(string(contents[source.Path]), "\n"), "\n")
+		paths = append(paths, source.Path)
+	}
+	type unresolvedCitation struct {
+		Citation
+		Found int `json:"found"`
+	}
+	type unresolvedNorm struct {
+		ID        string               `json:"id"`
+		Citations []unresolvedCitation `json:"citations"`
+	}
+	operations, unresolved := []acceptedOperationV3{}, []unresolvedNorm{}
+	counts := map[string]int{"keep": 0, "relocate": 0, "unresolved": 0}
+	type pending struct {
+		req   Requirement
+		found [][]Citation
+	}
+	moving := []pending{}
+	// anchors[old path] maps an old line of a quote that stands at exactly one place to its new place: the fixed
+	// points by which the order of an ambiguous quote (a repeated table header) is resolved.
+	anchors := map[string]map[int]Citation{}
+	for _, record := range state.Records {
+		req := record.Requirement
+		if record.Status != "active" || req.Accepted == nil {
+			continue
+		}
+		if keepable(req, state.SourceSet, set) == nil {
+			operations = append(operations, acceptedOperationV3{"keep", []string{req.ID}, []acceptedTargetV2{}, "Процитированные файлы не изменились", []Citation{}})
+			counts["keep"]++
+			continue
+		}
+		item := pending{req, [][]Citation{}}
+		for _, old := range req.Accepted.Citations {
+			scope := []string{old.Path}
+			if lines[old.Path] == nil {
+				scope = paths // §73.1: the accepted file left the source_set — look for the quote in every source.
+			}
+			found := quotePositions(lines, scope, old)
+			if len(found) == 1 {
+				if anchors[old.Path] == nil {
+					anchors[old.Path] = map[int]Citation{}
+				}
+				anchors[old.Path][old.LineStart] = found[0]
+			}
+			item.found = append(item.found, found)
+		}
+		moving = append(moving, item)
+	}
+	for _, item := range moving {
+		moved, missing := []Citation{}, []unresolvedCitation{}
+		for i, old := range item.req.Accepted.Citations {
+			found := item.found[i]
+			if len(found) > 1 {
+				found = betweenAnchors(found, old, anchors[old.Path])
+			}
+			if len(found) != 1 {
+				missing = append(missing, unresolvedCitation{old, len(item.found[i])})
+				continue
+			}
+			moved = append(moved, found[0])
+		}
+		if len(missing) > 0 {
+			unresolved = append(unresolved, unresolvedNorm{item.req.ID, missing})
+			counts["unresolved"]++
+			continue
+		}
+		operations = append(operations, acceptedOperationV3{"relocate", []string{item.req.ID}, []acceptedTargetV2{}, "Текст ТЗ перемещён, принятые цитаты дословно на новых местах", moved})
+		counts["relocate"]++
+	}
+	return map[string]any{"base_index": state.Head, "source_set": set, "operations": operations, "unresolved": unresolved, "counts": counts}, nil
+}
+
+// betweenAnchors keeps the positions of a repeated quote that lie between the new places of the nearest uniquely
+// found quotes above and below its old line in the same file: a move preserves order, so exactly one copy between
+// the two fixed points is the moved one. More or none — the host decides with a candidate.
+func betweenAnchors(found []Citation, old Citation, anchors map[int]Citation) []Citation {
+	var above, below *Citation
+	aboveLine, belowLine := 0, 0
+	for line, c := range anchors {
+		c := c
+		if line < old.LineStart && (above == nil || line > aboveLine) {
+			above, aboveLine = &c, line
+		}
+		if line > old.LineStart && (below == nil || line < belowLine) {
+			below, belowLine = &c, line
+		}
+	}
+	if above == nil && below == nil {
+		return found
+	}
+	kept := []Citation{}
+	for _, c := range found {
+		if above != nil && (c.Path != above.Path || c.LineStart <= above.LineStart) {
+			continue
+		}
+		if below != nil && (c.Path != below.Path || c.LineStart >= below.LineStart) {
+			continue
+		}
+		kept = append(kept, c)
+	}
+	return kept
+}
+
+// quotePositions lists every place in the given files where the whole-line quote of c stands verbatim with its span.
+func quotePositions(lines map[string][]string, paths []string, c Citation) []Citation {
+	span := c.LineEnd - c.LineStart
+	first, _, _ := strings.Cut(c.Quote, "\n")
+	found := []Citation{}
+	for _, path := range paths {
+		text := lines[path]
+		for start := 0; start+span < len(text); start++ {
+			if strings.TrimSuffix(text[start], "\r") != first && text[start] != first {
+				continue
+			}
+			if strings.TrimSuffix(strings.Join(text[start:start+span+1], "\n"), "\r") == c.Quote {
+				found = append(found, Citation{path, start + 1, start + span + 1, c.Quote})
+			}
+		}
+	}
+	return found
 }
 
 // relocatedQuotes checks every relocate citation against the current source bytes (tool-spec §71).

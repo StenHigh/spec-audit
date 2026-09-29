@@ -1398,3 +1398,76 @@ func TestAcceptRelocate(t *testing.T) {
 		t.Fatal("после relocate индекс свежий", view["freshness"])
 	}
 }
+
+// tool-spec §73: a moved or renamed TZ file keeps its accepted norms without candidates — the binary proposes the
+// operations, and a path may change only when the accepted file left the source_set.
+func TestRelocateMovedFile(t *testing.T) {
+	config, base := acceptedFixture(t)
+	raw, decision := acceptedInputs(t, config, "first", []legacyCandidate{
+		candidateAt(t, base, "rules.md", "C001", "Лимит 8 МиБ включительно", 2, 2),
+		candidateAt(t, base, "rules.md", "C002", "Название карточки обязательно", 3, 3),
+	}, acceptOperation("accept", []string{}, "C001"), acceptOperation("accept", []string{}, "C002"))
+	runOK(t, "reconcile", config, raw, decision)
+	ids := []string{}
+	for _, record := range acceptedRead(t, config).Records {
+		ids = append(ids, record.Requirement.ID)
+	}
+	proposal := func() map[string]any {
+		t.Helper()
+		var view map[string]any // through JSON, as the host reads it
+		if err := json.Unmarshal(legacyMarshal(t, runOK(t, "reconcile", config, "relocate")), &view); err != nil {
+			t.Fatal(err)
+		}
+		return view
+	}
+	if counts := proposal()["counts"].(map[string]any); counts["keep"] != float64(2) || counts["relocate"] != float64(0) {
+		t.Fatalf("неизменный файл — keep: %v", counts)
+	}
+	settings := readFixture(t, config)
+	source := readFixture(t, filepath.Join(base, "source/rules.md"))
+	// The copy still in the source_set: the same quote in another file is not a move.
+	writeFixture(t, filepath.Join(base, "source/copy.md"), append([]byte("# Копия\n"), source...))
+	writeFixture(t, config, bytes.Replace(settings, []byte("[rules.md]"), []byte("[rules.md, copy.md]"), 1))
+	writeFixture(t, filepath.Join(base, "source/rules.md"), append([]byte("<!-- сдвиг -->\n"), source...))
+	v3 := func(id string, ops []any) (string, string) {
+		t.Helper()
+		rawPath, _ := acceptedInputs(t, config, id, []legacyCandidate{})
+		state := acceptedRead(t, config)
+		path := filepath.Join(base, id+"-v3.json")
+		writeFixture(t, path, legacyMarshal(t, map[string]any{"version": 3, "decision_id": id, "base_index": state.Head, "raw_sha256": digest(readFixture(t, rawPath)), "operations": ops}))
+		return rawPath, path
+	}
+	quote := acceptedRead(t, config).Records[0].Requirement.Accepted.Citations[0].Quote
+	rawPath, path := v3("to-copy", []any{
+		map[string]any{"action": "relocate", "previous": []string{ids[0]}, "targets": []any{}, "reason": "в копию", "citations": []Citation{{"copy.md", 3, 3, quote}}},
+		map[string]any{"action": "relocate", "previous": []string{ids[1]}, "targets": []any{}, "reason": "сдвиг", "citations": []Citation{{"rules.md", 4, 4, "Название карточки обязательно."}}},
+	})
+	if _, err := execute([]string{"reconcile", config, rawPath, path}); err == nil {
+		t.Fatal("смена пути при живом исходном файле должна отклоняться")
+	}
+	// The real move: rules.md leaves the source_set, its text lives on in moved/rules.md one line lower.
+	os.Remove(filepath.Join(base, "source/copy.md"))
+	os.Remove(filepath.Join(base, "source/rules.md"))
+	writeFixture(t, filepath.Join(base, "source/moved/rules.md"), append([]byte("<!-- перенос -->\n"), source...))
+	writeFixture(t, config, bytes.Replace(settings, []byte("[rules.md]"), []byte("[moved/rules.md]"), 1))
+	view := proposal()
+	if counts := view["counts"].(map[string]any); counts["relocate"] != float64(2) || counts["unresolved"] != float64(0) {
+		t.Fatalf("перенесённый файл — relocate обеих норм: %v", view)
+	}
+	rawPath, path = v3("moved", view["operations"].([]any))
+	runOK(t, "check", config, rawPath, path)
+	runOK(t, "reconcile", config, rawPath, path)
+	for i, record := range acceptedRead(t, config).Records {
+		if c := record.Requirement.Accepted.Citations[0]; record.Requirement.ID != ids[i] || c.Path != "moved/rules.md" || c.LineStart != i+3 || record.Revision != 1 {
+			t.Fatalf("норма %s должна переехать на moved/rules.md:%d: %+v", ids[i], i+3, record)
+		}
+	}
+	if view := runOK(t, "reconcile", config).(map[string]any); view["freshness"] != "fresh" {
+		t.Fatal("после переноса индекс свежий", view["freshness"])
+	}
+	// Text changed at the new place: no verbatim position — the norm needs a candidate.
+	writeFixture(t, filepath.Join(base, "source/moved/rules.md"), bytes.Replace(readFixture(t, filepath.Join(base, "source/moved/rules.md")), []byte("Название карточки"), []byte("Заголовок карточки"), 1))
+	if view := proposal(); view["counts"].(map[string]any)["unresolved"] != float64(1) {
+		t.Fatalf("изменённый текст — unresolved: %v", view)
+	}
+}
