@@ -415,16 +415,12 @@ func applyAccepted(state acceptedState, raw legacyRaw, decision AcceptedDecision
 		}
 	}
 	if decision.ImplicitKeep {
-		// tool-spec §75: the 128-operation budget goes to real decisions; an unnamed norm is kept only on the same
-		// guard as an explicit keep — its cited files must be byte-identical to the package that accepted it.
+		// tool-spec §75: an unnamed norm continues unchanged. Whether its quotes still stand is checked against the
+		// source bytes before apply (implicitInPlace); replay has no sources and reproduces the same state.
 		for _, id := range implicitKept(decision, state.Records) {
-			if _, prior := active[id]; !prior {
-				continue // accepted by this very decision
+			if _, prior := active[id]; prior {
+				seenPrevious[id] = true
 			}
-			if err := keepable(state.Records[active[id]].Requirement, state.SourceSet, raw.SourceSet); err != nil {
-				return state, fmt.Errorf("%s не названа в решении version 4, а её файлы изменились — нужна операция (relocate/reanchor/revise/retire): %w", id, err)
-			}
-			seenPrevious[id] = true
 		}
 	}
 	if len(seenCandidates) != len(candidates) || len(seenPrevious) != len(active) {
@@ -703,6 +699,9 @@ func stageAcceptance(cfg Config, ledger acceptedLedger, state acceptedState, dec
 		return staged, err
 	}
 	if err := relocatedQuotes(*decision, sources); err != nil {
+		return staged, err
+	}
+	if err := implicitInPlace(*decision, state, raw, sources); err != nil {
 		return staged, err
 	}
 	if len(reference) > 0 {
@@ -1311,6 +1310,35 @@ func droppedQuestions(before, after []AcceptedRecord) []droppedQuestion {
 		}
 	}
 	return dropped
+}
+
+// implicitInPlace is the §75 guard for unnamed norms of a version 4 decision: the norm continues when its files are
+// unchanged (§39 keep) or, §75.1, when every accepted quote still stands verbatim at its accepted lines in a changed
+// file — text moved elsewhere in the file, not under the norm. Anything else needs an explicit operation.
+func implicitInPlace(decision AcceptedDecision, state acceptedState, raw legacyRaw, sources map[string][]byte) error {
+	active := map[string]Requirement{}
+	for _, record := range state.Records {
+		if record.Status == "active" {
+			active[record.Requirement.ID] = record.Requirement
+		}
+	}
+	for _, id := range implicitKept(decision, state.Records) {
+		req := active[id]
+		if keepable(req, state.SourceSet, raw.SourceSet) == nil {
+			continue
+		}
+		if req.Accepted == nil {
+			return fmt.Errorf("%s не названа в решении version 4 и не имеет принятых цитат — нужна операция", id)
+		}
+		for _, c := range req.Accepted.Citations {
+			data, ok := sources[c.Path]
+			quote, err := lineQuote(data, c.LineStart, c.LineEnd)
+			if !ok || err != nil || quote != c.Quote {
+				return fmt.Errorf("%s не названа в решении version 4, а её цитата %s:%d-%d изменилась или сдвинулась — нужна операция (relocate/reanchor/revise/retire)", id, c.Path, c.LineStart, c.LineEnd)
+			}
+		}
+	}
+	return nil
 }
 
 // implicitKept lists the prior active norms a version 4 decision does not name (tool-spec §75), in ledger order.

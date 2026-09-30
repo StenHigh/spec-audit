@@ -1549,8 +1549,15 @@ func TestAcceptImplicitKeep(t *testing.T) {
 	original := readFixture(t, rules)
 	writeFixture(t, rules, append([]byte("<!-- сдвиг -->\n"), original...))
 	if rawPath, path := decide("v4-changed", 4); true {
-		if _, err := execute([]string{"reconcile", config, rawPath, path}); err == nil || !strings.Contains(err.Error(), "не названа в решении version 4") {
+		if _, err := execute([]string{"reconcile", config, rawPath, path}); err == nil || !strings.Contains(err.Error(), "изменилась или сдвинулась") {
 			t.Fatalf("неявный keep при изменённом файле должен отклоняться: %v", err)
+		}
+	}
+	// §75.1: the file changed below the norms, their quotes stand at the same lines — they continue unnamed.
+	writeFixture(t, rules, append(append([]byte{}, original...), []byte("Дописано ниже норм.\n")...))
+	if rawPath, path := decide("v4-in-place", 4); true {
+		if view := runOK(t, "check", config, rawPath, path).(map[string]any); len(view["kept"].([]string)) != 2 {
+			t.Fatalf("цитаты на прежних строках — неявное продолжение: %v", view["kept"])
 		}
 	}
 	writeFixture(t, rules, original)
