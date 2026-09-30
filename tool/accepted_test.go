@@ -59,7 +59,7 @@ func acceptedInputs(t *testing.T, config, id string, candidates []legacyCandidat
 		t.Fatal(err)
 	}
 	raw := legacyMarshal(t, legacyRaw{1, set, candidates, []string{}})
-	decision := AcceptedDecision{1, id, state.Head, digest(raw), ops, false}
+	decision := AcceptedDecision{1, id, state.Head, digest(raw), ops, false, nil}
 	rawPath, decisionPath := filepath.Join(filepath.Dir(config), id+"-raw.json"), filepath.Join(filepath.Dir(config), id+"-decision.json")
 	writeFixture(t, rawPath, raw)
 	writeFixture(t, decisionPath, legacyMarshal(t, decision))
@@ -566,16 +566,16 @@ func TestAcceptedAppendBounds(t *testing.T) {
 		// Valid large whitespace in old raw strings, not a corrupt padded ledger.
 		for i := 0; i < 4; i++ {
 			raw := append(append([]byte{}, plain...), bytes.Repeat([]byte("\t"), 3<<20)...)
-			decision := AcceptedDecision{1, fmt.Sprintf("large-%d", i), state.Head, digest(raw), []AcceptedOperation{}, false}
+			decision := AcceptedDecision{1, fmt.Sprintf("large-%d", i), state.Head, digest(raw), []AcceptedOperation{}, false, nil}
 			encoded := legacyMarshal(t, decision)
 			state, err = applyAccepted(state, rawValue, decision, raw, encoded)
 			if err != nil {
 				t.Fatal(err)
 			}
-			ledger.Commits = append(ledger.Commits, acceptedCommit{string(raw), string(encoded), []string{}, true})
+			ledger.Commits = append(ledger.Commits, acceptedCommit{string(raw), string(encoded), []string{}, true, []relocatedNorm{}})
 		}
 		// Two large raw strings in the next commit's raw and decision can fill the remaining space.
-		decision := AcceptedDecision{1, "exact-bytes", state.Head, digest(plain), []AcceptedOperation{}, false}
+		decision := AcceptedDecision{1, "exact-bytes", state.Head, digest(plain), []AcceptedOperation{}, false, nil}
 		makeCommit := func(extra int) acceptedCommit {
 			raw := append(append([]byte{}, plain...), bytes.Repeat([]byte("\t"), 3<<20)...)
 			decision.RawSHA256 = digest(raw)
@@ -583,7 +583,7 @@ func TestAcceptedAppendBounds(t *testing.T) {
 			if len(raw) > maxResult || len(encoded) > maxResult {
 				t.Fatal("некорректная fixture: input превышает 4 MiB")
 			}
-			return acceptedCommit{string(raw), string(encoded), []string{}, true}
+			return acceptedCommit{string(raw), string(encoded), []string{}, true, []relocatedNorm{}}
 		}
 		probe := acceptedLedger{ledgerVersion, append(append([]acceptedCommit{}, ledger.Commits...), makeCommit(0))}
 		encoded, err := json.MarshalIndent(probe, "", "  ")
@@ -903,7 +903,7 @@ func TestReferenceSources(t *testing.T) {
 			}
 		}
 		rawBytes := legacyMarshal(t, legacyRaw{1, partial, []legacyCandidate{candidateAt(t, base, "rules.md", "C001", "Лимит", 2, 2)}, []string{}})
-		decisionBytes := legacyMarshal(t, AcceptedDecision{1, "partial", state.Head, digest(rawBytes), []AcceptedOperation{acceptOperation("rebind", []string{"REQ-AI-001"}, "C001")}, false})
+		decisionBytes := legacyMarshal(t, AcceptedDecision{1, "partial", state.Head, digest(rawBytes), []AcceptedOperation{acceptOperation("rebind", []string{"REQ-AI-001"}, "C001")}, false, nil})
 		writeFixture(t, filepath.Join(base, "partial-raw.json"), rawBytes)
 		writeFixture(t, filepath.Join(base, "partial-decision.json"), decisionBytes)
 		runFail(t, "reconcile", config, filepath.Join(base, "partial-raw.json"), filepath.Join(base, "partial-decision.json"))
@@ -1256,9 +1256,18 @@ func TestReferenceGroupFreshness(t *testing.T) {
 	raw, decision = acceptedInputs(t, config, "second", []legacyCandidate{second}, acceptOperation("keep", []string{"REQ-AI-001"}), acceptOperation("accept", []string{}, "C001"))
 	runOK(t, "reconcile", config, raw, decision)
 	if err := json.Unmarshal(readFixture(t, filepath.Join(base, "runs", acceptedFile)), &ledger); err != nil || ledger.Version != ledgerVersion || ledger.Commits[0].Classified || !ledger.Commits[1].Classified {
-		t.Fatal("после нового пакета журнал версии 2, старый commit без классификации", err, ledger.Version)
+		t.Fatal("после нового пакета журнал текущей версии, старый commit без классификации", err, ledger.Version)
 	}
-	writeFixture(t, filepath.Join(base, "runs", acceptedFile), []byte(`{"version":3,"commits":[]}`))
+	// A version 2 ledger (before §75.2) stays readable: its commits carry no derived relocations.
+	v2 := acceptedLedgerV2{2, []acceptedCommitV2{}}
+	for _, commit := range ledger.Commits {
+		v2.Commits = append(v2.Commits, acceptedCommitV2{commit.Raw, commit.Decision, commit.References, commit.Classified})
+	}
+	writeFixture(t, filepath.Join(base, "runs", acceptedFile), legacyMarshal(t, v2))
+	if view := runOK(t, "reconcile", config).(map[string]any); view["freshness"] != "fresh" {
+		t.Fatal("журнал версии 2 читается", view["freshness"])
+	}
+	writeFixture(t, filepath.Join(base, "runs", acceptedFile), []byte(`{"version":4,"commits":[]}`))
 	runFail(t, "reconcile", config)
 }
 
@@ -1548,9 +1557,21 @@ func TestAcceptImplicitKeep(t *testing.T) {
 	rules := filepath.Join(base, "source/rules.md")
 	original := readFixture(t, rules)
 	writeFixture(t, rules, append([]byte("<!-- сдвиг -->\n"), original...))
+	// §75.2: a line inserted above the norms shifts them — they continue by a derived relocate.
+	if rawPath, path := decide("v4-shifted", 4); true {
+		view := runOK(t, "check", config, rawPath, path).(map[string]any)
+		if !reflect.DeepEqual(view["relocated"], []string{"REQ-AI-001", "REQ-AI-002"}) || len(view["kept"].([]string)) != 2 {
+			t.Fatalf("сдвиг выше норм — неявный relocate обеих: %v %v", view["relocated"], view["kept"])
+		}
+	}
+	changed := bytes.Replace(original, []byte("— 8 МиБ"), []byte("— 9 МиБ"), 1)
+	if bytes.Equal(changed, original) {
+		t.Fatal("фикстура: текст нормы не найден")
+	}
+	writeFixture(t, rules, append([]byte("<!-- сдвиг -->\n"), changed...))
 	if rawPath, path := decide("v4-changed", 4); true {
-		if _, err := execute([]string{"reconcile", config, rawPath, path}); err == nil || !strings.Contains(err.Error(), "изменилась или сдвинулась") {
-			t.Fatalf("неявный keep при изменённом файле должен отклоняться: %v", err)
+		if _, err := execute([]string{"reconcile", config, rawPath, path}); err == nil || !strings.Contains(err.Error(), "REQ-AI-001") || !strings.Contains(err.Error(), "найдена в 0 местах") {
+			t.Fatalf("изменённый текст безымянной нормы — отказ с её ID: %v", err)
 		}
 	}
 	// §75.1: the file changed below the norms, their quotes stand at the same lines — they continue unnamed.
@@ -1579,5 +1600,26 @@ func TestAcceptImplicitKeep(t *testing.T) {
 	}
 	if view := runOK(t, "reconcile", config).(map[string]any); view["freshness"] != "fresh" {
 		t.Fatal("после version 4 индекс свежий", view["freshness"])
+	}
+	// §75.2 apply: only the shift, no operations at all — both rules.md norms move, extra.md's norm stays.
+	writeFixture(t, rules, append([]byte("<!-- сдвиг -->\n"), original...))
+	rawPath, _ = acceptedInputs(t, config, "v4-relocated", []legacyCandidate{})
+	path = filepath.Join(base, "v4-relocated-decision.json")
+	writeFixture(t, path, legacyMarshal(t, map[string]any{"version": 4, "decision_id": "v4-relocated", "base_index": acceptedRead(t, config).Head, "raw_sha256": digest(readFixture(t, rawPath)), "operations": []any{}}))
+	if view := runOK(t, "reconcile", config, rawPath, path).(map[string]any); !reflect.DeepEqual(view["relocated"], []string{"REQ-AI-001", "REQ-AI-002"}) || view["freshness"] != "fresh" {
+		t.Fatalf("пустое решение version 4 переносит сдвинутые нормы: %v %v", view["relocated"], view["freshness"])
+	}
+	moved := acceptedRead(t, config)
+	if c := moved.Records[0].Requirement.Accepted.Citations[0]; c.LineStart != 3 || moved.Records[0].Revision != 1 {
+		t.Fatalf("неявный relocate переносит цитату на новую строку, revision прежний: %+v", moved.Records[0])
+	}
+	var ledger acceptedLedger
+	if err := json.Unmarshal(readFixture(t, filepath.Join(base, "runs", acceptedFile)), &ledger); err != nil || ledger.Version != 3 || len(ledger.Commits[len(ledger.Commits)-1].Relocated) != 2 {
+		t.Fatalf("журнал version 3 хранит вычисленные переносы: %v %+v", err, ledger.Commits)
+	}
+	// Replay reads no sources: rewriting the file does not change the replayed state.
+	writeFixture(t, rules, original)
+	if replayed := acceptedRead(t, config); replayed.Head != moved.Head || !reflect.DeepEqual(replayed.Records, moved.Records) {
+		t.Fatal("воспроизведение журнала с неявным переносом даёт то же состояние")
 	}
 }

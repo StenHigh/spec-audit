@@ -152,16 +152,41 @@ type AcceptedDecision struct {
 	// ImplicitKeep marks a version 4 decision (tool-spec §75): an unnamed prior norm continues as keep while its
 	// files are unchanged. Decoded from the stored bytes, so journal replay decides the same.
 	ImplicitKeep bool `json:"-"`
+	// Implicit are the relocations the tool derived for unnamed norms of a version 4 decision (tool-spec §75.2); they
+	// live in the ledger commit, not in the decision bytes, and are outside the 128-operation limit.
+	Implicit []AcceptedOperation `json:"-"`
 }
+
+// relocatedNorm is one derived relocation as the ledger stores it (tool-spec §75.2).
+type relocatedNorm struct {
+	ID        string     `json:"id"`
+	Citations []Citation `json:"citations"`
+}
+
+const implicitRelocateReason = "Неявный relocate (version 4): принятые цитаты дословно на новых местах"
 
 // acceptedCommit is one package of the ledger. Ledger version 2 (tool-spec §55) records which source_set files were
 // references when the package was applied; version 1 commits have no classification and are replayed as
-// `classified: false` — freshness then compares bytes only, as before.
+// `classified: false` — freshness then compares bytes only, as before. Version 3 (§75.2) adds the relocations derived
+// for unnamed norms of a version 4 decision, so replay needs no sources.
 type acceptedCommit struct {
+	Raw        string          `json:"raw"`
+	Decision   string          `json:"decision"`
+	References []string        `json:"references"`
+	Classified bool            `json:"classified"`
+	Relocated  []relocatedNorm `json:"relocated"`
+}
+
+type acceptedCommitV2 struct {
 	Raw        string   `json:"raw"`
 	Decision   string   `json:"decision"`
 	References []string `json:"references"`
 	Classified bool     `json:"classified"`
+}
+
+type acceptedLedgerV2 struct {
+	Version int                `json:"version"`
+	Commits []acceptedCommitV2 `json:"commits"`
 }
 
 type acceptedCommitV1 struct {
@@ -179,9 +204,9 @@ type acceptedLedgerV1 struct {
 	Commits []acceptedCommitV1 `json:"commits"`
 }
 
-const ledgerVersion = 2
+const ledgerVersion = 3
 
-// decodeLedger reads a version 1 or 2 ledger into the current form; any other version is refused.
+// decodeLedger reads a version 1, 2 or 3 ledger into the current form; any other version is refused.
 func decodeLedger(data []byte) (acceptedLedger, error) {
 	var head struct {
 		Version int `json:"version"`
@@ -200,7 +225,20 @@ func decodeLedger(data []byte) (acceptedLedger, error) {
 		}
 		ledger := acceptedLedger{Version: 1, Commits: []acceptedCommit{}}
 		for _, c := range old.Commits {
-			ledger.Commits = append(ledger.Commits, acceptedCommit{c.Raw, c.Decision, []string{}, false})
+			ledger.Commits = append(ledger.Commits, acceptedCommit{c.Raw, c.Decision, []string{}, false, []relocatedNorm{}})
+		}
+		return ledger, nil
+	case 2:
+		var old acceptedLedgerV2
+		if err := strictJSON(data, &old); err != nil {
+			return acceptedLedger{}, err
+		}
+		if err := requiredJSON(data, reflect.TypeOf(old)); err != nil {
+			return acceptedLedger{}, err
+		}
+		ledger := acceptedLedger{Version: 2, Commits: []acceptedCommit{}}
+		for _, c := range old.Commits {
+			ledger.Commits = append(ledger.Commits, acceptedCommit{c.Raw, c.Decision, c.References, c.Classified, []relocatedNorm{}})
 		}
 		return ledger, nil
 	case ledgerVersion:
@@ -299,7 +337,7 @@ func applyAccepted(state acceptedState, raw legacyRaw, decision AcceptedDecision
 	state.Records = append([]AcceptedRecord{}, state.Records...)
 	seenCandidates, seenPrevious := map[string]bool{}, map[string]bool{}
 	history := AcceptedHistory{decision, []AcceptedAssignment{}, raw.Limitations}
-	for _, operation := range decision.Operations {
+	for _, operation := range append(append([]AcceptedOperation{}, decision.Operations...), decision.Implicit...) {
 		p, n := len(operation.Previous), len(operation.Targets)
 		valid := false
 		switch operation.Action {
@@ -416,7 +454,7 @@ func applyAccepted(state acceptedState, raw legacyRaw, decision AcceptedDecision
 	}
 	if decision.ImplicitKeep {
 		// tool-spec §75: an unnamed norm continues unchanged. Whether its quotes still stand is checked against the
-		// source bytes before apply (implicitInPlace); replay has no sources and reproduces the same state.
+		// source bytes before apply (implicitRelocations, §75.2); replay has no sources and reproduces the same state.
 		for _, id := range implicitKept(decision, state.Records) {
 			if _, prior := active[id]; prior {
 				seenPrevious[id] = true
@@ -428,7 +466,13 @@ func applyAccepted(state acceptedState, raw legacyRaw, decision AcceptedDecision
 	}
 	state.SourceSet = raw.SourceSet
 	state.History = append(state.History, history)
-	head, _ := json.Marshal([]string{state.Head, digest(rawBytes), digest(decisionBytes)})
+	parts := []string{state.Head, digest(rawBytes), digest(decisionBytes)}
+	if len(decision.Implicit) > 0 {
+		// §75.2: derived relocations are part of the package — two different derivations never share a head.
+		derived, _ := json.Marshal(relocatedNorms(decision))
+		parts = append(parts, digest(derived))
+	}
+	head, _ := json.Marshal(parts)
 	state.Head = digest(head)
 	return state, nil
 }
@@ -467,6 +511,12 @@ func readAccepted(reportsDir string) (acceptedLedger, acceptedState, error) {
 		}
 		if err := decodeDecision([]byte(commit.Decision), &decision); err != nil {
 			return ledger, state, err
+		}
+		if len(commit.Relocated) > 0 && !decision.ImplicitKeep {
+			return ledger, state, errors.New("неявный relocate в журнале допустим только у решения version 4")
+		}
+		for _, moved := range commit.Relocated {
+			decision.Implicit = append(decision.Implicit, AcceptedOperation{"relocate", []string{moved.ID}, []AcceptedTarget{}, implicitRelocateReason, moved.Citations})
 		}
 		state, err = applyAccepted(state, raw, decision, []byte(commit.Raw), []byte(commit.Decision))
 		if err == nil {
@@ -645,6 +695,7 @@ func reconcile(cfg Config, paths []string) (any, error) {
 	view := acceptedView(cfg, staged.ledger, staged.state)
 	view["accepted"], view["duplicate"] = true, false
 	view["deferred"], view["rejected"], view["kept"] = decidedCandidates(decision, "defer"), decidedCandidates(decision, "reject"), append(keptIDs(decision), implicitKept(decision, state.Records)...)
+	view["relocated"] = relocatedIDs(decision)
 	slog.Debug("reconcile: view после apply", "freshness", view["freshness"], "records", len(staged.state.Records))
 	return view, nil
 }
@@ -701,7 +752,7 @@ func stageAcceptance(cfg Config, ledger acceptedLedger, state acceptedState, dec
 	if err := relocatedQuotes(*decision, sources); err != nil {
 		return staged, err
 	}
-	if err := implicitInPlace(*decision, state, raw, sources); err != nil {
+	if decision.Implicit, err = implicitRelocations(*decision, state, raw, set, sources); err != nil {
 		return staged, err
 	}
 	if len(reference) > 0 {
@@ -722,7 +773,7 @@ func stageAcceptance(cfg Config, ledger acceptedLedger, state acceptedState, dec
 	next.References, next.Classified = references, true
 	// A copied commit list: the caller's ledger keeps its backing array untouched; the file is always written in the
 	// current ledger version (older commits stay unclassified).
-	commits := append(append([]acceptedCommit{}, ledger.Commits...), acceptedCommit{string(rawBytes), string(decisionBytes), references, true})
+	commits := append(append([]acceptedCommit{}, ledger.Commits...), acceptedCommit{string(rawBytes), string(decisionBytes), references, true, relocatedNorms(*decision)})
 	staged.ledger = acceptedLedger{Version: ledgerVersion, Commits: commits}
 	data, err := json.MarshalIndent(staged.ledger, "", "  ")
 	if err != nil || len(data)+1 > maxState {
@@ -1044,6 +1095,7 @@ func checkAcceptance(cfg Config, paths []string) (any, error) {
 	view["duplicate"], view["base_index_current"], view["next_head"], view["assignments"], view["retired"] = false, true, staged.state.Head, assignments, retired
 	// tool-spec §38.1: the remainder is named, not inferred from the assignments' absence.
 	view["deferred"], view["rejected"], view["kept"] = decidedCandidates(*decision, "defer"), decidedCandidates(*decision, "reject"), append(keptIDs(*decision), implicitKept(*decision, state.Records)...)
+	view["relocated"] = relocatedIDs(*decision)
 	dropped := droppedQuestions(state.Records, staged.state.Records)
 	for _, question := range dropped {
 		view["advisories"] = append(view["advisories"].([]string), fmt.Sprintf("%s: решение снимает вопрос к ТЗ, который видит заказчик (§74): %s", question.ID, question.Question))
@@ -1127,6 +1179,27 @@ func relocationProposal(cfg Config) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	operations, unresolved := proposeRelocations(state, set, contents)
+	counts := map[string]int{"keep": 0, "relocate": 0, "unresolved": len(unresolved)}
+	for _, operation := range operations {
+		counts[operation.Action]++
+	}
+	return map[string]any{"base_index": state.Head, "source_set": set, "operations": operations, "unresolved": unresolved, "counts": counts}, nil
+}
+
+type unresolvedCitation struct {
+	Citation
+	Found int `json:"found"`
+}
+
+type unresolvedNorm struct {
+	ID        string               `json:"id"`
+	Citations []unresolvedCitation `json:"citations"`
+}
+
+// proposeRelocations is the §73.2 search shared by `reconcile CONFIG relocate` and the implicit relocate of a
+// version 4 decision (§75.2): keep, relocate or unresolved for every active norm of the accepted state.
+func proposeRelocations(state acceptedState, set []legacySource, contents map[string][]byte) ([]acceptedOperationV3, []unresolvedNorm) {
 	lines := map[string][]string{}
 	paths := []string{}
 	accepted, current := map[string]string{}, map[string]string{}
@@ -1135,21 +1208,10 @@ func relocationProposal(cfg Config) (any, error) {
 	}
 	for _, source := range set {
 		current[source.Path] = source.SHA256
-	}
-	for _, source := range set {
 		lines[source.Path] = strings.Split(strings.TrimSuffix(string(contents[source.Path]), "\n"), "\n")
 		paths = append(paths, source.Path)
 	}
-	type unresolvedCitation struct {
-		Citation
-		Found int `json:"found"`
-	}
-	type unresolvedNorm struct {
-		ID        string               `json:"id"`
-		Citations []unresolvedCitation `json:"citations"`
-	}
 	operations, unresolved := []acceptedOperationV3{}, []unresolvedNorm{}
-	counts := map[string]int{"keep": 0, "relocate": 0, "unresolved": 0}
 	type pending struct {
 		req   Requirement
 		found [][]Citation
@@ -1165,7 +1227,6 @@ func relocationProposal(cfg Config) (any, error) {
 		}
 		if keepable(req, state.SourceSet, set) == nil {
 			operations = append(operations, acceptedOperationV3{"keep", []string{req.ID}, []acceptedTargetV2{}, "Процитированные файлы не изменились", []Citation{}})
-			counts["keep"]++
 			continue
 		}
 		item := pending{req, [][]Citation{}}
@@ -1203,13 +1264,11 @@ func relocationProposal(cfg Config) (any, error) {
 		}
 		if len(missing) > 0 {
 			unresolved = append(unresolved, unresolvedNorm{item.req.ID, missing})
-			counts["unresolved"]++
 			continue
 		}
 		operations = append(operations, acceptedOperationV3{"relocate", []string{item.req.ID}, []acceptedTargetV2{}, "Текст ТЗ перемещён, принятые цитаты дословно на новых местах", moved})
-		counts["relocate"]++
 	}
-	return map[string]any{"base_index": state.Head, "source_set": set, "operations": operations, "unresolved": unresolved, "counts": counts}, nil
+	return operations, unresolved
 }
 
 // betweenAnchors keeps the positions of a repeated quote that lie between the new places of the nearest uniquely
@@ -1312,33 +1371,85 @@ func droppedQuestions(before, after []AcceptedRecord) []droppedQuestion {
 	return dropped
 }
 
-// implicitInPlace is the §75 guard for unnamed norms of a version 4 decision: the norm continues when its files are
-// unchanged (§39 keep) or, §75.1, when every accepted quote still stands verbatim at its accepted lines in a changed
-// file — text moved elsewhere in the file, not under the norm. Anything else needs an explicit operation.
-func implicitInPlace(decision AcceptedDecision, state acceptedState, raw legacyRaw, sources map[string][]byte) error {
+// implicitRelocations is the §75 guard for unnamed norms of a version 4 decision: the norm continues when its files
+// are unchanged (§39 keep), §75.1 when every accepted quote still stands at its accepted lines, and §75.2 by a
+// derived relocate when the §73.2 search places every quote; anything else needs an explicit operation. The derived
+// relocations go to the ledger commit, so replay reads no sources.
+func implicitRelocations(decision AcceptedDecision, state acceptedState, raw legacyRaw, set []legacySource, sources map[string][]byte) ([]AcceptedOperation, error) {
 	active := map[string]Requirement{}
 	for _, record := range state.Records {
 		if record.Status == "active" {
 			active[record.Requirement.ID] = record.Requirement
 		}
 	}
+	derived := []AcceptedOperation{}
+	var proposed map[string]acceptedOperationV3
+	var unplaced map[string]unresolvedNorm
 	for _, id := range implicitKept(decision, state.Records) {
 		req := active[id]
 		if keepable(req, state.SourceSet, raw.SourceSet) == nil {
 			continue
 		}
 		if req.Accepted == nil {
-			return fmt.Errorf("%s не названа в решении version 4 и не имеет принятых цитат — нужна операция", id)
+			return nil, fmt.Errorf("%s не названа в решении version 4 и не имеет принятых цитат — нужна операция", id)
 		}
+		inPlace := true
 		for _, c := range req.Accepted.Citations {
 			data, ok := sources[c.Path]
 			quote, err := lineQuote(data, c.LineStart, c.LineEnd)
 			if !ok || err != nil || quote != c.Quote {
-				return fmt.Errorf("%s не названа в решении version 4, а её цитата %s:%d-%d изменилась или сдвинулась — нужна операция (relocate/reanchor/revise/retire)", id, c.Path, c.LineStart, c.LineEnd)
+				inPlace = false
+				break
 			}
 		}
+		if inPlace {
+			continue
+		}
+		if proposed == nil {
+			proposed, unplaced = map[string]acceptedOperationV3{}, map[string]unresolvedNorm{}
+			operations, unresolved := proposeRelocations(state, set, sources)
+			for _, operation := range operations {
+				proposed[operation.Previous[0]] = operation
+			}
+			for _, norm := range unresolved {
+				unplaced[norm.ID] = norm
+			}
+		}
+		if operation, ok := proposed[id]; ok && operation.Action == "relocate" {
+			if err := relocatable(req, operation.Citations, raw.SourceSet); err != nil {
+				return nil, fmt.Errorf("неявный relocate %s: %w", id, err)
+			}
+			derived = append(derived, AcceptedOperation{"relocate", []string{id}, []AcceptedTarget{}, implicitRelocateReason, operation.Citations})
+			continue
+		}
+		if norm, ok := unplaced[id]; ok && len(norm.Citations) > 0 {
+			c := norm.Citations[0]
+			return nil, fmt.Errorf("%s не названа в решении version 4, а её цитата %s:%d-%d изменилась или сдвинулась и найдена в %d местах — нужна операция (reanchor/revise/retire)", id, c.Path, c.LineStart, c.LineEnd, c.Found)
+		}
+		return nil, fmt.Errorf("%s не названа в решении version 4, а её цитаты изменились или сдвинулись — нужна операция (relocate/reanchor/revise/retire)", id)
 	}
-	return nil
+	if err := relocatedQuotes(AcceptedDecision{Operations: derived}, sources); err != nil {
+		return nil, err
+	}
+	return derived, nil
+}
+
+// relocatedNorms is the ledger form of a decision's derived relocations (tool-spec §75.2).
+func relocatedNorms(decision AcceptedDecision) []relocatedNorm {
+	norms := []relocatedNorm{}
+	for _, operation := range decision.Implicit {
+		norms = append(norms, relocatedNorm{operation.Previous[0], operation.Citations})
+	}
+	return norms
+}
+
+// relocatedIDs lists the norms a decision relocates implicitly (tool-spec §75.2).
+func relocatedIDs(decision AcceptedDecision) []string {
+	ids := []string{}
+	for _, operation := range decision.Implicit {
+		ids = append(ids, operation.Previous[0])
+	}
+	return ids
 }
 
 // implicitKept lists the prior active norms a version 4 decision does not name (tool-spec §75), in ledger order.
