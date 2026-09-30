@@ -1029,6 +1029,11 @@ func checkAcceptance(cfg Config, paths []string) (any, error) {
 	view["duplicate"], view["base_index_current"], view["next_head"], view["assignments"], view["retired"] = false, true, staged.state.Head, assignments, retired
 	// tool-spec §38.1: the remainder is named, not inferred from the assignments' absence.
 	view["deferred"], view["rejected"], view["kept"] = decidedCandidates(*decision, "defer"), decidedCandidates(*decision, "reject"), keptIDs(*decision)
+	dropped := droppedQuestions(state.Records, staged.state.Records)
+	for _, question := range dropped {
+		view["advisories"] = append(view["advisories"].([]string), fmt.Sprintf("%s: решение снимает вопрос к ТЗ, который видит заказчик (§74): %s", question.ID, question.Question))
+	}
+	view["dropped_questions"] = dropped
 	slog.Info("check: приёмка проверена", "candidates", len(candidates), "decision", true, "assignments", len(assignments), "retired", len(retired), "duplicate", false)
 	return view, nil
 }
@@ -1257,6 +1262,39 @@ func relocatedQuotes(decision AcceptedDecision, sources map[string][]byte) error
 		}
 	}
 	return nil
+}
+
+type droppedQuestion struct {
+	ID       string `json:"id"`
+	Question string `json:"question"`
+}
+
+// droppedQuestions lists the unresolved entries of active norms that a decision would remove (tool-spec §74): the
+// customer sees them under «Вопросы к ТЗ», so a revise from a fresh extraction must not lose them silently — only an
+// answer in the specification (or an explicit retire) should.
+func droppedQuestions(before, after []AcceptedRecord) []droppedQuestion {
+	next := map[string]AcceptedRecord{}
+	for _, record := range after {
+		next[record.Requirement.ID] = record
+	}
+	dropped := []droppedQuestion{}
+	for _, record := range before {
+		if record.Status != "active" || record.Requirement.Accepted == nil {
+			continue
+		}
+		kept := map[string]bool{}
+		if later, ok := next[record.Requirement.ID]; ok && later.Status == "active" && later.Requirement.Accepted != nil {
+			for _, question := range later.Requirement.Accepted.Unresolved {
+				kept[question] = true
+			}
+		}
+		for _, question := range record.Requirement.Accepted.Unresolved {
+			if !kept[question] {
+				dropped = append(dropped, droppedQuestion{record.Requirement.ID, question})
+			}
+		}
+	}
+	return dropped
 }
 
 // keptIDs lists the norms a decision carries over with keep (tool-spec §39).

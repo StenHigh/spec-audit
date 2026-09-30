@@ -1497,3 +1497,26 @@ func TestRelocateKeepsUnchangedFileQuotes(t *testing.T) {
 		t.Fatalf("rules.md сдвинут на строку, extra.md остаётся на месте: %v", citations)
 	}
 }
+
+// §74: check names every customer-visible question a decision would remove; keeping it in the candidate is silent.
+func TestCheckDroppedQuestions(t *testing.T) {
+	config, base := acceptedFixture(t)
+	candidate := candidateAt(t, base, "rules.md", "C001", "Уведомить при задержке", 4, 4)
+	candidate.Clarity, candidate.Unresolved = "ambiguous", []string{"Срок уведомления не согласован"}
+	raw, decision := acceptedInputs(t, config, "first", []legacyCandidate{candidate}, acceptOperation("accept", []string{}, "C001"))
+	runOK(t, "reconcile", config, raw, decision)
+	id := acceptedRead(t, config).Records[0].Requirement.ID
+	for name, unresolved := range map[string][]string{"lost": {}, "kept": {"Срок уведомления не согласован"}} {
+		revised := candidate
+		revised.Statement, revised.Unresolved = "Уведомить при задержке поставки", unresolved
+		if len(unresolved) == 0 {
+			revised.Clarity = "clear"
+		}
+		raw, decision := acceptedInputs(t, config, "revise-"+name, []legacyCandidate{revised}, acceptOperation("revise", []string{id}, "C001"))
+		view := runOK(t, "check", config, raw, decision).(map[string]any)
+		dropped := view["dropped_questions"].([]droppedQuestion)
+		if (name == "lost") != (len(dropped) == 1) {
+			t.Fatalf("%s: dropped_questions %v", name, dropped)
+		}
+	}
+}
