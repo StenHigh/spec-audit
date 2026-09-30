@@ -59,7 +59,7 @@ func acceptedInputs(t *testing.T, config, id string, candidates []legacyCandidat
 		t.Fatal(err)
 	}
 	raw := legacyMarshal(t, legacyRaw{1, set, candidates, []string{}})
-	decision := AcceptedDecision{1, id, state.Head, digest(raw), ops}
+	decision := AcceptedDecision{1, id, state.Head, digest(raw), ops, false}
 	rawPath, decisionPath := filepath.Join(filepath.Dir(config), id+"-raw.json"), filepath.Join(filepath.Dir(config), id+"-decision.json")
 	writeFixture(t, rawPath, raw)
 	writeFixture(t, decisionPath, legacyMarshal(t, decision))
@@ -566,7 +566,7 @@ func TestAcceptedAppendBounds(t *testing.T) {
 		// Valid large whitespace in old raw strings, not a corrupt padded ledger.
 		for i := 0; i < 4; i++ {
 			raw := append(append([]byte{}, plain...), bytes.Repeat([]byte("\t"), 3<<20)...)
-			decision := AcceptedDecision{1, fmt.Sprintf("large-%d", i), state.Head, digest(raw), []AcceptedOperation{}}
+			decision := AcceptedDecision{1, fmt.Sprintf("large-%d", i), state.Head, digest(raw), []AcceptedOperation{}, false}
 			encoded := legacyMarshal(t, decision)
 			state, err = applyAccepted(state, rawValue, decision, raw, encoded)
 			if err != nil {
@@ -575,7 +575,7 @@ func TestAcceptedAppendBounds(t *testing.T) {
 			ledger.Commits = append(ledger.Commits, acceptedCommit{string(raw), string(encoded), []string{}, true})
 		}
 		// Two large raw strings in the next commit's raw and decision can fill the remaining space.
-		decision := AcceptedDecision{1, "exact-bytes", state.Head, digest(plain), []AcceptedOperation{}}
+		decision := AcceptedDecision{1, "exact-bytes", state.Head, digest(plain), []AcceptedOperation{}, false}
 		makeCommit := func(extra int) acceptedCommit {
 			raw := append(append([]byte{}, plain...), bytes.Repeat([]byte("\t"), 3<<20)...)
 			decision.RawSHA256 = digest(raw)
@@ -903,7 +903,7 @@ func TestReferenceSources(t *testing.T) {
 			}
 		}
 		rawBytes := legacyMarshal(t, legacyRaw{1, partial, []legacyCandidate{candidateAt(t, base, "rules.md", "C001", "Лимит", 2, 2)}, []string{}})
-		decisionBytes := legacyMarshal(t, AcceptedDecision{1, "partial", state.Head, digest(rawBytes), []AcceptedOperation{acceptOperation("rebind", []string{"REQ-AI-001"}, "C001")}})
+		decisionBytes := legacyMarshal(t, AcceptedDecision{1, "partial", state.Head, digest(rawBytes), []AcceptedOperation{acceptOperation("rebind", []string{"REQ-AI-001"}, "C001")}, false})
 		writeFixture(t, filepath.Join(base, "partial-raw.json"), rawBytes)
 		writeFixture(t, filepath.Join(base, "partial-decision.json"), decisionBytes)
 		runFail(t, "reconcile", config, filepath.Join(base, "partial-raw.json"), filepath.Join(base, "partial-decision.json"))
@@ -1518,5 +1518,59 @@ func TestCheckDroppedQuestions(t *testing.T) {
 		if (name == "lost") != (len(dropped) == 1) {
 			t.Fatalf("%s: dropped_questions %v", name, dropped)
 		}
+	}
+}
+
+// tool-spec §75: a version 4 decision names only real decisions; unnamed prior norms continue as keep while their
+// files are unchanged, and need an operation once they changed. Versions 1–3 still require full accounting.
+func TestAcceptImplicitKeep(t *testing.T) {
+	config, base := acceptedFixture(t)
+	raw, decision := acceptedInputs(t, config, "first", []legacyCandidate{
+		candidateAt(t, base, "rules.md", "C001", "Лимит 8 МиБ включительно", 2, 2),
+		candidateAt(t, base, "rules.md", "C002", "Название карточки обязательно", 3, 3),
+	}, acceptOperation("accept", []string{}, "C001"), acceptOperation("accept", []string{}, "C002"))
+	runOK(t, "reconcile", config, raw, decision)
+	writeFixture(t, filepath.Join(base, "source/extra.md"), []byte("# Дополнение\nОтвет приходит за 2 секунды.\n"))
+	writeFixture(t, config, bytes.Replace(readFixture(t, config), []byte("[rules.md]"), []byte("[rules.md, extra.md]"), 1))
+	decide := func(id string, version int) (string, string) {
+		t.Helper()
+		rawPath, _ := acceptedInputs(t, config, id, []legacyCandidate{candidateAt(t, base, "extra.md", "C001", "Ответ за 2 секунды", 2, 2)})
+		path := filepath.Join(base, id+"-decision.json")
+		writeFixture(t, path, legacyMarshal(t, map[string]any{"version": version, "decision_id": id, "base_index": acceptedRead(t, config).Head, "raw_sha256": digest(readFixture(t, rawPath)),
+			"operations": []any{map[string]any{"action": "accept", "previous": []string{}, "targets": []any{map[string]any{"candidate": "C001", "title": "Ответ", "verification": "Замерить время ответа", "narrowed_statement": ""}}, "reason": "Новая обязанность", "citations": []any{}}}}))
+		return rawPath, path
+	}
+	if rawPath, path := decide("v3-partial", 3); true {
+		if _, err := execute([]string{"reconcile", config, rawPath, path}); err == nil {
+			t.Fatal("version 3 без учёта прежних норм должна отклоняться")
+		}
+	}
+	rules := filepath.Join(base, "source/rules.md")
+	original := readFixture(t, rules)
+	writeFixture(t, rules, append([]byte("<!-- сдвиг -->\n"), original...))
+	if rawPath, path := decide("v4-changed", 4); true {
+		if _, err := execute([]string{"reconcile", config, rawPath, path}); err == nil || !strings.Contains(err.Error(), "не названа в решении version 4") {
+			t.Fatalf("неявный keep при изменённом файле должен отклоняться: %v", err)
+		}
+	}
+	writeFixture(t, rules, original)
+	rawPath, path := decide("v4", 4)
+	view := runOK(t, "check", config, rawPath, path).(map[string]any)
+	if kept := view["kept"].([]string); len(kept) != 2 {
+		t.Fatalf("check называет неявно продолженные нормы: %v", kept)
+	}
+	runOK(t, "reconcile", config, rawPath, path)
+	state := acceptedRead(t, config)
+	active := 0
+	for _, record := range state.Records {
+		if record.Status == "active" {
+			active++
+		}
+	}
+	if active != 3 || state.Records[0].Revision != 1 {
+		t.Fatalf("две прежние нормы продолжены, одна принята: %+v", state.Records)
+	}
+	if view := runOK(t, "reconcile", config).(map[string]any); view["freshness"] != "fresh" {
+		t.Fatal("после version 4 индекс свежий", view["freshness"])
 	}
 }

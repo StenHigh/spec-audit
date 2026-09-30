@@ -84,12 +84,12 @@ func decodeDecision(data []byte, out *AcceptedDecision) error {
 	if err := json.Unmarshal(data, &head); err != nil {
 		return errors.New("недопустимый JSON решения")
 	}
-	if head.Version == 3 {
+	if head.Version == 3 || head.Version == 4 {
 		var v3 acceptedDecisionV3
 		if err := legacyDecode(data, &v3); err != nil {
 			return err
 		}
-		*out = AcceptedDecision{Version: 1, DecisionID: v3.DecisionID, BaseIndex: v3.BaseIndex, RawSHA256: v3.RawSHA256, Operations: []AcceptedOperation{}}
+		*out = AcceptedDecision{Version: 1, DecisionID: v3.DecisionID, BaseIndex: v3.BaseIndex, RawSHA256: v3.RawSHA256, Operations: []AcceptedOperation{}, ImplicitKeep: head.Version == 4}
 		for _, op := range v3.Operations {
 			targets := []AcceptedTarget{}
 			for _, t := range op.Targets {
@@ -149,6 +149,9 @@ type AcceptedDecision struct {
 	BaseIndex  string              `json:"base_index"`
 	RawSHA256  string              `json:"raw_sha256"`
 	Operations []AcceptedOperation `json:"operations"`
+	// ImplicitKeep marks a version 4 decision (tool-spec §75): an unnamed prior norm continues as keep while its
+	// files are unchanged. Decoded from the stored bytes, so journal replay decides the same.
+	ImplicitKeep bool `json:"-"`
 }
 
 // acceptedCommit is one package of the ledger. Ledger version 2 (tool-spec §55) records which source_set files were
@@ -411,6 +414,19 @@ func applyAccepted(state acceptedState, raw legacyRaw, decision AcceptedDecision
 			history.Assignments = append(history.Assignments, AcceptedAssignment{candidate.ID, req.ID})
 		}
 	}
+	if decision.ImplicitKeep {
+		// tool-spec §75: the 128-operation budget goes to real decisions; an unnamed norm is kept only on the same
+		// guard as an explicit keep — its cited files must be byte-identical to the package that accepted it.
+		for _, id := range implicitKept(decision, state.Records) {
+			if _, prior := active[id]; !prior {
+				continue // accepted by this very decision
+			}
+			if err := keepable(state.Records[active[id]].Requirement, state.SourceSet, raw.SourceSet); err != nil {
+				return state, fmt.Errorf("%s не названа в решении version 4, а её файлы изменились — нужна операция (relocate/reanchor/revise/retire): %w", id, err)
+			}
+			seenPrevious[id] = true
+		}
+	}
 	if len(seenCandidates) != len(candidates) || len(seenPrevious) != len(active) {
 		return state, errors.New("нужен полный учёт кандидатов и прежних active ID")
 	}
@@ -632,7 +648,7 @@ func reconcile(cfg Config, paths []string) (any, error) {
 	// Same view as the read-only call; freshness is measured again under the held lock, not assumed.
 	view := acceptedView(cfg, staged.ledger, staged.state)
 	view["accepted"], view["duplicate"] = true, false
-	view["deferred"], view["rejected"], view["kept"] = decidedCandidates(decision, "defer"), decidedCandidates(decision, "reject"), keptIDs(decision)
+	view["deferred"], view["rejected"], view["kept"] = decidedCandidates(decision, "defer"), decidedCandidates(decision, "reject"), append(keptIDs(decision), implicitKept(decision, state.Records)...)
 	slog.Debug("reconcile: view после apply", "freshness", view["freshness"], "records", len(staged.state.Records))
 	return view, nil
 }
@@ -1028,7 +1044,7 @@ func checkAcceptance(cfg Config, paths []string) (any, error) {
 	// §22.3: on success the decision's base_index equals the current head by construction (applyAccepted enforced it).
 	view["duplicate"], view["base_index_current"], view["next_head"], view["assignments"], view["retired"] = false, true, staged.state.Head, assignments, retired
 	// tool-spec §38.1: the remainder is named, not inferred from the assignments' absence.
-	view["deferred"], view["rejected"], view["kept"] = decidedCandidates(*decision, "defer"), decidedCandidates(*decision, "reject"), keptIDs(*decision)
+	view["deferred"], view["rejected"], view["kept"] = decidedCandidates(*decision, "defer"), decidedCandidates(*decision, "reject"), append(keptIDs(*decision), implicitKept(*decision, state.Records)...)
 	dropped := droppedQuestions(state.Records, staged.state.Records)
 	for _, question := range dropped {
 		view["advisories"] = append(view["advisories"].([]string), fmt.Sprintf("%s: решение снимает вопрос к ТЗ, который видит заказчик (§74): %s", question.ID, question.Question))
@@ -1295,6 +1311,26 @@ func droppedQuestions(before, after []AcceptedRecord) []droppedQuestion {
 		}
 	}
 	return dropped
+}
+
+// implicitKept lists the prior active norms a version 4 decision does not name (tool-spec §75), in ledger order.
+func implicitKept(decision AcceptedDecision, before []AcceptedRecord) []string {
+	ids := []string{}
+	if !decision.ImplicitKeep {
+		return ids
+	}
+	named := map[string]bool{}
+	for _, operation := range decision.Operations {
+		for _, id := range operation.Previous {
+			named[id] = true
+		}
+	}
+	for _, record := range before {
+		if record.Status == "active" && !named[record.Requirement.ID] {
+			ids = append(ids, record.Requirement.ID)
+		}
+	}
+	return ids
 }
 
 // keptIDs lists the norms a decision carries over with keep (tool-spec §39).
