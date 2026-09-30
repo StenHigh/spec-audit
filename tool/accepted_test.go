@@ -1471,3 +1471,29 @@ func TestRelocateMovedFile(t *testing.T) {
 		t.Fatalf("изменённый текст — unresolved: %v", view)
 	}
 }
+
+// §73.2: a quote in a file that did not change stays at its lines even when its text repeats there — only quotes of
+// changed files are searched.
+func TestRelocateKeepsUnchangedFileQuotes(t *testing.T) {
+	config, base := acceptedFixture(t)
+	writeFixture(t, filepath.Join(base, "source/extra.md"), []byte("# Шапка\nОбщая строка\nОбщая строка\n"))
+	writeFixture(t, config, bytes.Replace(readFixture(t, config), []byte("[rules.md]"), []byte("[rules.md, extra.md]"), 1))
+	candidate := candidateAt(t, base, "rules.md", "C001", "Лимит 8 МиБ включительно", 2, 2)
+	candidate.Citations = append(candidate.Citations, Citation{"extra.md", 3, 3, "Общая строка"})
+	raw, decision := acceptedInputs(t, config, "first", []legacyCandidate{candidate}, acceptOperation("accept", []string{}, "C001"))
+	runOK(t, "reconcile", config, raw, decision)
+	rules := filepath.Join(base, "source/rules.md")
+	writeFixture(t, rules, append([]byte("<!-- сдвиг -->\n"), readFixture(t, rules)...))
+	var view map[string]any
+	if err := json.Unmarshal(legacyMarshal(t, runOK(t, "reconcile", config, "relocate")), &view); err != nil {
+		t.Fatal(err)
+	}
+	operations := view["operations"].([]any)
+	if len(operations) != 1 {
+		t.Fatalf("норма должна получить relocate: %v", view)
+	}
+	citations := operations[0].(map[string]any)["citations"].([]any)
+	if first, second := citations[0].(map[string]any), citations[1].(map[string]any); first["line_start"] != float64(3) || second["path"] != "extra.md" || second["line_start"] != float64(3) {
+		t.Fatalf("rules.md сдвинут на строку, extra.md остаётся на месте: %v", citations)
+	}
+}

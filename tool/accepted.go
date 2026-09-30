@@ -1109,6 +1109,13 @@ func relocationProposal(cfg Config) (any, error) {
 	}
 	lines := map[string][]string{}
 	paths := []string{}
+	accepted, current := map[string]string{}, map[string]string{}
+	for _, source := range state.SourceSet {
+		accepted[source.Path] = source.SHA256
+	}
+	for _, source := range set {
+		current[source.Path] = source.SHA256
+	}
 	for _, source := range set {
 		lines[source.Path] = strings.Split(strings.TrimSuffix(string(contents[source.Path]), "\n"), "\n")
 		paths = append(paths, source.Path)
@@ -1148,6 +1155,9 @@ func relocationProposal(cfg Config) (any, error) {
 				scope = paths // §73.1: the accepted file left the source_set — look for the quote in every source.
 			}
 			found := quotePositions(lines, scope, old)
+			if accepted[old.Path] != "" && accepted[old.Path] == current[old.Path] {
+				found = []Citation{old} // an unchanged file keeps its quotes where they were, however often the text repeats
+			}
 			if len(found) == 1 {
 				if anchors[old.Path] == nil {
 					anchors[old.Path] = map[int]Citation{}
