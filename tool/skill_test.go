@@ -16,8 +16,7 @@ import (
 	"testing"
 )
 
-// Launcher-authored files must be self-contained and free of pilot knowledge; bundled frozen docs are checked only for
-// absolute paths and tracker IDs (their checkout navigation links are a documented owner decision, tool-spec §18).
+// All delivered files must be free of pilot knowledge; bundled contracts may retain their checkout navigation links.
 func TestSkillFiles(t *testing.T) {
 	files, err := skillFiles("dev")
 	if err != nil {
@@ -30,6 +29,9 @@ func TestSkillFiles(t *testing.T) {
 			return err
 		}
 		rel, _ := filepath.Rel(root, p)
+		if strings.HasPrefix(filepath.ToSlash(rel), "references/docs/") && strings.HasSuffix(rel, ".txt") {
+			rel = strings.TrimSuffix(rel, ".txt") + ".md"
+		}
 		want[filepath.ToSlash(rel)] = true
 		return nil
 	}); err != nil {
@@ -71,11 +73,11 @@ func TestSkillFiles(t *testing.T) {
 		if absRE.MatchString(text) || issueRE.MatchString(text) {
 			t.Fatalf("%s содержит абсолютный путь или ID задачи", rel)
 		}
-		if strings.HasPrefix(rel, "references/docs/") {
-			continue
-		}
 		if pilotRE.MatchString(text) {
 			t.Fatalf("%s упоминает пилот", rel)
+		}
+		if strings.HasPrefix(rel, "references/docs/") {
+			continue
 		}
 		if strings.Contains(text, "](../") {
 			t.Fatalf("%s ссылается вне копии", rel)
@@ -92,7 +94,7 @@ func TestSkillFiles(t *testing.T) {
 		}
 	}
 	if !strings.Contains(string(files["SKILL.md"]), "](references/docs/accepted-index.md)") {
-		t.Fatal("ссылки SKILL.md не перенаправлены на встроенные документы")
+		t.Fatal("SKILL.md не ссылается на переносимый контракт приёмки")
 	}
 	receipt := skillReceipt(files, "1.2.3")
 	if !bytes.Equal(receipt, skillReceipt(files, "1.2.3")) {
@@ -113,6 +115,35 @@ func TestSkillFiles(t *testing.T) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(receipt, &raw); err != nil || len(raw) != 3 {
 		t.Fatalf("receipt поля: %v", err)
+	}
+}
+
+// Portable copies change navigation and project names, but not the frozen normative sections.
+func TestPortableContractNorms(t *testing.T) {
+	links := regexp.MustCompile(`\[([^\]]+)\]\([^)]+\)`)
+	for _, tc := range []struct{ name, start, end string }{
+		{"accepted-index", "## Ответственность и идентичность", "## Приёмка"},
+		{"legacy-extraction", "## Контракт извлечения", "## Воспроизведение"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			section := func(p string) string {
+				data, err := os.ReadFile(p)
+				if err != nil {
+					t.Fatal(err)
+				}
+				text := string(data)
+				start, end := strings.Index(text, tc.start), strings.Index(text, tc.end)
+				if start < 0 || end <= start {
+					t.Fatalf("%s: нет нормативного диапазона", p)
+				}
+				return links.ReplaceAllString(text[start:end], "$1")
+			}
+			original := section(filepath.Join("..", "docs", tc.name+".md"))
+			portable := section(filepath.Join("..", skillSourceDir, "references", "docs", tc.name+".txt"))
+			if original != portable {
+				t.Fatal("переносимая копия изменила нормативный текст frozen-контракта")
+			}
+		})
 	}
 }
 
@@ -337,6 +368,8 @@ func TestSkill(t *testing.T) {
 			install(t, dir, "both")
 			backdate(t, dir, "references/protocol.txt", []byte("older protocol"))
 			backdate(t, dir, "references/host-decision.md", nil)
+			backdate(t, dir, "references/docs/accepted-index.md", []byte("older project-specific contract"))
+			backdate(t, dir, "references/docs/legacy-extraction.md", []byte("older project-specific extraction"))
 		}, sub: "update", host: "both", updated: true, links: map[string]string{codex: "kept", claude: "kept"}, check: func(t *testing.T, dir string) {
 			checkInstalled(t, dir, codex, claude)
 		}},

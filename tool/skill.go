@@ -29,7 +29,7 @@ const (
 )
 
 // Contracts SKILL.md links to; bundled byte-for-byte under references/docs/ so the installed copy needs no checkout.
-var skillDocs = []string{"accepted-index.md", "legacy-extraction.md", "php-sdk-contract.md"}
+var skillDocs = []string{"php-sdk-contract.md"}
 
 type SkillReceipt struct {
 	SchemaVersion string            `json:"schema_version"`
@@ -49,6 +49,10 @@ func skillFiles(version string) (map[string][]byte, error) {
 			return err
 		}
 		rel := strings.TrimPrefix(p, skillSourceDir+"/")
+		// Portable contract sources replace the original installed paths, including on update.
+		if strings.HasPrefix(rel, "references/docs/") && strings.HasSuffix(rel, ".txt") {
+			rel = strings.TrimSuffix(rel, ".txt") + ".md"
+		}
 		if rel == "SKILL.md" {
 			data = bytes.ReplaceAll(data, []byte("](../../docs/"), []byte("](references/docs/"))
 		}
