@@ -88,7 +88,7 @@ type ScopeOverview struct {
 	Requirements int    `json:"requirements_total"`
 	Head         string `json:"accepted_head,omitempty"`
 	Runs         int    `json:"runs"`
-	// History lists every decided run of the scope, newest first (tool-spec §49): the time selector of the published site.
+	// History lists every decided run of the scope, newest first (§49); publish omits this list (§77).
 	History []RunRef     `json:"history"`
 	Latest  *RunOverview `json:"latest"`  // the most recently prepared run: delivery progress
 	Decided *RunOverview `json:"decided"` // the most recent run with a host decision: verdict counts; totals come from here
@@ -633,6 +633,7 @@ func runOverview(reports *os.Root, runID, current string) (RunOverview, []Contra
 var corpusHTML string
 
 var corpusTemplate = template.Must(template.New("corpus").Funcs(template.FuncMap{
+	"uiStyles":  uiStyles,
 	"scopeName": scopeName,
 	"join":      strings.Join,
 }).Parse(corpusHTML))
@@ -699,8 +700,8 @@ func renderCorpus(view Overview) ([]byte, error) {
 	return html.Bytes(), nil
 }
 
-// publish assembles a self-contained static site for the customer (tool-spec §49): OUT_DIR/index.html — the corpus map,
-// OUT_DIR/overview.json — its data, OUT_DIR/<scope>/<run>/report.html — a copy of every decided run's report. Every
+// publish assembles a self-contained static site for the customer (tool-spec §49, §77): OUT_DIR/index.html — the corpus map,
+// OUT_DIR/overview.json — its data, OUT_DIR/<scope>/<run>/report.html — a copy of the latest decided run's report. Every
 // file is static and script-free except the run reports' own inline navigation; the tree can be served from any host.
 // The site is written whole on each publish; files of runs that no longer exist stay until the host removes OUT_DIR.
 func publish(out string, paths []string) (any, error) {
@@ -723,28 +724,31 @@ func publish(out string, paths []string) (any, error) {
 			return nil, err
 		}
 		name := scopeName(scope.Config)
-		for j := range scope.History {
-			runID := scope.History[j].RunID
-			source := filepath.Join(cfg.ReportsDir, runID, "report.html")
-			data, err := os.ReadFile(source)
-			if err != nil {
-				slog.Debug("publish: report.html отсутствует", "config", scope.Config, "run_id", runID)
-				continue
-			}
-			target := filepath.Join(absOut, name, runID)
-			if err := os.MkdirAll(target, 0755); err != nil {
-				return nil, err
-			}
-			if err := os.WriteFile(filepath.Join(target, "report.html"), data, 0644); err != nil {
-				return nil, err
-			}
-			copied++
-			link := filepath.ToSlash(filepath.Join(name, runID, "report.html"))
-			scope.History[j].Report = link
-			if scope.Decided != nil && scope.Decided.RunID == runID {
-				scope.Decided.Report = link
-			}
+		// Publish only the latest decided run; overview retains the full audit history.
+		scope.History = []RunRef{}
+		if scope.Decided == nil {
+			continue
 		}
+		runID := scope.Decided.RunID
+		source := filepath.Join(cfg.ReportsDir, runID, "report.html")
+		data, err := os.ReadFile(source)
+		if errors.Is(err, os.ErrNotExist) {
+			slog.Debug("publish: report.html отсутствует", "config", scope.Config, "run_id", runID)
+			scope.Decided.Report = ""
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		target := filepath.Join(absOut, name, runID)
+		if err := os.MkdirAll(target, 0755); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(filepath.Join(target, "report.html"), data, 0644); err != nil {
+			return nil, err
+		}
+		copied++
+		scope.Decided.Report = filepath.ToSlash(filepath.Join(name, runID, "report.html"))
 	}
 	html, err := renderCorpus(view)
 	if err != nil {

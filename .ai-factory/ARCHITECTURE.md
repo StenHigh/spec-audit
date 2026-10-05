@@ -17,7 +17,7 @@
 | [tool/overview.go](../tool/overview.go), [tool/corpus.html](../tool/corpus.html) | Обзор нескольких scope (`overview CONFIG...`): freshness и принятый набор по CONFIG, последний подготовленный и последний решённый run, счётчики состояний, `totals`, `contradicted_code`; сводная HTML-карта корпуса (`corpus OUT_HTML CONFIG...`) |
 | [tool/runtime.go](../tool/runtime.go) | Контролируемый запуск процессов, timeout, результаты тестов и receipts |
 | [tool/php.go](../tool/php.go), [tool/sdk.php](../tool/sdk.php), [tool/sdk-typed.php](../tool/sdk-typed.php) | Docker-boundary; `php-facts` (syntax-only) и `php-typed` (PHPStan/Larastan-экспортёр, neon-обёртка, проверка envelope `sdk/3` и основания анализа) |
-| [tool/report.go](../tool/report.go), [tool/report.html](../tool/report.html) | JSON/HTML, связи нормы–код–assertion, подсказки SDK с происхождением, текущий статус, навигация и настройки |
+| [tool/report.go](../tool/report.go), [tool/report.html](../tool/report.html), [tool/ui.css](../tool/ui.css) | Общий встроенный стиль карты/отчёта; JSON/HTML, связи нормы–код–assertion, подсказки SDK с происхождением, текущий статус, навигация и настройки |
 | [tool/update.go](../tool/update.go) | `version`, проверка подписанного release-manifest и `update` с атомарной заменой собственного файла |
 | [tool/skill.go](../tool/skill.go), [embed.go](../embed.go) | Материализация встроенного launcher, receipt, `skill install|update` внутри `os.Root(DIR)`; embed — данные без логики |
 | [scripts/install.sh](../scripts/install.sh), [.github/workflows/release.yml](../.github/workflows/release.yml) | Первичная установка и подписанный релиз с нативной квалификацией платформ |

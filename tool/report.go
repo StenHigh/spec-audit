@@ -19,7 +19,14 @@ import (
 //go:embed report.html
 var reportHTML string
 
+//go:embed ui.css
+var uiCSS string
+
+// The stylesheet is embedded trusted source, never audit input.
+func uiStyles() template.CSS { return template.CSS(uiCSS) }
+
 var reportTemplate = template.Must(template.New("report").Funcs(template.FuncMap{
+	"uiStyles":       uiStyles,
 	"citationID":     citationID,
 	"join":           strings.Join,
 	"assertionLabel": assertionLabel,
