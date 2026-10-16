@@ -19,7 +19,14 @@ import (
 //go:embed report.html
 var reportHTML string
 
+//go:embed ui.css
+var uiCSS string
+
+// The stylesheet is embedded trusted source, never audit input.
+func uiStyles() template.CSS { return template.CSS(uiCSS) }
+
 var reportTemplate = template.Must(template.New("report").Funcs(template.FuncMap{
+	"uiStyles":       uiStyles,
 	"citationID":     citationID,
 	"join":           strings.Join,
 	"assertionLabel": assertionLabel,
@@ -73,12 +80,16 @@ type NavigationLink struct {
 }
 
 type NavigationEvidence struct {
-	ID       string           `json:"id"`
-	Citation Citation         `json:"citation"`
-	Links    []NavigationLink `json:"links"`
+	SourceURL string           `json:"source_url,omitempty"`
+	ID        string           `json:"id"`
+	Citation  Citation         `json:"citation"`
+	Links     []NavigationLink `json:"links"`
 }
 
 type NavigationFile struct {
+	SourceURL        string `json:"source_url,omitempty"`
+	SourceLimitation string `json:"source_limitation,omitempty"`
+	LiveURL          string `json:"current_url,omitempty"`
 	SourceFile
 	ID       string               `json:"id"`
 	Current  bool                 `json:"has_current_links"`
@@ -266,7 +277,7 @@ func buildNavigation(report *Report, m Manifest) {
 		Groups: groups,
 		Files:  []NavigationFile{}, Scopes: m.Config.Scopes,
 		Sections: []AuditSection{},
-		Editor:   EditorDefaults{CodeRoot: m.Config.ProjectRoot},
+		Editor:   EditorDefaults{CodeRoot: runtimeSourceRoot(m.Config)},
 		Filters: []NavigationFilter{
 			{ID: "implementation_gap", Label: "Противоречие реализации"},
 			{ID: "test_gap", Label: "Недостаточно проверок в тестах"},

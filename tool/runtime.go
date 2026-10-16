@@ -90,7 +90,7 @@ type processResult struct {
 func runProcess(ctx context.Context, cfg Config, stdin []byte, env []string, name string, args ...string) (processResult, error) {
 	result := processResult{exitCode: -1}
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir, cmd.Stdin = cfg.ProjectRoot, bytes.NewReader(stdin)
+	cmd.Dir, cmd.Stdin = runtimeSourceRoot(cfg), bytes.NewReader(stdin)
 	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdout, cmd.Stderr = &result.stdout, &result.stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -193,7 +193,10 @@ func executeTests(cfg Config, m Manifest, id string) (Receipt, error) {
 	if cfg.Runtime.Kind == "none" {
 		return receipt, errors.New("исполнение отключено runtime.kind=none")
 	}
-	root, err := os.OpenRoot(cfg.ProjectRoot)
+	if err := runtimeSourcesCurrent(cfg); err != nil {
+		return receipt, err
+	}
+	root, err := os.OpenRoot(runtimeSourceRoot(cfg))
 	if err != nil {
 		return receipt, err
 	}
@@ -279,7 +282,7 @@ func executeTests(cfg Config, m Manifest, id string) (Receipt, error) {
 		receipt.State = "incomplete"
 	}
 	current, snapErr := snapshot(cfg)
-	if snapErr != nil || current.SnapshotID != m.SnapshotID {
+	if snapErr != nil || current.SnapshotID != m.SnapshotID || runtimeSourcesCurrent(cfg) != nil {
 		receipt.State = "stale"
 	}
 	receipt.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)

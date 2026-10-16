@@ -129,6 +129,23 @@ assert(html.includes('<title>spec-audit — ui-fixture</title>'), 'Expected synt
     assert.equal(await background(), dark);
     await page.locator('#charts').screenshot({path:process.env.SPEC_AUDIT_UI_SCREENSHOT || '/private/tmp/spec-audit-ui-preview.png'});
 
+    // The published corpus uses the same local kit and remains script-free.
+    if (process.argv[3]) {
+      const corpus = await pageWithStorage(null, false, fs.readFileSync(process.argv[3], 'utf8'));
+      await corpus.emulateMedia({colorScheme:'dark'});
+      assert.equal(await corpus.evaluate(() => getComputedStyle(document.body).backgroundColor), 'rgb(11, 12, 14)');
+      assert.equal(await corpus.locator('script').count(), 0);
+      assert.equal(await corpus.locator('a[href$="/p1/report.html"]').count(), 0);
+      assert.equal(await corpus.locator('a[href$="/p2/report.html"]').count(), 1);
+      await corpus.screenshot({path:'/private/tmp/spec-audit-corpus-desktop.png', fullPage:true});
+      await corpus.setViewportSize({width:375,height:900});
+      await corpus.evaluate(() => {for (const e of document.querySelectorAll('details')) e.open = true;});
+      assert(await corpus.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'corpus overflows mobile viewport');
+      await corpus.screenshot({path:'/private/tmp/spec-audit-corpus-mobile.png', fullPage:true});
+      await corpus.locator('nav a').first().focus();
+      assert.equal(await corpus.evaluate(() => getComputedStyle(document.activeElement).outlineStyle), 'solid');
+    }
+
     const noJS = await browser.newContext({javaScriptEnabled:false});
     const staticPage = await noJS.newPage();
     await staticPage.setContent(html);

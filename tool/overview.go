@@ -81,14 +81,16 @@ func (g *Gap) add(a Assessment) {
 }
 
 type ScopeOverview struct {
-	Config       string `json:"config"`
-	IndexMode    string `json:"index_mode"`
-	Freshness    string `json:"freshness"`
-	Error        string `json:"error,omitempty"`
-	Requirements int    `json:"requirements_total"`
-	Head         string `json:"accepted_head,omitempty"`
-	Runs         int    `json:"runs"`
-	// History lists every decided run of the scope, newest first (tool-spec §49): the time selector of the published site.
+	Name         string         `json:"name,omitempty"`
+	External     *ExternalBasis `json:"external,omitempty"`
+	Config       string         `json:"config"`
+	IndexMode    string         `json:"index_mode"`
+	Freshness    string         `json:"freshness"`
+	Error        string         `json:"error,omitempty"`
+	Requirements int            `json:"requirements_total"`
+	Head         string         `json:"accepted_head,omitempty"`
+	Runs         int            `json:"runs"`
+	// History lists every decided run of the scope, newest first (§49); publish omits this list (§77).
 	History []RunRef     `json:"history"`
 	Latest  *RunOverview `json:"latest"`  // the most recently prepared run: delivery progress
 	Decided *RunOverview `json:"decided"` // the most recent run with a host decision: verdict counts; totals come from here
@@ -197,6 +199,7 @@ type RunRef struct {
 }
 
 type RunOverview struct {
+	External         *ExternalBasis `json:"external,omitempty"`
 	RunID            string         `json:"run_id"`
 	PreparedAt       string         `json:"prepared_at"`
 	ToolVersion      string         `json:"tool_version"`
@@ -370,6 +373,10 @@ func overview(paths []string) (Overview, error) {
 // scopeOverview never fails the whole map for one scope: a stale or missing index is reported as its freshness/error.
 func scopeOverview(path string, cfg Config) (ScopeOverview, []ContradictedCitation) {
 	scope := ScopeOverview{Config: path, IndexMode: "declared", Freshness: "n/a", History: []RunRef{}, Questions: []ScopeQuestion{}}
+	scope.Name = scopeName(path)
+	if cfg.External != nil {
+		scope.Name = cfg.External.Scope
+	}
 	cited := []ContradictedCitation{}
 	if cfg.IndexMode == "accepted" {
 		scope.IndexMode = "accepted"
@@ -377,9 +384,14 @@ func scopeOverview(path string, cfg Config) (ScopeOverview, []ContradictedCitati
 	current := ""
 	var questions *Manifest // where the «Вопросы к ТЗ» come from (§68): the current snapshot, else the last accepted state
 	m, err := snapshot(cfg)
+	scope.External = m.External
 	if err != nil {
 		scope.Error = err.Error()
 		scope.Freshness = "unavailable"
+		if m.External != nil && cfg.IndexMode == "" {
+			scope.Requirements = len(m.Requirements)
+			questions = &m
+		}
 		if cfg.IndexMode == "accepted" {
 			if ledger, state, readErr := readAccepted(cfg.ReportsDir); readErr == nil {
 				last := Manifest{}
@@ -541,7 +553,7 @@ func runOverview(reports *os.Root, runID, current string) (RunOverview, []Contra
 	if err != nil {
 		return RunOverview{}, nil, err
 	}
-	view := RunOverview{RunID: runID, SnapshotCurrent: current == m.SnapshotID, Implementation: map[string]int{}, Assertion: map[string]int{}, Contradicted: []string{}, Disagree: []string{}, Attention: []NormBrief{}, verdicts: map[string]NormBrief{}, keys: map[string]string{}}
+	view := RunOverview{External: m.External, RunID: runID, SnapshotCurrent: current == m.SnapshotID, Implementation: map[string]int{}, Assertion: map[string]int{}, Contradicted: []string{}, Disagree: []string{}, Attention: []NormBrief{}, verdicts: map[string]NormBrief{}, keys: map[string]string{}}
 	titles := map[string]string{}
 	for _, req := range m.Requirements {
 		titles[req.ID] = req.Title
@@ -633,6 +645,7 @@ func runOverview(reports *os.Root, runID, current string) (RunOverview, []Contra
 var corpusHTML string
 
 var corpusTemplate = template.Must(template.New("corpus").Funcs(template.FuncMap{
+	"uiStyles":  uiStyles,
 	"scopeName": scopeName,
 	"join":      strings.Join,
 }).Parse(corpusHTML))
@@ -699,11 +712,28 @@ func renderCorpus(view Overview) ([]byte, error) {
 	return html.Bytes(), nil
 }
 
-// publish assembles a self-contained static site for the customer (tool-spec §49): OUT_DIR/index.html — the corpus map,
-// OUT_DIR/overview.json — its data, OUT_DIR/<scope>/<run>/report.html — a copy of every decided run's report. Every
+// publish assembles a self-contained static site for the customer (tool-spec §49, §77): OUT_DIR/index.html — the corpus map,
+// OUT_DIR/overview.json — its data, OUT_DIR/<scope>/<run>/report.html — a copy of the latest decided run's report. Every
 // file is static and script-free except the run reports' own inline navigation; the tree can be served from any host.
 // The site is written whole on each publish; files of runs that no longer exist stay until the host removes OUT_DIR.
 func publish(out string, paths []string) (any, error) {
+	absCheck, err := filepath.Abs(out)
+	if err != nil {
+		return nil, err
+	}
+	absCheck, err = canonicalPath(absCheck)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range paths {
+		cfg, err := loadConfig(path, true)
+		if err != nil {
+			return nil, err
+		}
+		if cfg.External != nil && (within(cfg.ReportsDir, absCheck) || within(absCheck, cfg.ReportsDir) || within(cfg.ProjectRoot, absCheck) || within(absCheck, cfg.ProjectRoot)) {
+			return nil, errors.New("publish: OUT пересекается с рабочей областью/исходниками")
+		}
+	}
 	view, err := overview(paths)
 	if err != nil {
 		return nil, err
@@ -712,7 +742,7 @@ func publish(out string, paths []string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(absOut, 0755); err != nil {
+	if err := mkdirExact(absOut, 0755); err != nil {
 		return nil, err
 	}
 	copied := 0
@@ -723,28 +753,42 @@ func publish(out string, paths []string) (any, error) {
 			return nil, err
 		}
 		name := scopeName(scope.Config)
-		for j := range scope.History {
-			runID := scope.History[j].RunID
-			source := filepath.Join(cfg.ReportsDir, runID, "report.html")
-			data, err := os.ReadFile(source)
+		if cfg.External != nil {
+			n, err := publishExternalScope(absOut, scope, cfg)
 			if err != nil {
-				slog.Debug("publish: report.html отсутствует", "config", scope.Config, "run_id", runID)
-				continue
-			}
-			target := filepath.Join(absOut, name, runID)
-			if err := os.MkdirAll(target, 0755); err != nil {
 				return nil, err
 			}
-			if err := os.WriteFile(filepath.Join(target, "report.html"), data, 0644); err != nil {
-				return nil, err
-			}
-			copied++
-			link := filepath.ToSlash(filepath.Join(name, runID, "report.html"))
-			scope.History[j].Report = link
-			if scope.Decided != nil && scope.Decided.RunID == runID {
-				scope.Decided.Report = link
-			}
+			copied += n
+			continue
 		}
+		// Publish only the latest decided run; overview retains the full audit history.
+		scope.History = []RunRef{}
+		if scope.Decided == nil {
+			continue
+		}
+		runID := scope.Decided.RunID
+		source := filepath.Join(cfg.ReportsDir, runID, "report.html")
+		data, err := os.ReadFile(source)
+		if errors.Is(err, os.ErrNotExist) {
+			slog.Debug("publish: report.html отсутствует", "config", scope.Config, "run_id", runID)
+			scope.Decided.Report = ""
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		target := filepath.Join(absOut, name, runID)
+		if err := os.MkdirAll(target, 0755); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(filepath.Join(target, "report.html"), data, 0644); err != nil {
+			return nil, err
+		}
+		if err := copyReportResources(cfg.ReportsDir, runID, target); err != nil {
+			return nil, err
+		}
+		copied++
+		scope.Decided.Report = filepath.ToSlash(filepath.Join(name, runID, "report.html"))
 	}
 	html, err := renderCorpus(view)
 	if err != nil {
@@ -758,6 +802,9 @@ func publish(out string, paths []string) (any, error) {
 		return nil, err
 	}
 	if err := os.WriteFile(filepath.Join(absOut, "overview.json"), append(data, '\n'), 0644); err != nil {
+		return nil, err
+	}
+	if err := recordPublication(absOut, paths); err != nil {
 		return nil, err
 	}
 	slog.Info("сайт опубликован", "dir", absOut, "scopes", view.Totals.Scopes, "reports", copied)

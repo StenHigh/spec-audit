@@ -655,6 +655,11 @@ func reconcile(cfg Config, paths []string) (any, error) {
 	if err := os.MkdirAll(cfg.ReportsDir, 0700); err != nil {
 		return nil, err
 	}
+	workspaceUnlock, err := lockWorkspaces([]string{cfg.ReportsDir}, false)
+	if err != nil {
+		return nil, err
+	}
+	defer workspaceUnlock()
 	reports, err := os.OpenRoot(cfg.ReportsDir)
 	if err != nil {
 		return nil, err

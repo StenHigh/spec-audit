@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -1199,25 +1200,67 @@ func TestPublish(t *testing.T) {
 		runOK(t, "review", config, runID, path)
 		runOK(t, "report", config, runID)
 	}
+	if view := runOK(t, "overview", config).(Overview); len(view.Scopes[0].History) != 2 {
+		t.Fatal("история аудита в overview сохраняется", view.Scopes[0].History)
+	}
 	site := filepath.Join(base, "site")
 	answer := runOK(t, "publish", site, config).(map[string]any)
 	scope := scopeName(config)
-	for _, rel := range []string{"index.html", "overview.json", scope + "/p1/report.html", scope + "/p2/report.html"} {
+	for _, rel := range []string{"index.html", "overview.json", scope + "/p2/report.html"} {
 		if _, err := os.Stat(filepath.Join(site, rel)); err != nil {
 			t.Fatal("сайт должен содержать", rel, err)
 		}
 	}
 	index := string(readFixture(t, filepath.Join(site, "index.html")))
-	if answer["reports"] != 2 || !strings.Contains(index, `href="`+scope+`/p2/report.html"`) || !strings.Contains(index, `href="`+scope+`/p1/report.html"`) || !strings.Contains(index, "2 решённых run") {
-		t.Fatal("index ссылается на копии отчётов и историю run", answer, strings.Contains(index, "решённых run"))
+	if answer["reports"] != 1 || !strings.Contains(index, `href="`+scope+`/p2/report.html"`) || strings.Contains(index, `href="`+scope+`/p1/report.html"`) || strings.Contains(index, "решённых run") {
+		t.Fatal("index ссылается только на последний решённый run", answer, strings.Contains(index, "решённых run"))
 	}
 	var view Overview
-	if err := json.Unmarshal(readFixture(t, filepath.Join(site, "overview.json")), &view); err != nil || len(view.Scopes[0].History) != 2 || view.Scopes[0].History[0].RunID != "p2" || view.Scopes[0].History[0].Report != scope+"/p2/report.html" {
-		t.Fatal("overview.json с историей (новые первыми) и ссылками сайта", err, view.Scopes[0].History)
+	if err := json.Unmarshal(readFixture(t, filepath.Join(site, "overview.json")), &view); err != nil || len(view.Scopes[0].History) != 0 || view.Scopes[0].Decided.RunID != "p2" || view.Scopes[0].Decided.Report != scope+"/p2/report.html" {
+		t.Fatal("overview.json без списка прошлых run, со ссылкой на последний", err, view.Scopes[0].History)
 	}
 	if !bytes.Equal(readFixture(t, filepath.Join(site, scope, "p2", "report.html")), readFixture(t, filepath.Join(base, "runs/p2/report.html"))) {
 		t.Fatal("отчёт копируется байт-в-байт")
 	}
+	if _, err := os.Stat(filepath.Join(site, scope, "p1", "report.html")); !os.IsNotExist(err) {
+		t.Fatal("прошлый run не публикуется", err)
+	}
+	var publishedReport Report
+	if err := json.Unmarshal(readFixture(t, filepath.Join(site, scope, "p2/report.json")), &publishedReport); err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range publishedReport.Sources {
+		if source.Full {
+			if digest(readFixture(t, filepath.Join(site, scope, "p2", source.RawURL))) != source.SHA256 {
+				t.Fatal("published source link lost exact bytes")
+			}
+		}
+	}
+	// An undecided newer run must not replace the latest host decision.
+	runOK(t, "prepare", config, "p3")
+	if answer := runOK(t, "publish", site, config).(map[string]any); answer["reports"] != 1 {
+		t.Fatal("новый run без решения не заменяет решённый", answer)
+	}
+	if output := os.Getenv("SPEC_AUDIT_CORPUS_FIXTURE"); output != "" {
+		writeFixture(t, output, readFixture(t, filepath.Join(site, "index.html")))
+		previewReport := filepath.Join(filepath.Dir(output), scope, "p2", "report.html")
+		if err := os.MkdirAll(filepath.Dir(previewReport), 0700); err != nil {
+			t.Fatal(err)
+		}
+		writeFixture(t, previewReport, readFixture(t, filepath.Join(site, scope, "p2", "report.html")))
+	}
+	// A missing latest report is skipped, never replaced with an older report.
+	if err := os.Remove(filepath.Join(base, "runs/p2/report.html")); err != nil {
+		t.Fatal(err)
+	}
+	missingSite := filepath.Join(base, "missing-site")
+	if answer := runOK(t, "publish", missingSite, config).(map[string]any); answer["reports"] != 0 {
+		t.Fatal("нет подмены старым отчётом", answer)
+	}
+	if page := string(readFixture(t, filepath.Join(missingSite, "index.html"))); strings.Contains(page, "/report.html") {
+		t.Fatal("нет ссылки на отсутствующий отчёт")
+	}
+
 	runFail(t, "publish", site)
 }
 
@@ -1500,4 +1543,12 @@ func TestRerunBatch(t *testing.T) {
 		}
 	}
 	runFail(t, "rerun", "bad id", config)
+}
+
+func TestCappedOutputThroughCopy(t *testing.T) {
+	var output cappedBuffer
+	output.limit = 8
+	if _, err := io.Copy(&output, strings.NewReader(strings.Repeat("x", 1024))); err == nil || output.Len() > 8 {
+		t.Fatal("copy bypassed output limit")
+	}
 }

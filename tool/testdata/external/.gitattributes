@@ -1,0 +1,2 @@
+# The contract fixtures pin exact bytes, including BOM and CRLF.
+* -text
