@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "spec_version": "fixture-A",
+  "project": "fixture-project",
+  "corpus": "fixture-corpus",
+  "line": null,
+  "previous_spec_version": null,
+  "profile": {
+    "id": "fixture-markdown",
+    "version": "1",
+    "sha256": "0e2835aa6327c5c927f0e66963400e397626417fe78c68395bc2a2490ae2ad07"
+  },
+  "files": [
+    {
+      "path": "assets/same-name.bin",
+      "role": "archive",
+      "export": true,
+      "media_type": "application/octet-stream",
+      "size_bytes": 4,
+      "sha256": "3d1f57c984978ef98a18378c8166c1cb8ede02c03eeb6aee7e2f121dfeee3e56",
+      "origin": {
+        "kind": "trucker",
+        "project_id": "synthetic-project",
+        "document_id": "fixture-asset",
+        "revision_id": "synthetic-A",
+        "file_version_id": "synthetic-file-A",
+        "source_url": "https://example.invalid/current"
+      }
+    },
+    {
+      "path": "context.md",
+      "role": "reference",
+      "export": true,
+      "media_type": "text/markdown",
+      "size_bytes": 164,
+      "sha256": "593079892701cd61cdca83cb14a3dd6c977ae5dc650c78b3736a663c3b7f1f83",
+      "origin": {
+        "kind": "trucker",
+        "project_id": "synthetic-project",
+        "document_id": "fixture-context",
+        "revision_id": "synthetic-A",
+        "file_version_id": null,
+        "source_url": "https://example.invalid/current"
+      }
+    },
+    {
+      "path": "removed.md",
+      "role": "archive",
+      "export": false,
+      "media_type": "text/markdown",
+      "size_bytes": 26,
+      "sha256": "cb88faf340001bbeff4ca540e51c8c56d92a2fc74dfc85f75543af58e39f9f91",
+      "origin": {
+        "kind": "trucker",
+        "project_id": "synthetic-project",
+        "document_id": "fixture-removed",
+        "revision_id": "synthetic-A",
+        "file_version_id": null,
+        "source_url": "https://example.invalid/current"
+      }
+    },
+    {
+      "path": "rules.md",
+      "role": "normative",
+      "export": true,
+      "media_type": "text/markdown",
+      "size_bytes": 2493,
+      "sha256": "9610646b62816004ff1f3d4220580053e9dee38bd845bdf9fd07f6b4455f4893",
+      "origin": {
+        "kind": "trucker",
+        "project_id": "synthetic-project",
+        "document_id": "fixture-rules",
+        "revision_id": "synthetic-A",
+        "file_version_id": null,
+        "source_url": "https://example.invalid/current"
+      }
+    }
+  ],
+  "file_count": 4
+}

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -1224,6 +1225,17 @@ func TestPublish(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(site, scope, "p1", "report.html")); !os.IsNotExist(err) {
 		t.Fatal("прошлый run не публикуется", err)
 	}
+	var publishedReport Report
+	if err := json.Unmarshal(readFixture(t, filepath.Join(site, scope, "p2/report.json")), &publishedReport); err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range publishedReport.Sources {
+		if source.Full {
+			if digest(readFixture(t, filepath.Join(site, scope, "p2", source.RawURL))) != source.SHA256 {
+				t.Fatal("published source link lost exact bytes")
+			}
+		}
+	}
 	// An undecided newer run must not replace the latest host decision.
 	runOK(t, "prepare", config, "p3")
 	if answer := runOK(t, "publish", site, config).(map[string]any); answer["reports"] != 1 {
@@ -1531,4 +1543,12 @@ func TestRerunBatch(t *testing.T) {
 		}
 	}
 	runFail(t, "rerun", "bad id", config)
+}
+
+func TestCappedOutputThroughCopy(t *testing.T) {
+	var output cappedBuffer
+	output.limit = 8
+	if _, err := io.Copy(&output, strings.NewReader(strings.Repeat("x", 1024))); err == nil || output.Len() > 8 {
+		t.Fatal("copy bypassed output limit")
+	}
 }

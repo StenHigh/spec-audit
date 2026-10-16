@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:spec-audit:audit-input:1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "corpus_dir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "manifest_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "profile_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "manifest_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "code_basis": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "git"
+            },
+            "repository": {
+              "type": "string",
+              "minLength": 1
+            },
+            "commit": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "repository",
+            "commit"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "snapshot"
+            },
+            "snapshot_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "kind",
+            "snapshot_id",
+            "sha256"
+          ]
+        }
+      ]
+    },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "unknown",
+            "unchanged",
+            "changed"
+          ]
+        },
+        "checked_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observation_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "checked_at",
+        "observation_ref",
+        "reason"
+      ]
+    },
+    "acceptance_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "applicability_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "publication_base": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "corpus_dir",
+    "manifest_path",
+    "profile_path",
+    "manifest_sha256",
+    "code_basis",
+    "freshness",
+    "acceptance_ref",
+    "applicability_ref",
+    "publication_base"
+  ]
+}

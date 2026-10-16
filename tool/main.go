@@ -71,10 +71,11 @@ type Sources struct {
 }
 
 type Config struct {
-	IndexMode   string  `yaml:"index_mode,omitempty" json:"index_mode,omitempty"`
-	Version     int     `yaml:"version" json:"version"`
-	ProjectRoot string  `yaml:"project_root" json:"project_root"`
-	Specs       Sources `yaml:"specs" json:"specs"`
+	External    *ExternalConfig `yaml:"external,omitempty" json:"external,omitempty"`
+	IndexMode   string          `yaml:"index_mode,omitempty" json:"index_mode,omitempty"`
+	Version     int             `yaml:"version" json:"version"`
+	ProjectRoot string          `yaml:"project_root" json:"project_root"`
+	Specs       Sources         `yaml:"specs" json:"specs"`
 	// References — справочные файлы ТЗ (§20, §67): цитируются, не порождают кандидатов и норм; nil сохраняет прежний snapshot_id.
 	References *Sources `yaml:"references,omitempty" json:"references,omitempty"`
 	Code       Sources  `yaml:"code" json:"code"`
@@ -106,6 +107,7 @@ type SourceFile struct {
 }
 
 type Manifest struct {
+	External     *ExternalBasis   `json:"external,omitempty"`
 	Version      int              `json:"version"`
 	Config       Config           `json:"config"`
 	Files        []SourceFile     `json:"files"`
@@ -291,6 +293,9 @@ type RequirementReport struct {
 }
 
 type Report struct {
+	IndependentReview *ReviewCheck   `json:"independent_review,omitempty"`
+	External          *ExternalBasis `json:"external,omitempty"`
+	Sources           []SavedSource  `json:"sources,omitempty"`
 	Status
 	GeneratedAt                string              `json:"generated_at"`
 	Conclusion                 string              `json:"conclusion"`
@@ -329,6 +334,12 @@ func main() {
 	slog.Debug("начало операции")
 	value, err := execute(os.Args[1:])
 	if err != nil {
+		// Cleanup can return its partial operation journal with a nonzero exit.
+		if value != nil {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(value)
+		}
 		// Input data must not reach logs through decoder diagnostics.
 		slog.Error("операция отклонена", "error", err.Error())
 		os.Exit(1)
@@ -345,6 +356,21 @@ func main() {
 func digest(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+type cappedBuffer struct {
+	buffer bytes.Buffer
+	limit  int
+}
+
+func (b *cappedBuffer) Len() int      { return b.buffer.Len() }
+func (b *cappedBuffer) Bytes() []byte { return b.buffer.Bytes() }
+
+func (b *cappedBuffer) Write(data []byte) (int, error) {
+	if len(data) > b.limit-b.Len() {
+		return 0, errors.New("вывод превышает установленный лимит")
+	}
+	return b.buffer.Write(data)
 }
 
 func readLimited(r io.Reader, limit int64) ([]byte, error) {
@@ -428,6 +454,9 @@ func loadConfig(path string, history ...bool) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
+	if cfg.External != nil && cfg.External.Input != "" && !filepath.IsAbs(cfg.External.Input) {
+		cfg.External.Input = filepath.Join(base, cfg.External.Input)
+	}
 	if !filepath.IsAbs(cfg.ProjectRoot) {
 		cfg.ProjectRoot = filepath.Join(base, cfg.ProjectRoot)
 	}
@@ -454,7 +483,7 @@ func loadConfig(path string, history ...bool) (Config, error) {
 			return cfg, fmt.Errorf("related: %w", err)
 		}
 	}
-	if within(cfg.ReportsDir, cfg.ProjectRoot) {
+	if within(cfg.ReportsDir, cfg.ProjectRoot) && !managedExternalRoot(cfg) {
 		return cfg, errors.New("reports_dir не может содержать project_root")
 	}
 	if len(cfg.Specs.Paths) == 0 || len(cfg.Code.Paths) == 0 {
@@ -487,7 +516,7 @@ func loadConfig(path string, history ...bool) (Config, error) {
 				return cfg, errors.New("повторный путь источника")
 			}
 			input := filepath.Join(cfg.ProjectRoot, path)
-			if within(input, cfg.ReportsDir) || within(cfg.ReportsDir, input) {
+			if (within(input, cfg.ReportsDir) || within(cfg.ReportsDir, input)) && !managedExternalRoot(cfg) {
 				return cfg, errors.New("reports_dir пересекается с входным деревом")
 			}
 		}
@@ -513,6 +542,9 @@ func loadConfig(path string, history ...bool) (Config, error) {
 		}
 	}
 	sort.Slice(cfg.Scopes, func(i, j int) bool { return cfg.Scopes[i].ID < cfg.Scopes[j].ID })
+	if cfg.External != nil && cfg.External.Input != "" && !filepath.IsAbs(cfg.External.Input) {
+		cfg.External.Input = filepath.Join(base, cfg.External.Input)
+	}
 	return cfg, nil
 }
 
@@ -622,6 +654,13 @@ func snapshot(cfg Config) (Manifest, error) {
 	if err != nil {
 		return m, err
 	}
+	// The chosen external corpus and its observation remain inspectable when
+	// the live code root drifts or disappears; native freshness still refuses.
+	if cfg.External != nil && runtimeSourceRoot(cfg) != cfg.ProjectRoot {
+		if err := runtimeSourcesCurrent(cfg); err != nil {
+			return m, err
+		}
+	}
 	if cfg.IndexMode == "accepted" {
 		_, state, err := readAccepted(cfg.ReportsDir)
 		if err != nil {
@@ -641,7 +680,21 @@ func snapshot(cfg Config) (Manifest, error) {
 		return m, err
 	}
 	identity := m
+	if m.External != nil {
+		basis := *m.External
+		basis.InputSHA256 = ""
+		basis.Freshness = ExternalFreshness{}
+		basis.AcceptanceRef = nil
+		basis.ApplicabilityRef = nil
+		basis.PublicationBase = nil
+		identity.External = &basis
+	}
 	identity.Config.ProjectRoot, identity.Config.ReportsDir = "", ""
+	if identity.Config.External != nil {
+		ext := *identity.Config.External
+		ext.Input = ""
+		identity.Config.External = &ext
+	}
 	data, err := json.Marshal(identity)
 	if err != nil {
 		return m, err
@@ -740,6 +793,13 @@ func scanSnapshot(cfg Config) (Manifest, error) {
 	}
 	if references > 0 {
 		slog.Debug("snapshot: справочные файлы", "count", references)
+	}
+	if cfg.External != nil {
+		basis, err := boundExternal(cfg, m.Files)
+		if err != nil {
+			return m, err
+		}
+		m.External = basis
 	}
 	if err := checkQuestions(m); err != nil {
 		return m, err
@@ -1469,9 +1529,30 @@ func validReviewArgs(args []string) bool {
 }
 
 // usage is the command list of tool-spec §1–10 with later extensions; help prints it, wrong arguments refuse with it (§24.4).
-const usage = "команды: help; init/index CONFIG; index CONFIG summary; anchors CONFIG [PATH...]; overview CONFIG...; corpus OUT_HTML CONFIG...; publish OUT_DIR CONFIG...; plan CONFIG PREV_RUN; rerun RUN_ID CONFIG...; cite CONFIG PATH A B; reconcile CONFIG [RAW DECISION|relocate]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION|REQ-ID [text|brief]|summary|citations [PATH|REQ-ID|ROLE]]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; validate CONFIG RUN_ID host DECISION; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]"
+const usage = "команды: review-check CONFIG RUN_ID [RECEIPT]; external check|import CONFIG AUDIT_INPUT; external result CONFIG RUN_ID; bundle export REQUEST OUT | verify ARCHIVE | restore ARCHIVE NEW_DIR; cleanup plan ARCHIVE | verify ARCHIVE PLAN | apply ARCHIVE PLAN PROOF; help; init/index CONFIG; index CONFIG summary; anchors CONFIG [PATH...]; overview CONFIG...; corpus OUT_HTML CONFIG...; publish OUT_DIR CONFIG...; plan CONFIG PREV_RUN; rerun RUN_ID CONFIG...; cite CONFIG PATH A B; reconcile CONFIG [RAW DECISION|relocate]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION|REQ-ID [text|brief]|summary|citations [PATH|REQ-ID|ROLE]]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; validate CONFIG RUN_ID host DECISION; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]"
 
 func execute(args []string) (any, error) {
+	unlock, err := lockCommand(args)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	return executeCommand(args)
+}
+
+func executeCommand(args []string) (any, error) {
+	if len(args) > 0 && args[0] == "review-check" {
+		return reviewCheckCommand(args[1:])
+	}
+	if len(args) > 0 && args[0] == "external" {
+		return externalCommand(args[1:])
+	}
+	if len(args) > 0 && args[0] == "bundle" {
+		return bundleCommand(args[1:])
+	}
+	if len(args) > 0 && args[0] == "cleanup" {
+		return cleanupCommand(args[1:])
+	}
 	if len(args) > 0 && args[0] == "reconcile" {
 		if len(args) != 2 && len(args) != 4 && !(len(args) == 3 && args[2] == "relocate") {
 			return nil, errors.New("reconcile CONFIG [RAW DECISION|relocate]")
@@ -1599,6 +1680,11 @@ func execute(args []string) (any, error) {
 			return nil, err
 		}
 	}
+	workspaceUnlock, err := lockWorkspaces([]string{cfg.ReportsDir}, false)
+	if err != nil {
+		return nil, err
+	}
+	defer workspaceUnlock()
 	reports, err := os.OpenRoot(cfg.ReportsDir)
 	if err != nil {
 		return nil, err
@@ -1675,7 +1761,10 @@ func execute(args []string) (any, error) {
 	var state State
 	if command == "prepare" {
 		state = newState(m)
-		if err := run.Mkdir("results", 0700); err != nil {
+		if err := run.MkdirAll("results", 0700); err != nil {
+			return nil, err
+		}
+		if err := captureSources(reports, run, m); err != nil {
 			return nil, err
 		}
 		if err := writeJSON(run, "manifest.json", m, 0400); err != nil {
@@ -1725,6 +1814,12 @@ func execute(args []string) (any, error) {
 			return nil, errors.New("снимок stale; нужен новый run")
 		}
 		m.Config.ProjectRoot, m.Config.ReportsDir = cfg.ProjectRoot, cfg.ReportsDir
+		if m.Config.External != nil && cfg.External != nil {
+			ext := *m.Config.External
+			ext.Input = cfg.External.Input
+			ext.CodeRoot = cfg.External.CodeRoot
+			m.Config.External = &ext
+		}
 		state = newState(m)
 		data, err = readRoot(run, "state.json", maxState)
 		if err != nil {
@@ -1840,7 +1935,14 @@ func execute(args []string) (any, error) {
 		if len(toolVersions.Records) > 0 {
 			report.ToolVersions = toolVersions.Records
 		}
+		report.IndependentReview, err = checkForReport(run, report)
+		if err != nil {
+			return nil, err
+		}
 		buildNavigation(&report, m)
+		if err := attachSources(reports, run, &report, m); err != nil {
+			return nil, err
+		}
 		var html bytes.Buffer
 		if err := reportTemplate.Execute(&html, report); err != nil {
 			return nil, err

@@ -158,7 +158,7 @@ func verifiedContainer(ctx context.Context, cfg Config) (string, error) {
 	found := false
 	for _, mount := range container.Mounts {
 		actual, _ := filepath.EvalSymlinks(mount.Source)
-		if actual == cfg.ProjectRoot && mount.Destination == "/var/www/html" {
+		if actual == runtimeSourceRoot(cfg) && mount.Destination == "/var/www/html" {
 			found = true
 		}
 		if strings.HasPrefix(mount.Destination, "/var/www/html/") {
@@ -192,6 +192,9 @@ func containerCommand(id string, env ...string) []string {
 }
 
 func phpFacts(cfg Config, m Manifest, paths []string) (any, error) {
+	if err := runtimeSourcesCurrent(cfg); err != nil {
+		return nil, err
+	}
 	if cfg.Runtime.Kind != "docker-php" {
 		return nil, errors.New("PHP facts требуют runtime.kind=docker-php")
 	}
@@ -222,7 +225,7 @@ func phpFacts(cfg Config, m Manifest, paths []string) (any, error) {
 		return nil, err
 	}
 	current, err := snapshot(cfg)
-	if err != nil || current.SnapshotID != m.SnapshotID {
+	if err != nil || current.SnapshotID != m.SnapshotID || runtimeSourcesCurrent(cfg) != nil {
 		return nil, errors.New("снимок изменился во время SDK")
 	}
 	return map[string]any{"snapshot_id": m.SnapshotID, "container_id": id, "envelope": envelope}, nil
@@ -240,7 +243,7 @@ func verifySDK(body []byte, m Manifest, paths []string) (SDKEnvelope, error) {
 	if envelope.Version != "sdk/2" || envelope.EvidenceKind != "syntax_only" || runtime.OS != "Linux" || runtime.PHP == "" || runtime.Arch == "" || runtime.ParserVersion == "" || runtime.SDKSHA256 != digest(sdk) || len(envelope.Files) != len(paths) {
 		return envelope, errors.New("неверная схема/происхождение SDK")
 	}
-	root, err := os.OpenRoot(m.Config.ProjectRoot)
+	root, err := os.OpenRoot(runtimeSourceRoot(m.Config))
 	if err != nil {
 		return envelope, err
 	}
@@ -471,6 +474,9 @@ func serviceExec(parent context.Context, cfg Config, id string, env []string, st
 // phpTyped выполняет php-typed по контракту: preflight → setup → analyse → cleanup → повторный snapshot.
 func phpTyped(cfg Config, m Manifest, paths []string) (typedResult, error) {
 	var result typedResult
+	if err := runtimeSourcesCurrent(cfg); err != nil {
+		return result, err
+	}
 	if cfg.SDK == nil || cfg.Runtime.Kind != "docker-php" {
 		return result, errors.New("php-typed требует блок sdk и runtime.kind=docker-php")
 	}
@@ -571,7 +577,7 @@ func phpTyped(cfg Config, m Manifest, paths []string) (typedResult, error) {
 		return result, err
 	}
 	current, err := snapshot(cfg)
-	if err != nil || current.SnapshotID != m.SnapshotID {
+	if err != nil || current.SnapshotID != m.SnapshotID || runtimeSourcesCurrent(cfg) != nil {
 		return result, errors.New("снимок изменился во время SDK")
 	}
 	result.raw, result.envelope, result.diagnostics = raw, envelope, diagnostics
@@ -628,7 +634,7 @@ func verifyTyped(body []byte, m Manifest, cfg Config, paths []string, lock []byt
 	if runtime.ComposerLockSHA256 != digest(lock) {
 		return envelope, errors.New("SDK использует другой composer.lock")
 	}
-	root, err := os.OpenRoot(m.Config.ProjectRoot)
+	root, err := os.OpenRoot(runtimeSourceRoot(m.Config))
 	if err != nil {
 		return envelope, err
 	}

@@ -15,6 +15,10 @@
 | [tool/accepted.go](../tool/accepted.go), [tool/legacy.go](../tool/legacy.go) | Принятие кандидатов, ID/редакции, reconcile (единый view для чтения и apply, справочные источники и guard нормативной цитаты), общий `stageAcceptance` для apply и `check` (проверка приёмки без записи, подсказки сопоставления с `unique_shared`), операция `reanchor` и проверка извлечения |
 | [tool/review.go](../tool/review.go) | Согласование хоста: DECISION version 1 (полные оценки), version 2 (вердикты с `concur` и `counts`, свидетельства из результатов ролей) и version 3 (плюс собственные цитаты хоста); общий `stageReview` для `review` и `validate … host` без записи; стандартный statement при совпадении с ролями; `requirementView` — чтение решения по одной норме; `citationIndex` — индекс цитат run по файлу (`review … citations`); `reviewBrief` — сводка `review … summary`; `requirementText` — текстовая форма нормы; `previous_host` (со statement) и разность цитат ролей в `outcomes[]`, общее основание/журнал, список ролей и таблица расхождений `outcomes[]` в контексте `review`, черновик решения `draft` |
 | [tool/overview.go](../tool/overview.go), [tool/corpus.html](../tool/corpus.html) | Обзор нескольких scope (`overview CONFIG...`): freshness и принятый набор по CONFIG, последний подготовленный и последний решённый run, счётчики состояний, `totals`, `contradicted_code`; сводная HTML-карта корпуса (`corpus OUT_HTML CONFIG...`) |
+| `tool/external.go`, `external_result.go` | Файловый вход r1, проверка manifest/profile/code basis, атомарная отдельная материализация без сетевого провайдера; публичный результат и историческая внешняя публикация |
+| `tool/sources.go`, `publication.go` | Побайтовые общие объекты, описи run и сохранённые события публикации, полные источники/диапазоны/происхождение и честная quote-only история |
+| `tool/bundle.go`, `cleanup.go`, `workspace.go` | Переносимый gzip/tar с дедупликацией bytes и отдельными логическими областями, независимое восстановление, проверяемая очистка известных дублей; общая блокировка CLI плюс прежние run-locks |
+| `tool/review_check.go` | Запись независимой перепроверки с точным основанием решения; CLI проверяет связь, оператор обеспечивает смысл и независимость контекста |
 | [tool/runtime.go](../tool/runtime.go) | Контролируемый запуск процессов, timeout, результаты тестов и receipts |
 | [tool/php.go](../tool/php.go), [tool/sdk.php](../tool/sdk.php), [tool/sdk-typed.php](../tool/sdk-typed.php) | Docker-boundary; `php-facts` (syntax-only) и `php-typed` (PHPStan/Larastan-экспортёр, neon-обёртка, проверка envelope `sdk/3` и основания анализа) |
 | [tool/report.go](../tool/report.go), [tool/report.html](../tool/report.html), [tool/ui.css](../tool/ui.css) | Общий встроенный стиль карты/отчёта; JSON/HTML, связи нормы–код–assertion, подсказки SDK с происхождением, текущий статус, навигация и настройки |
@@ -28,7 +32,7 @@
 
 ## Поток и границы зависимостей
 
-1. CONFIG выбирает источники и область записи. Ядро строит проверяемый snapshot и declared/accepted-набор; accepted требует явного решения хоста.
+1. CONFIG выбирает источники и область записи. Для внешнего входа `external import` предварительно проверяет файловый комплект и материализует отдельное дерево; получение редакций и решения клиента не принадлежат ядру. Ядро строит проверяемый snapshot и declared/accepted-набор; accepted требует явного решения хоста.
 2. `prepare/tasks` формируют ограниченные задания. Хост передаёт их независимым mapper/redteam, не подмешивая gold и старые вердикты; `submit` валидирует ответы и сохраняет raw.
 3. Разрешённый `test` даёт отдельный receipt. `review` сохраняет согласование хоста поверх исходных результатов; `report` представляет данные, но не создаёт новый смысловой вердикт.
 

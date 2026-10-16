@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "spec_version": "fixture-B",
+  "project": "fixture-project",
+  "corpus": "fixture-corpus",
+  "line": null,
+  "previous_spec_version": "fixture-A",
+  "profile": {
+    "id": "fixture-markdown",
+    "version": "1",
+    "sha256": "0e2835aa6327c5c927f0e66963400e397626417fe78c68395bc2a2490ae2ad07"
+  },
+  "files": [
+    {
+      "path": "assets/same-name.bin",
+      "role": "archive",
+      "export": true,
+      "media_type": "application/octet-stream",
+      "size_bytes": 12,
+      "sha256": "a83a15ce14bf37fecafab43caa2a2d964ef62b1725766f9a6af0e9d5a855c548",
+      "origin": {
+        "kind": "trucker",
+        "project_id": "synthetic-project",
+        "document_id": "fixture-asset",
+        "revision_id": "synthetic-B",
+        "file_version_id": "synthetic-file-B",
+        "source_url": "https://example.invalid/current"
+      }
+    },
+    {
+      "path": "refs/context.md",
+      "role": "reference",
+      "export": true,
+      "media_type": "text/markdown",
+      "size_bytes": 164,
+      "sha256": "593079892701cd61cdca83cb14a3dd6c977ae5dc650c78b3736a663c3b7f1f83",
+      "origin": {
+        "kind": "trucker",
+        "project_id": "synthetic-project",
+        "document_id": "fixture-context",
+        "revision_id": "synthetic-B",
+        "file_version_id": null,
+        "source_url": "https://example.invalid/current"
+      }
+    },
+    {
+      "path": "rules.md",
+      "role": "normative",
+      "export": true,
+      "media_type": "text/markdown",
+      "size_bytes": 2493,
+      "sha256": "c34db0f82292290b46be86c5093cdaaa411f739086066049894388ed747a1e0f",
+      "origin": {
+        "kind": "trucker",
+        "project_id": "synthetic-project",
+        "document_id": "fixture-rules",
+        "revision_id": "synthetic-B",
+        "file_version_id": null,
+        "source_url": "https://example.invalid/current"
+      }
+    }
+  ],
+  "file_count": 3
+}
