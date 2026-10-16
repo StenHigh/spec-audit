@@ -387,6 +387,14 @@ func TestExternalGitBasis(t *testing.T) {
 	f.request.CodeBasis = mustJSON(t, map[string]string{"kind": "git", "repository": root, "commit": commit})
 	f.save(t)
 	runOK(t, "external", "check", f.config, f.input)
+	f.request.CodeBasis = mustJSON(t, map[string]string{"kind": "git", "repository": root + "/.", "commit": commit})
+	f.save(t)
+	runOK(t, "external", "check", f.config, f.input)
+	f.request.CodeBasis = mustJSON(t, map[string]string{"kind": "git", "repository": root + "/another-checkout", "commit": commit})
+	f.save(t)
+	runFail(t, "external", "check", f.config, f.input)
+	f.request.CodeBasis = mustJSON(t, map[string]string{"kind": "git", "repository": root, "commit": commit})
+	f.save(t)
 	writeFixture(t, filepath.Join(root, "source.go"), []byte("package changed\n"))
 	runFail(t, "external", "check", f.config, f.input)
 }
@@ -703,7 +711,11 @@ func TestExternalTypedRuntimePreservesContainerRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtimeSourceRoot(cfg) != typed.source || cfg.ProjectRoot == typed.source {
+	source, err := canonicalPath(typed.source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtimeSourceRoot(cfg) != source || cfg.ProjectRoot == source {
 		t.Fatal("runtime/saved source roots not separated")
 	}
 	m, err := snapshot(cfg)

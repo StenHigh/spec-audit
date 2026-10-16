@@ -522,8 +522,12 @@ func verifyCodeBasis(cfg Config, raw []byte, files []SourceFile, data map[string
 		return err
 	}
 	repository := strings.TrimSpace(string(top))
+	requestedRepository := basis["repository"]
+	if filepath.IsAbs(requestedRepository) {
+		requestedRepository = exactSystemPath(filepath.Clean(requestedRepository))
+	}
 	remote, remoteErr := gitRead(cfg.ProjectRoot, "remote", "get-url", "origin")
-	if basis["repository"] != repository && (remoteErr != nil || basis["repository"] != strings.TrimSpace(string(remote))) {
+	if requestedRepository != repository && (remoteErr != nil || basis["repository"] != strings.TrimSpace(string(remote))) {
 		return errors.New("code_basis.repository не соответствует checkout")
 	}
 	for _, f := range files {
