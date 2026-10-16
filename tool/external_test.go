@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -20,6 +21,37 @@ type externalFixture struct {
 	config, base, input, corpus string
 	manifest                    ExternalManifest
 	request                     AuditInput
+}
+
+func TestExactSystemPathsPreserveSymlinkBoundary(t *testing.T) {
+	base := t.TempDir()
+	file := filepath.Join(base, "input.json")
+	if err := os.WriteFile(file, []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := readExact(file, 64); err != nil || string(data) != "{}" {
+		t.Fatalf("OS temporary path must be readable: %q, %v", data, err)
+	}
+	if runtime.GOOS == "darwin" {
+		for _, alias := range []string{"/var", "/tmp", "/etc"} {
+			if got := exactSystemPath(alias + "/fixture"); got != "/private"+alias+"/fixture" {
+				t.Fatalf("system alias %s: %s", alias, got)
+			}
+		}
+	}
+	link := filepath.Join(base, "caller-link")
+	if err := os.Symlink(base, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readExact(filepath.Join(link, "input.json"), 64); err == nil {
+		t.Fatal("caller-supplied ancestor symlink was accepted")
+	}
+	if err := mkdirExact(filepath.Join(link, "new", "child"), 0700); err == nil {
+		t.Fatal("destination symlink was accepted")
+	}
+	if _, err := os.Lstat(filepath.Join(base, "new")); !os.IsNotExist(err) {
+		t.Fatalf("rejected destination created children: %v", err)
+	}
 }
 
 func newExternalFixture(t *testing.T) externalFixture {

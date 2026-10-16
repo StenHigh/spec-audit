@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -273,7 +274,26 @@ func parseAuditInput(raw []byte) (AuditInput, error) {
 	return in, nil
 }
 
-// openExact rejects symlinks in every path component, including the root itself.
+// Darwin supplies /var, /tmp and /etc as aliases into /private. Recognize only
+// these OS aliases with their exact targets; all supplied deeper links remain
+// subject to noSymlinks. Do not canonicalize arbitrary caller-owned paths.
+func exactSystemPath(abs string) string {
+	if runtime.GOOS == "darwin" {
+		for _, alias := range []string{"/var", "/tmp", "/etc"} {
+			if abs == alias || strings.HasPrefix(abs, alias+"/") {
+				target, err := os.Readlink(alias)
+				if err == nil && filepath.Clean(filepath.Join("/", target)) == "/private"+alias {
+					return "/private" + abs
+				}
+				break
+			}
+		}
+	}
+	return abs
+}
+
+// openExact rejects supplied symlinks in every path component, including the
+// root itself, after recognizing the OS-owned Darwin aliases above.
 func openExact(name string) (*os.Root, string, error) {
 	abs, err := filepath.Abs(name)
 	if err != nil {
@@ -283,7 +303,7 @@ func openExact(name string) (*os.Root, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	rel := strings.TrimPrefix(filepath.ToSlash(abs), "/")
+	rel := strings.TrimPrefix(filepath.ToSlash(exactSystemPath(abs)), "/")
 	if err := noSymlinks(root, rel); err != nil {
 		root.Close()
 		return nil, "", err
