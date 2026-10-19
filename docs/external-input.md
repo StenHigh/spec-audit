@@ -47,7 +47,7 @@ spec-audit external import CONFIG AUDIT_INPUT
 
 Полный и инкрементальный циклы сохраняются: index/check/reconcile, prepare/tasks/submit/validate, plan/prepare since/rerun, test/SDK при прежнем разрешении, review/report и overview/corpus/publish. Вход не запускает код и не расширяет runtime-права. Новый комплект, доставка ролей, зелёный тест и принятие комплекта не закрывают GAP/вопросы. Для accepted остаются прежние ID, revisions, parents, retired, история и граница accepted_requirements_only.
 
-Новый run сохраняет полные исходные bytes по SHA-256 и опись соответствия. Просмотрщик имеет предел 32 MiB сформированного HTML и при его превышении явно отказывает; исходные bytes сохраняются в объектах. Report JSON содержит `sources[]` с path/kind/hash/bytes, origin, full, url/raw_url/current_url и limitation. Исторические страницы выделяют строки с 1 включительно (`?start=A&end=B#LA`); raw download сохраняет BOM/CRLF/Unicode. Один hash не объединяет разные логические пути/происхождения. Код/тесты имеют проверенный code_basis. Текущий URL документа — отдельная дополнительная ссылка. У старого run без полного источника full=false и явная limitation; текущий файл не используется как подстановка.
+Новый run в режиме archive сохраняет полные исходные bytes по SHA-256 и опись соответствия. Просмотрщик имеет предел 32 MiB сформированного HTML и при его превышении явно отказывает; исходные bytes сохраняются в объектах. Report JSON содержит `sources[]` с path/kind/hash/bytes, origin, full, url/raw_url/current_url и limitation. Исторические страницы выделяют строки с 1 включительно (`?start=A&end=B#LA`); raw download сохраняет BOM/CRLF/Unicode. Один hash не объединяет разные логические пути/происхождения. Код/тесты имеют проверенный code_basis. Текущий URL документа — отдельная дополнительная ссылка. У старого run без полного источника full=false и явная limitation; текущий файл не используется как подстановка.
 
 Перед публикацией внешнего run независимая сессия проверяет точное решение хоста и подаёт [review-check/1](schemas/review-check.schema.json): run/snapshot/review ID, SHA-256 исходного решения из review.history, basis_sha256 самого решения, отдельный reviewer/context_ref, conclusion=`confirmed|changes_required`, summary/limitations. Содержательная перепроверка и свежесть независимого контекста обеспечиваются оператором; CLI проверяет форму/основание и отличное имя reviewer, а не доказывает независимость именем.
 
@@ -64,6 +64,44 @@ spec-audit publish OUT_DIR CONFIG...
 `external result` читает уже созданный report и возвращает schema_version=1, tool_version экспортёра, scope, run_id, snapshot_id, accepted_head, basis (project/corpus/line/spec_version/manifest hash/profile/request hash/code_basis/freshness/решения клиента), decision, report и paths. Полная структура аудита — прежний публичный report.json, включая tool_versions, роли/расхождения, ограничения, raw provenance и host decision basis; schema [external-result/1](schemas/external-result.schema.json) задаёт оболочку. Это публичный интерфейс, приватные journals клиенту читать не нужно.
 
 Для внешнего входа publish сохраняет все доступные исторические решённые отчёты вместе с report.json/result.json и источниками. Адрес: `external/<hash(project,corpus)>/<scope>/<run>/report.html`. Scope разных проектов не смешиваются. История ссылается на сохранённое основание; новый незавершённый run не становится решением. Уже существующий исторический файл с другими bytes не перезаписывается: используйте новый OUT_DIR. Обычный локальный вход сохраняет режим последних отчётов §77; JSON и ресурсы этого последнего отчёта также копируются, чтобы его ссылки на сохранённые исходники работали. Сайт работает под произвольным base path; старые страницы явно являются статическими наблюдениями своего времени, без онлайн-проверки. Успешная внешняя публикация также сохраняется в рабочей области как отдельное событие с точными bytes; дальнейший export не зависит от сохранности её каталога хостинга.
+
+## Режим без архива исходников (§79)
+
+В новом отдельном `reports_dir` задайте `source_retention: citations` в исходном CONFIG. Отсутствие поля либо `archive` сохраняет обычный режим; переключение существующей рабочей области запрещено, старые архивы не удаляются. Входной обмен остаётся r1: producer не меняет схемы manifest/audit-input. Локальный CONFIG читает существующий checkout без копирования. Внешний корпус по-прежнему может находиться отдельно от checkout.
+
+```yaml
+source_retention: citations
+reports_dir: citation-results
+```
+
+Сохраняются полные результаты и история: требования/ID/revision, точные цитаты, координаты/hashes/origin, обоснования, raw ролей и хоста, accepted ledger и перепроверки. `sources.json` имеет schema_version=2 и `full:false` с limitation. Полные файлы code/tests/Markdown/archive не помещаются в общие объекты и source-HTML/bin не создаются. Метаданные обмена и CONFIG сохраняются побайтово: не используйте profile/origin/request как контейнер полных исходников. Цитата короткой целой нормы остаётся допустимым свидетельством.
+
+Для внешнего корпуса `import` временно создаёт управляемые tree/corpus. Штатный цикл:
+
+```sh
+spec-audit external import CONFIG AUDIT_INPUT       # взять config из ответа
+# index/reconcile, prepare, роли/submit, review, независимая review-check
+spec-audit external release IMPORTED_CONFIG
+spec-audit report IMPORTED_CONFIG RUN_ID
+spec-audit external result IMPORTED_CONFIG RUN_ID
+spec-audit publish NEW_OUT_DIR IMPORTED_CONFIG
+spec-audit bundle export REQUEST OUT.tar.gz
+spec-audit bundle verify OUT.tar.gz
+```
+
+`release` проверяет все версии входа и все зависимые run рабочей области: точный состав/hashes временных файлов, metadata, raw и решения, доставку и подтверждённую review-check; исключительная блокировка запрещает конкурентную операцию CLI. До завершения всех проверок файлы не удаляются. Затем удаляются только принадлежащие import временные tree/corpus и проверенные остатки прерванного rehydrate. Симлинки, неизвестные/изменённые файлы, открытые задания или отсутствующая перепроверка дают отказ. Исходный checkout/корпус клиента и metadata/history сохраняются. Receipt позволяет повторить прерванный release; успешный повтор идемпотентен. Неизвестный staging не признаётся освобождённым: экспорт отказывает. Это не механизм преобразования прежнего archive.
+
+Повторный `external import` из исходного CONFIG и точного AUDIT_INPUT восстанавливает временные копии и может привязать проверенный код из перенесённого checkout. Генерируемый рабочий CONFIG содержит текущие физические пути; original-config, запрос и прежние run не переписываются. Новые bytes требуют соответствующего нового manifest/code_basis и нового run. Для инкремента используйте прежний `prepare ... since PREV_RUN`; новая редакция, импорт или зелёный тест не закрывают GAP автоматически.
+
+Сохранённые `status`, `review` (включая citations), `report`, `overview` и `publish` работают после release и удаления тестовых входов. Нормы, вопросы и история не обнуляются. Без источников snapshot — stale/unavailable, drift — unchecked. Сохранённая external freshness остаётся наблюдением своего времени. `cite`, приём нового ответа, новый/инкрементальный анализ требуют доступного точного основания; отсутствие или подмена источника не маскируются цитатами.
+
+Публичная оболочка результата имеет **schema_version=2**, `source_retention:"citations"`, `report_basis:"saved_run"`, `current_freshness:{status:"unchecked",reason:...}`. `report` и `decision` относятся к сохранённому run; `report.generated_at` указывает момент формирования. Их прежний `fresh/current` не означает наблюдение живого источника сейчас. Поля v1 остаются, новая [external-result/2](schemas/external-result-v2.schema.json) публикуется отдельно; [v1](schemas/external-result.schema.json) не расширяется молча. В `paths` находятся пути к report JSON/HTML и inventory; полные источники через них не выдаются.
+
+Сайт сохраняет существующие GAP, историю внешних scope, цитаты, фильтры, поиск и навигацию. `publish` требует **отсутствующий NEW_OUT_DIR**, собирает сайт в staging и публикует rename; существующий каталог не изменяется при отказе. Archive и citations публикуются отдельно: смешанный сайт мог бы сохранить полные archive-источники в событии citations. Сайт статический, без сетевого наблюдения источников; для обновления используйте новый каталог публикации.
+
+Пакет результатов имеет **schema_version=2**. Запрос export остаётся schema_version=1; ответ export/verify/restore возвращает фактическую версию пакета. Формат index/objects, размеры/hashes/modes, bundle_id и archive_sha256 остаются проверяемыми; политика каждой CONFIG зафиксирована в index и manifest. Для citations workspace отсутствует; экспорт внешней области требует release всех временных входов. Метаданные всех исторических входов сверяются с run; quote-only опись не принимается за прежнюю полную. В смешанном пакете archive-области продолжают сохранять/проверять полные исходники — такой пакет целиком не является пакетом без исходников. Дополнительные `sites` — явные данные оператора: для пакета без исходников передавайте только соответствующие публикации citations.
+
+Restore в новый каталог сохраняет историю, цитаты, исходные metadata/config и созданные публикации без обращения к checkout. Отдельные рабочие configs привязаны к отсутствующему `unavailable/...` либо освобождённому управляемому tree; они не обращаются к прежнему runtime-корню. Результаты читаются, повторный анализ честно отказывает до новой привязки источников. Для нового внешнего анализа повторите import из CONFIG с доступным проверенным checkout и восстановленным reports_dir. `cleanup` дублей проверяет восстановимость результатов, не обещая восстановление отсутствующих исходников. Прежние bundle v1 и старые quote-only результаты читаются по прежним правилам.
 
 ## Компактный пакет состояния
 

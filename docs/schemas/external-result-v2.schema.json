@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:spec-audit:external-result:2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "tool_version",
+    "scope",
+    "run_id",
+    "snapshot_id",
+    "accepted_head",
+    "basis",
+    "decision",
+    "report",
+    "paths",
+    "source_retention",
+    "report_basis",
+    "current_freshness"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "tool_version": {
+      "type": "string"
+    },
+    "scope": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "snapshot_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "accepted_head": {
+      "type": "string"
+    },
+    "basis": {
+      "type": "object",
+      "required": [
+        "project",
+        "corpus",
+        "scope",
+        "spec_version",
+        "manifest_sha256",
+        "input_sha256",
+        "code_basis",
+        "freshness"
+      ]
+    },
+    "decision": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "report": {
+      "type": "object",
+      "required": [
+        "run_id",
+        "snapshot_id",
+        "requirements",
+        "host_reconciliation_required",
+        "limitations",
+        "sources",
+        "source_retention",
+        "generated_at"
+      ],
+      "properties": {
+        "source_retention": {
+          "const": "citations"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "kind",
+              "sha256",
+              "bytes",
+              "origin",
+              "full",
+              "limitation"
+            ],
+            "properties": {
+              "full": {
+                "const": false
+              },
+              "limitation": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "url"
+                  ]
+                },
+                {
+                  "required": [
+                    "raw_url"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "paths": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "source_retention": {
+      "const": "citations"
+    },
+    "report_basis": {
+      "const": "saved_run"
+    },
+    "current_freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "reason"
+      ],
+      "properties": {
+        "status": {
+          "const": "unchecked"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

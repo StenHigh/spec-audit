@@ -13,20 +13,32 @@ import (
 )
 
 type ExternalResult struct {
-	SchemaVersion int               `json:"schema_version"`
-	ToolVersion   string            `json:"tool_version"`
-	Scope         string            `json:"scope"`
-	RunID         string            `json:"run_id"`
-	SnapshotID    string            `json:"snapshot_id"`
-	AcceptedHead  string            `json:"accepted_head"`
-	Basis         *ExternalBasis    `json:"basis"`
-	Decision      *ReviewSummary    `json:"decision"`
-	Report        Report            `json:"report"`
-	Paths         map[string]string `json:"paths"`
+	SchemaVersion    int               `json:"schema_version"`
+	ToolVersion      string            `json:"tool_version"`
+	Scope            string            `json:"scope"`
+	RunID            string            `json:"run_id"`
+	SnapshotID       string            `json:"snapshot_id"`
+	AcceptedHead     string            `json:"accepted_head"`
+	Basis            *ExternalBasis    `json:"basis"`
+	Decision         *ReviewSummary    `json:"decision"`
+	Report           Report            `json:"report"`
+	Paths            map[string]string `json:"paths"`
+	SourceRetention  string            `json:"source_retention,omitempty"`
+	ReportBasis      string            `json:"report_basis,omitempty"`
+	CurrentFreshness *ResultFreshness  `json:"current_freshness,omitempty"`
+}
+
+type ResultFreshness struct {
+	Status string `json:"status"`
+	Reason string `json:"reason"`
 }
 
 func resultFromReport(report Report, paths map[string]string) ExternalResult {
 	r := ExternalResult{SchemaVersion: 1, ToolVersion: version, RunID: report.RunID, SnapshotID: report.SnapshotID, Basis: report.External, Decision: report.HostReview, Report: report, Paths: paths}
+	if report.SourceRetention == "citations" {
+		r.SchemaVersion, r.SourceRetention, r.ReportBasis = 2, "citations", "saved_run"
+		r.CurrentFreshness = &ResultFreshness{Status: "unchecked", Reason: "Текущая актуальность не проверена; report и decision содержат сохранённую оценку на момент формирования отчёта."}
+	}
 	if report.External != nil {
 		r.Scope = report.External.Scope
 	}
@@ -34,6 +46,10 @@ func resultFromReport(report Report, paths map[string]string) ExternalResult {
 		r.AcceptedHead = report.Accepted.Head
 	}
 	return r
+}
+
+func reportRetentionMatches(report Report, cfg Config) bool {
+	return oneOf(report.SourceRetention, "", "archive", "citations") && citationRetention(cfg) == (report.SourceRetention == "citations")
 }
 
 func externalResult(config, runID string) (any, error) {
@@ -59,6 +75,9 @@ func externalResult(config, runID string) (any, error) {
 	}
 	if report.RunID != runID || report.External == nil || cfg.External == nil || report.External.Project != cfg.External.Project || report.External.Corpus != cfg.External.Corpus || report.External.Scope != cfg.External.Scope {
 		return nil, errors.New("external result: чужой scope/run или отсутствует внешнее основание")
+	}
+	if !reportRetentionMatches(report, cfg) {
+		return nil, errors.New("external result: политика хранения отчёта не совпадает с CONFIG")
 	}
 	return resultFromReport(report, map[string]string{"report_json": filepath.Join(cfg.ReportsDir, runID, "report.json"), "report_html": filepath.Join(cfg.ReportsDir, runID, "report.html"), "sources": filepath.Join(cfg.ReportsDir, runID, "sources.json")}), nil
 }
@@ -103,6 +122,9 @@ func publishExternalScope(out string, scope *ScopeOverview, cfg Config) (int, er
 			var report Report
 			if err := strictJSON(data, &report); err != nil {
 				return copied, err
+			}
+			if !reportRetentionMatches(report, cfg) {
+				return copied, errors.New("publish: политика хранения отчёта не совпадает с CONFIG")
 			}
 			if report.External != nil && (report.IndependentReview == nil || report.IndependentReview.Conclusion != "confirmed") {
 				return copied, errors.New("publish: внешнему run нужна независимая review-check с conclusion confirmed и новый report")
@@ -165,18 +187,20 @@ func publishExternalScope(out string, scope *ScopeOverview, cfg Config) (int, er
 		} else if !os.IsNotExist(err) {
 			return copied, err
 		}
-		sourcesDir := filepath.Join(cfg.ReportsDir, history.RunID, "sources")
-		if _, err := os.Lstat(sourcesDir); err == nil {
-			if err := walkBundleArea(sourcesDir, func(path string, data []byte, _ uint32) error {
-				if err := mkdirExact(filepath.Join(target, "sources", filepath.Dir(path)), 0755); err != nil {
-					return err
+		if !citationRetention(cfg) {
+			sourcesDir := filepath.Join(cfg.ReportsDir, history.RunID, "sources")
+			if _, err := os.Lstat(sourcesDir); err == nil {
+				if err := walkBundleArea(sourcesDir, func(path string, data []byte, _ uint32) error {
+					if err := mkdirExact(filepath.Join(target, "sources", filepath.Dir(path)), 0755); err != nil {
+						return err
+					}
+					return publishImmutable(filepath.Join(target, "sources", path), data)
+				}); err != nil {
+					return copied, err
 				}
-				return publishImmutable(filepath.Join(target, "sources", path), data)
-			}); err != nil {
+			} else if !os.IsNotExist(err) {
 				return copied, err
 			}
-		} else if !os.IsNotExist(err) {
-			return copied, err
 		}
 		link := filepath.ToSlash(filepath.Join(name, history.RunID, "report.html"))
 		scope.History[i].Report = link

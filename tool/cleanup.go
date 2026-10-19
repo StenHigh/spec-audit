@@ -318,6 +318,9 @@ func proveBundleRestore(b evidenceBundle, p CleanupPlan) (CleanupProof, error) {
 			return proof, errors.New("cleanup: независимое восстановление bytes не прошло")
 		}
 	}
+	if err := validateRestoredState(b, temp); err != nil {
+		return proof, err
+	}
 	for _, c := range b.Index.Configs {
 		cfg, err := loadConfig(filepath.Join(temp, "configs", c.ID+".yaml"), true)
 		if err != nil {
@@ -327,6 +330,11 @@ func proveBundleRestore(b evidenceBundle, p CleanupPlan) (CleanupProof, error) {
 			if _, _, err := readAccepted(cfg.ReportsDir); err != nil {
 				return proof, err
 			}
+		}
+		if citationRetention(cfg) {
+			// A citations package preserves validated history, not a checkout for analysis.
+			proof.ConfigsChecked++
+			continue
 		}
 		// Fresh current sources must remain usable; a preexisting stale/absent basis is
 		// carried as an explicit limitation, never repaired by the restore proof.

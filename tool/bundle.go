@@ -90,7 +90,7 @@ func bundleCommand(args []string) (any, error) {
 	return nil, errors.New("bundle export REQUEST OUT.tar.gz | verify ARCHIVE | restore ARCHIVE NEW_DIR")
 }
 func bundleSummary(b evidenceBundle) map[string]any {
-	return map[string]any{"schema_version": 1, "bundle_id": b.Index.ID, "archive_sha256": b.SHA256, "files": len(b.Index.Files), "objects": len(b.Objects), "limitations": b.Index.Limitations}
+	return map[string]any{"schema_version": b.Index.SchemaVersion, "bundle_id": b.Index.ID, "archive_sha256": b.SHA256, "files": len(b.Index.Files), "objects": len(b.Objects), "limitations": b.Index.Limitations}
 }
 
 func readBundleRequest(path string) (BundleRequest, error) {
@@ -224,6 +224,20 @@ func collectBundle(request BundleRequest, cfgs []Config) (evidenceBundle, error)
 	}
 	b.Index.Areas = append(b.Index.Areas, BundleArea{"configs", "config", ""})
 	for i, cfg := range cfgs {
+		if err := validateRetention(cfg); err != nil {
+			return b, err
+		}
+		if citationRetention(cfg) {
+			b.Index.SchemaVersion = 2
+			if err := releasedExternalInputs(cfg); err != nil {
+				return b, err
+			}
+			if cfg.External != nil {
+				if err := validateExternalMetadata(cfg); err != nil {
+					return b, err
+				}
+			}
+		}
 		original := request.Configs[i]
 		id := "scope-" + digest([]byte(original))[:16]
 		for _, related := range cfg.Related {
@@ -243,37 +257,39 @@ func collectBundle(request BundleRequest, cfgs []Config) (evidenceBundle, error)
 		if err := walkBundleArea(cfg.ReportsDir, func(path string, data []byte, mode uint32) error { return add(reportsID, path, data, mode) }); err != nil {
 			return b, err
 		}
-		workspaceID, err := addArea("workspace", cfg.ProjectRoot)
-		if err != nil {
-			if !os.IsNotExist(err) || cfg.External != nil {
-				return b, err
-			}
-			b.Index.Limitations = append(b.Index.Limitations, id+": текущее дерево исходников отсутствует; доступна только сохранённая история")
-			workspaceID = ""
-		}
-		if workspaceID != "" && cfg.External != nil {
-			if _, err := scanSnapshot(cfg); err != nil {
-				return b, err
-			}
-			if err := walkBundleArea(cfg.ProjectRoot, func(path string, data []byte, mode uint32) error { return add(workspaceID, path, data, mode) }); err != nil {
-				return b, err
-			}
-		} else if workspaceID != "" {
-			current, err := scanSnapshotWithoutAcceptance(cfg)
+		if !citationRetention(cfg) {
+			workspaceID, err := addArea("workspace", cfg.ProjectRoot)
 			if err != nil {
-				return b, err
+				if !os.IsNotExist(err) || cfg.External != nil {
+					return b, err
+				}
+				b.Index.Limitations = append(b.Index.Limitations, id+": текущее дерево исходников отсутствует; доступна только сохранённая история")
+				workspaceID = ""
 			}
-			for _, file := range current.Files {
-				data, err := readExact(filepath.Join(cfg.ProjectRoot, file.Path), maxFile)
+			if workspaceID != "" && cfg.External != nil {
+				if _, err := scanSnapshot(cfg); err != nil {
+					return b, err
+				}
+				if err := walkBundleArea(cfg.ProjectRoot, func(path string, data []byte, mode uint32) error { return add(workspaceID, path, data, mode) }); err != nil {
+					return b, err
+				}
+			} else if workspaceID != "" {
+				current, err := scanSnapshotWithoutAcceptance(cfg)
 				if err != nil {
 					return b, err
 				}
-				info, err := os.Stat(filepath.Join(cfg.ProjectRoot, file.Path))
-				if err != nil {
-					return b, err
-				}
-				if err := add(workspaceID, file.Path, data, uint32(info.Mode().Perm())); err != nil {
-					return b, err
+				for _, file := range current.Files {
+					data, err := readExact(filepath.Join(cfg.ProjectRoot, file.Path), maxFile)
+					if err != nil {
+						return b, err
+					}
+					info, err := os.Stat(filepath.Join(cfg.ProjectRoot, file.Path))
+					if err != nil {
+						return b, err
+					}
+					if err := add(workspaceID, file.Path, data, uint32(info.Mode().Perm())); err != nil {
+						return b, err
+					}
 				}
 			}
 		}
@@ -581,7 +597,7 @@ func readBundle(path string) (evidenceBundle, error) {
 
 func validateBundle(b evidenceBundle) error {
 	ix := b.Index
-	if ix.SchemaVersion != 1 || !validDigest(ix.ID) || ix.ID != bundleID(ix) || len(ix.Configs) == 0 || len(ix.Files) > 200000 {
+	if (ix.SchemaVersion != 1 && ix.SchemaVersion != 2) || !validDigest(ix.ID) || ix.ID != bundleID(ix) || len(ix.Configs) == 0 || len(ix.Files) > 200000 {
 		return errors.New("bundle: неподдерживаемая схема или неверная идентичность")
 	}
 	areas := map[string]BundleArea{}
@@ -623,17 +639,60 @@ func validateBundle(b evidenceBundle) error {
 		}
 	}
 	ids := map[string]bool{}
+	reportModes := map[string]bool{}
+	hasCitations := false
 	for _, cfg := range ix.Configs {
 		if !slugRE.MatchString(cfg.ID) || ids[cfg.ID] || !paths["configs/"+cfg.ID+".yaml"] {
 			return errors.New("bundle: недопустимый CONFIG")
 		}
 		ids[cfg.ID] = true
+		citations := citationRetention(cfg.Config)
+		hasCitations = hasCitations || citations
+		if !oneOf(cfg.Config.SourceRetention, "", "archive", "citations") || ix.SchemaVersion == 1 && citations {
+			return errors.New("bundle: режим CONFIG несовместим со схемой пакета")
+		}
+		found := false
+		for _, area := range ix.Areas {
+			if area.Kind == "reports" && area.OriginalRoot == cfg.Config.ReportsDir {
+				if _, duplicate := reportModes[area.ID]; duplicate {
+					return errors.New("bundle: повторный владелец reports")
+				}
+				reportModes[area.ID], found = citations, true
+			}
+		}
+		if !found {
+			return errors.New("bundle: CONFIG без области reports")
+		}
+	}
+	if ix.SchemaVersion == 2 && !hasCitations {
+		return errors.New("bundle: схема 2 требует режим citations")
+	}
+	if ix.SchemaVersion == 2 {
+		for _, area := range ix.Areas {
+			if area.Kind != "workspace" {
+				continue
+			}
+			owned := false
+			for _, cfg := range ix.Configs {
+				owned = owned || !citationRetention(cfg.Config) && cfg.Config.ProjectRoot == area.OriginalRoot
+			}
+			if !owned {
+				return errors.New("bundle: область исходников без архивного CONFIG")
+			}
+		}
 	}
 	for _, f := range ix.Files {
 		if areas[f.Area].Kind != "reports" {
 			continue
 		}
+		citations, owned := reportModes[f.Area]
+		if !owned {
+			return errors.New("bundle: область reports без CONFIG")
+		}
 		parts := strings.Split(f.Path, "/")
+		if citations && len(parts) >= 3 && parts[1] == "sources" && slugRE.MatchString(parts[0]) {
+			return errors.New("bundle: полные страницы источников в режиме citations")
+		}
 		if len(parts) != 2 || parts[1] != "manifest.json" || !slugRE.MatchString(parts[0]) {
 			continue
 		}
@@ -641,7 +700,10 @@ func validateBundle(b evidenceBundle) error {
 		if err := strictJSON(b.Objects[f.SHA256], &m); err != nil {
 			return err
 		}
-		if m.External != nil && !paths[f.Area+"/"+parts[0]+"/sources.json"] {
+		if !oneOf(m.Config.SourceRetention, "", "archive", "citations") || citationRetention(m.Config) != citations {
+			return errors.New("bundle: режим run не совпадает с CONFIG")
+		}
+		if (m.External != nil || citations) && !paths[f.Area+"/"+parts[0]+"/sources.json"] {
 			return errors.New("bundle: внешний run без обязательных полных источников")
 		}
 	}
@@ -666,14 +728,27 @@ func validateBundle(b evidenceBundle) error {
 		if err := strictJSON(b.Objects[mf.SHA256], &m); err != nil {
 			return err
 		}
-		if inv.SchemaVersion != 1 || inv.SnapshotID != m.SnapshotID {
+		citations := citationRetention(m.Config)
+		if (inv.SchemaVersion != 1 && !citations || inv.SchemaVersion != 2 && citations) || inv.SnapshotID != m.SnapshotID {
 			return errors.New("bundle: неверное основание sources")
 		}
 		sources := map[string]SavedSource{}
 		for _, s := range inv.Sources {
-			object, ok := files[f.Area+"/._objects/"+s.SHA256]
-			if !ok || object.SHA256 != s.SHA256 || object.Bytes != int64(s.Bytes) || !s.Full {
-				return errors.New("bundle: неполный общий источник")
+			if !localPath(s.Path) || !validDigest(s.SHA256) || s.Bytes < 0 || s.Bytes > maxFile {
+				return errors.New("bundle: неверная запись источника")
+			}
+			if citations {
+				if s.Full || s.Limitation == "" || s.URL != "" || s.RawURL != "" {
+					return errors.New("bundle: полный источник в режиме citations")
+				}
+				if paths[f.Area+"/._objects/"+s.SHA256] {
+					return errors.New("bundle: полные bytes источника в режиме citations")
+				}
+			} else {
+				object, ok := files[f.Area+"/._objects/"+s.SHA256]
+				if !ok || object.SHA256 != s.SHA256 || object.Bytes != int64(s.Bytes) || !s.Full {
+					return errors.New("bundle: неполный общий источник")
+				}
 			}
 			if _, ok := sources[s.Path]; ok {
 				return errors.New("bundle: повторный источник")
@@ -682,7 +757,7 @@ func validateBundle(b evidenceBundle) error {
 		}
 		for _, source := range m.Files {
 			s, ok := sources[source.Path]
-			if !ok || s.SHA256 != source.SHA256 || s.Bytes != source.Bytes {
+			if !ok || s.SHA256 != source.SHA256 || s.Bytes != source.Bytes || s.Kind != source.Kind {
 				return errors.New("bundle: потеряна зависимость snapshot")
 			}
 		}
@@ -787,12 +862,18 @@ func materializeBundle(b evidenceBundle, physical, logical string) error {
 		if err != nil {
 			return err
 		}
-		cfg.ProjectRoot, err = mappedBundlePath(b.Index, logical, cfg.ProjectRoot)
-		if err != nil {
-			if cfg.External != nil || !missingWorkspace(b.Index, c.ID) {
-				return err
-			}
+		if citationRetention(cfg) && cfg.External == nil {
+			// A sibling archive may cover the same checkout. Its bytes must not
+			// silently rebind a citations result to an available source workspace.
 			cfg.ProjectRoot = filepath.Join(logical, "unavailable", c.ID)
+		} else {
+			cfg.ProjectRoot, err = mappedBundlePath(b.Index, logical, cfg.ProjectRoot)
+			if err != nil {
+				if cfg.External != nil || !missingWorkspace(b.Index, c.ID) {
+					return err
+				}
+				cfg.ProjectRoot = filepath.Join(logical, "unavailable", c.ID)
+			}
 		}
 		cfg.BaselineRun = c.BaselineRun
 		cfg.Related = []string{}
@@ -832,6 +913,9 @@ func missingWorkspace(index BundleIndex, id string) bool {
 	return false
 }
 func verifyBundleState(b evidenceBundle) error {
+	if err := validateBundle(b); err != nil {
+		return err
+	}
 	temp, err := os.MkdirTemp("", "spec-audit-bundle-verify-")
 	if err != nil {
 		return err
@@ -854,8 +938,22 @@ func validateRestoredState(b evidenceBundle, base string) error {
 				return err
 			}
 		}
-		if _, err := scanSnapshot(cfg); err != nil && !missingWorkspace(b.Index, c.ID) {
-			return err
+		if citationRetention(cfg) {
+			if err := validateRetention(cfg); err != nil {
+				return err
+			}
+			if err := releasedExternalInputs(cfg); err != nil {
+				return err
+			}
+			if cfg.External != nil {
+				if err := validateExternalMetadata(cfg); err != nil {
+					return err
+				}
+			}
+		} else {
+			if _, err := scanSnapshot(cfg); err != nil && !missingWorkspace(b.Index, c.ID) {
+				return err
+			}
 		}
 		reports, err := os.OpenRoot(cfg.ReportsDir)
 		if err != nil {
@@ -879,6 +977,30 @@ func validateRestoredState(b evidenceBundle, base string) error {
 			if _, err := execute([]string{"status", config, entry.Name()}); err != nil {
 				reports.Close()
 				return fmt.Errorf("bundle: run %s не восстанавливается: %w", entry.Name(), err)
+			}
+			if citationRetention(cfg) {
+				run, err := reports.OpenRoot(entry.Name())
+				if err != nil {
+					reports.Close()
+					return err
+				}
+				data, err := readRoot(run, "manifest.json", maxState)
+				var m Manifest
+				var inv sourceInventory
+				if err == nil {
+					err = strictJSON(data, &m)
+				}
+				if err == nil {
+					inv, err = readSourceInventory(reports, run, m)
+				}
+				if err == nil && m.External != nil {
+					err = validateExternalRunMetadata(cfg, m, inv)
+				}
+				run.Close()
+				if err != nil {
+					reports.Close()
+					return fmt.Errorf("bundle: sources run %s: %w", entry.Name(), err)
+				}
 			}
 		}
 		reports.Close()

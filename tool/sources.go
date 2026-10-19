@@ -59,6 +59,10 @@ func captureSources(reports, run *os.Root, m Manifest) error {
 	}
 	defer root.Close()
 	inventory := sourceInventory{1, m.SnapshotID, []SavedSource{}}
+	citations := citationRetention(m.Config)
+	if citations {
+		inventory.SchemaVersion = 2
+	}
 	origins := map[string]json.RawMessage{}
 	if m.External != nil {
 		raw, err := readExact(filepath.Join(filepath.Dir(m.Config.External.Input), "source-manifest.json"), maxState)
@@ -77,10 +81,15 @@ func captureSources(reports, run *os.Root, m Manifest) error {
 		if digest(data) != file.SHA256 || len(data) != file.Bytes {
 			return fmt.Errorf("capture: изменился %s", file.Path)
 		}
-		if err := putObject(reports, data); err != nil {
-			return err
+		if !citations {
+			if err := putObject(reports, data); err != nil {
+				return err
+			}
 		}
-		source := SavedSource{Path: file.Path, Kind: file.Kind, SHA256: file.SHA256, Bytes: file.Bytes, Origin: origins[file.Path], Full: true}
+		source := SavedSource{Path: file.Path, Kind: file.Kind, SHA256: file.SHA256, Bytes: file.Bytes, Origin: origins[file.Path], Full: !citations}
+		if citations {
+			source.Limitation = "Сохранены только цитаты; полный исторический исходник не сохраняется (source_retention: citations). Текущий файл не подставляется."
+		}
 		if m.External != nil && (file.Kind == "code" || file.Kind == "tests") {
 			source.Origin = m.External.CodeBasis
 		}
@@ -136,14 +145,17 @@ func captureSources(reports, run *os.Root, m Manifest) error {
 	if err := writeJSON(run, "sources.json", inventory, 0400); err != nil {
 		return err
 	}
+	if citations {
+		return nil
+	}
 	return run.MkdirAll("sources", 0700)
 }
 
 func readSourceInventory(reports, run *os.Root, m Manifest) (sourceInventory, error) {
 	data, err := readRoot(run, "sources.json", maxState)
 	if os.IsNotExist(err) {
-		if m.External != nil {
-			return sourceInventory{}, errors.New("у внешнего run отсутствует обязательная опись полных источников")
+		if m.External != nil || citationRetention(m.Config) {
+			return sourceInventory{}, errors.New("у run отсутствует обязательная опись источников")
 		}
 		inv := sourceInventory{1, m.SnapshotID, []SavedSource{}}
 		for _, file := range m.Files {
@@ -158,18 +170,29 @@ func readSourceInventory(reports, run *os.Root, m Manifest) (sourceInventory, er
 	if err := strictJSON(data, &inv); err != nil {
 		return inv, err
 	}
-	if inv.SchemaVersion != 1 || inv.SnapshotID != m.SnapshotID {
+	citations := citationRetention(m.Config)
+	wantSchema := 1
+	if citations {
+		wantSchema = 2
+	}
+	if inv.SchemaVersion != wantSchema || inv.SnapshotID != m.SnapshotID {
 		return inv, errors.New("sources: несовместимое основание")
 	}
 	seen := map[string]SavedSource{}
 	for _, source := range inv.Sources {
-		if !localPath(source.Path) || !validDigest(source.SHA256) || !source.Full || source.Bytes < 0 || source.Bytes > maxFile {
+		if !localPath(source.Path) || !validDigest(source.SHA256) || source.Full == citations || source.Bytes < 0 || source.Bytes > maxFile || !oneOf(source.Kind, "spec", "code", "tests", "archive", "metadata") {
 			return inv, errors.New("sources: неверная запись")
+		}
+		if citations && (source.URL != "" || source.RawURL != "" || source.LiveURL != "" || strings.TrimSpace(source.Limitation) == "") {
+			return inv, errors.New("sources: citations требует ограничение и не допускает ссылки на полный исходник")
 		}
 		if _, ok := seen[source.Path]; ok {
 			return inv, errors.New("sources: повторный путь")
 		}
 		seen[source.Path] = source
+		if citations {
+			continue
+		}
 		data, err := readRoot(reports, "._objects/"+source.SHA256, maxFile)
 		if err != nil {
 			return inv, err
@@ -304,8 +327,15 @@ func copyReportResources(reportsDir, runID, target string) error {
 	}
 	data, err := readRoot(reports, runID+"/report.json", maxState)
 	if err == nil {
+		var report Report
+		if err := strictJSON(data, &report); err != nil {
+			return err
+		}
 		if err := put("report.json", data); err != nil {
 			return err
+		}
+		if report.SourceRetention == "citations" {
+			return nil
 		}
 	} else if !os.IsNotExist(err) {
 		return err
