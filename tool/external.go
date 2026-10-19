@@ -549,6 +549,9 @@ func externalBasis(x externalInput) *ExternalBasis {
 }
 
 func externalCommand(args []string) (any, error) {
+	if len(args) == 2 && args[0] == "release" {
+		return externalRelease(args[1])
+	}
 	if len(args) == 3 && args[0] == "result" {
 		return externalResult(args[1], args[2])
 	}
@@ -616,6 +619,9 @@ func installExternal(configPath string, cfg Config, x externalInput, codeData ma
 	if err := os.MkdirAll(cfg.ReportsDir, 0700); err != nil {
 		return nil, err
 	}
+	if err := ensureRetention(cfg); err != nil {
+		return nil, err
+	}
 	reports, err := os.OpenRoot(cfg.ReportsDir)
 	if err != nil {
 		return nil, err
@@ -648,15 +654,34 @@ func installExternal(configPath string, cfg Config, x externalInput, codeData ma
 		if err := noSymlinks(reports, "._inputs/"+key); err != nil {
 			return nil, err
 		}
-		existing, err := loadConfig(filepath.Join(target, "config.yaml"))
+		existing, err := loadConfig(filepath.Join(target, "config.yaml"), true)
 		if err != nil {
 			return nil, err
+		}
+		if citationRetention(cfg) {
+			ext := *existing.External
+			ext.CodeRoot = runtimeSourceRoot(cfg)
+			existing.External = &ext
+			if err := rehydrateExternal(existing, x, codeData); err != nil {
+				return nil, err
+			}
 		}
 		if _, err := snapshot(existing); err != nil && cfg.IndexMode != "accepted" {
 			return nil, err
 		}
 		if _, err := boundExternal(existing, append(externalSourceFiles(x.manifest), x.code...)); err != nil {
 			return nil, err
+		}
+		if citationRetention(cfg) {
+			// This YAML is the mutable physical binding. original-config.yaml,
+			// request bytes, manifests and run history remain immutable provenance.
+			data, err := yaml.Marshal(existing)
+			if err != nil {
+				return nil, err
+			}
+			if err := atomicWrite(reports, "._inputs/"+key+"/config.yaml", data, 0400); err != nil {
+				return nil, err
+			}
 		}
 		return map[string]any{"config": filepath.Join(target, "config.yaml"), "basis": externalBasis(x), "installed": false}, nil
 	} else if !os.IsNotExist(err) {

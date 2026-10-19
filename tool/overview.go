@@ -461,6 +461,30 @@ func scopeOverview(path string, cfg Config) (ScopeOverview, []ContradictedCitati
 			}
 		}
 	}
+	if current == "" {
+		// Offline reading preserves the recorded scope, without treating its old
+		// manifest as an observation of the current sources (§79).
+		historical := scope.Decided
+		if historical == nil {
+			historical = scope.Latest
+		}
+		if historical != nil {
+			data, readErr := readRoot(reports, historical.RunID+"/manifest.json", maxState)
+			var saved Manifest
+			if readErr == nil && strictJSON(data, &saved) == nil {
+				if scope.External == nil {
+					scope.External = saved.External
+				}
+				if questions == nil {
+					questions = &saved
+					scope.Requirements = len(saved.Requirements)
+					if saved.Accepted != nil {
+						scope.Head = saved.Accepted.Head
+					}
+				}
+			}
+		}
+	}
 	sort.Slice(decidedRuns, func(i, j int) bool { return newer(decidedRuns[j], &decidedRuns[i]) })
 	for i := len(decidedRuns) - 1; i >= 0; i-- {
 		r := decidedRuns[i]
@@ -493,7 +517,7 @@ func scopeOverview(path string, cfg Config) (ScopeOverview, []ContradictedCitati
 			}
 		}
 	}
-	if questions != nil && scope.Decided != nil {
+	if questions != nil {
 		scope.Questions = specQuestions(*questions, scope.Decided)
 	}
 	for _, c := range decidedCode {

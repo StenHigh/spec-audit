@@ -71,11 +71,12 @@ type Sources struct {
 }
 
 type Config struct {
-	External    *ExternalConfig `yaml:"external,omitempty" json:"external,omitempty"`
-	IndexMode   string          `yaml:"index_mode,omitempty" json:"index_mode,omitempty"`
-	Version     int             `yaml:"version" json:"version"`
-	ProjectRoot string          `yaml:"project_root" json:"project_root"`
-	Specs       Sources         `yaml:"specs" json:"specs"`
+	SourceRetention string          `yaml:"source_retention,omitempty" json:"source_retention,omitempty"`
+	External        *ExternalConfig `yaml:"external,omitempty" json:"external,omitempty"`
+	IndexMode       string          `yaml:"index_mode,omitempty" json:"index_mode,omitempty"`
+	Version         int             `yaml:"version" json:"version"`
+	ProjectRoot     string          `yaml:"project_root" json:"project_root"`
+	Specs           Sources         `yaml:"specs" json:"specs"`
 	// References — справочные файлы ТЗ (§20, §67): цитируются, не порождают кандидатов и норм; nil сохраняет прежний snapshot_id.
 	References *Sources `yaml:"references,omitempty" json:"references,omitempty"`
 	Code       Sources  `yaml:"code" json:"code"`
@@ -293,6 +294,7 @@ type RequirementReport struct {
 }
 
 type Report struct {
+	SourceRetention   string         `json:"source_retention,omitempty"`
 	IndependentReview *ReviewCheck   `json:"independent_review,omitempty"`
 	External          *ExternalBasis `json:"external,omitempty"`
 	Sources           []SavedSource  `json:"sources,omitempty"`
@@ -450,6 +452,12 @@ func loadConfig(path string, history ...bool) (Config, error) {
 	if !oneOf(cfg.IndexMode, "", "accepted") {
 		return cfg, errors.New("index_mode: допустимо только accepted или отсутствие поля")
 	}
+	if !oneOf(cfg.SourceRetention, "", "archive", "citations") {
+		return cfg, errors.New("source_retention: допустимо archive или citations")
+	}
+	if cfg.SourceRetention == "archive" {
+		cfg.SourceRetention = ""
+	}
 	base, err := filepath.Abs(filepath.Dir(path))
 	if err != nil {
 		return cfg, err
@@ -544,6 +552,9 @@ func loadConfig(path string, history ...bool) (Config, error) {
 	sort.Slice(cfg.Scopes, func(i, j int) bool { return cfg.Scopes[i].ID < cfg.Scopes[j].ID })
 	if cfg.External != nil && cfg.External.Input != "" && !filepath.IsAbs(cfg.External.Input) {
 		cfg.External.Input = filepath.Join(base, cfg.External.Input)
+	}
+	if err := validateRetention(cfg); err != nil {
+		return cfg, err
 	}
 	return cfg, nil
 }
@@ -1529,7 +1540,7 @@ func validReviewArgs(args []string) bool {
 }
 
 // usage is the command list of tool-spec §1–10 with later extensions; help prints it, wrong arguments refuse with it (§24.4).
-const usage = "команды: review-check CONFIG RUN_ID [RECEIPT]; external check|import CONFIG AUDIT_INPUT; external result CONFIG RUN_ID; bundle export REQUEST OUT | verify ARCHIVE | restore ARCHIVE NEW_DIR; cleanup plan ARCHIVE | verify ARCHIVE PLAN | apply ARCHIVE PLAN PROOF; help; init/index CONFIG; index CONFIG summary; anchors CONFIG [PATH...]; overview CONFIG...; corpus OUT_HTML CONFIG...; publish OUT_DIR CONFIG...; plan CONFIG PREV_RUN; rerun RUN_ID CONFIG...; cite CONFIG PATH A B; reconcile CONFIG [RAW DECISION|relocate]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION|REQ-ID [text|brief]|summary|citations [PATH|REQ-ID|ROLE]]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; validate CONFIG RUN_ID host DECISION; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]"
+const usage = "команды: review-check CONFIG RUN_ID [RECEIPT]; external check|import CONFIG AUDIT_INPUT; external release CONFIG; external result CONFIG RUN_ID; bundle export REQUEST OUT | verify ARCHIVE | restore ARCHIVE NEW_DIR; cleanup plan ARCHIVE | verify ARCHIVE PLAN | apply ARCHIVE PLAN PROOF; help; init/index CONFIG; index CONFIG summary; anchors CONFIG [PATH...]; overview CONFIG...; corpus OUT_HTML CONFIG...; publish OUT_DIR CONFIG...; plan CONFIG PREV_RUN; rerun RUN_ID CONFIG...; cite CONFIG PATH A B; reconcile CONFIG [RAW DECISION|relocate]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION|REQ-ID [text|brief]|summary|citations [PATH|REQ-ID|ROLE]]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; validate CONFIG RUN_ID host DECISION; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]"
 
 func execute(args []string) (any, error) {
 	unlock, err := lockCommand(args)
@@ -1580,7 +1591,7 @@ func executeCommand(args []string) (any, error) {
 		return corpus(args[1], args[2:])
 	}
 	if len(args) >= 3 && args[0] == "publish" {
-		return publish(args[1], args[2:])
+		return publishWithRetention(args[1], args[2:])
 	}
 	if len(args) >= 3 && args[0] == "rerun" {
 		return rerun(args[1], args[2:])
@@ -1702,6 +1713,9 @@ func executeCommand(args []string) (any, error) {
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	if command == "prepare" {
 		// tool-spec §44.5: a run exists once manifest.json does; a directory the host pre-created for its own files is fine.
+		if err := ensureRetention(cfg); err != nil {
+			return nil, err
+		}
 		if _, err := reports.Lstat(runID + "/manifest.json"); err == nil || !os.IsNotExist(err) {
 			return nil, errors.New("run уже существует; prepare не перезаписывает его")
 		}
@@ -2108,7 +2122,8 @@ func executeCommand(args []string) (any, error) {
 
 func makeReport(runID string, m Manifest, state State, fresh bool) Report {
 	report := Report{
-		Status: makeStatus(runID, m, state, fresh), GeneratedAt: time.Now().UTC().Format(time.RFC3339), Requirements: []RequirementReport{}, Executions: append([]Receipt{}, state.Executions...),
+		SourceRetention: m.Config.SourceRetention,
+		Status:          makeStatus(runID, m, state, fresh), GeneratedAt: time.Now().UTC().Format(time.RFC3339), Requirements: []RequirementReport{}, Executions: append([]Receipt{}, state.Executions...),
 		Conclusion:                 "Результаты ролей собраны; требуется согласование хост-сессией. Автоматический вывод о соответствии не делается.",
 		HostReconciliationRequired: true,
 		Accepted:                   m.Accepted,
