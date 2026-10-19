@@ -101,7 +101,7 @@ func TestCitationPublishFreshStagingOmitsUnrelatedFullSources(t *testing.T) {
 				if err := strictJSON([]byte(files[resultPath]), &exported); err != nil {
 					t.Fatal(err)
 				}
-				if exported.SchemaVersion != 2 || exported.SourceRetention != "citations" || exported.Report.Freshness != "stale" {
+				if exported.SchemaVersion != 3 || exported.SourceRetention != "citations" || exported.Report.Freshness != "unchecked" {
 					t.Fatal("publication lost result mode or historical currency")
 				}
 			}

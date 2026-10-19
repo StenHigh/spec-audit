@@ -130,7 +130,7 @@ func TestCitationAcceptedExternalReleaseAndRestore(t *testing.T) {
 	runOK(t, "external", "release", config)
 	runOK(t, "report", config, "accepted")
 	result := runOK(t, "external", "result", config, "accepted").(ExternalResult)
-	if result.SchemaVersion != 2 || result.AcceptedHead != accepted.Head {
+	if result.SchemaVersion != 3 || result.AcceptedHead != accepted.Head {
 		t.Fatal("external result lost accepted head")
 	}
 	archive := exportTestBundle(t, config, f.base)

@@ -261,7 +261,7 @@ func TestReportMetricsSeparateEvidenceAndFreshness(t *testing.T) {
 	if err := reportTemplate.Execute(&stalePage, r); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stalePage.String(), "Snapshot изменился после решения хоста") || strings.Contains(stalePage.String(), "Нет полного согласования") {
+	if !strings.Contains(stalePage.String(), "Обнаружено изменение snapshot после решения хоста") || strings.Contains(stalePage.String(), "Нет полного согласования") {
 		t.Fatal("stale page must explain the snapshot, not report «не оценено»")
 	}
 	for _, value := range []string{"relevant", "weak", "contradicts", "missing", "unknown"} {

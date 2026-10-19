@@ -149,6 +149,8 @@ func reviewCheckCommand(args []string) (any, error) {
 	}
 	current, snapshotErr := snapshot(cfg)
 	fresh := snapshotErr == nil && current.SnapshotID == m.SnapshotID
+	observation := observeSnapshot(cfg, m, current, snapshotErr)
+	m.observation = &observation
 	view, err := reviewContext(reports, run, args[1], m, state, fresh, cfg.Related)
 	if err != nil {
 		return nil, err

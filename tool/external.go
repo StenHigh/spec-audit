@@ -875,6 +875,9 @@ func runtimeSourceRoot(cfg Config) string {
 	}
 	return cfg.ProjectRoot
 }
+
+var errRuntimeSourcesChanged = errors.New("runtime code/tests изменились после внешнего импорта; нужен новый вход и run")
+
 func runtimeSourcesCurrent(cfg Config) error {
 	if cfg.External == nil {
 		return nil
@@ -891,7 +894,7 @@ func runtimeSourcesCurrent(cfg Config) error {
 		return err
 	}
 	if codeDigest(files) != cfg.External.CodeSHA256 {
-		return errors.New("runtime code/tests изменились после внешнего импорта; нужен новый вход и run")
+		return errRuntimeSourcesChanged
 	}
 	return nil
 }

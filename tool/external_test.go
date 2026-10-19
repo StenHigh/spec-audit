@@ -282,7 +282,7 @@ func TestExternalBoundaryAndSourceBytes(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(f.base, "source")); err != nil {
 		t.Fatal(err)
 	}
-	if status := runOK(t, "status", config, "A").(Status); status.Freshness != "stale" {
+	if status := runOK(t, "status", config, "A").(Status); status.Freshness != "unchecked" {
 		t.Fatal("missing live code root called fresh")
 	}
 	runOK(t, "report", config, "A") // Archived sources remain readable without either original tree.
