@@ -472,6 +472,12 @@ func loadConfig(path string, history ...bool) (Config, error) {
 			cfg.External.Input = normalized
 		}
 	}
+	if cfg.External != nil && cfg.External.CodeRoot != "" {
+		if normalized := exactSystemPath(cfg.External.CodeRoot); normalized != cfg.External.CodeRoot {
+			slog.Debug("[FIX] external.code_root: системный путь нормализован", "code_root", cfg.External.CodeRoot, "normalized", normalized)
+			cfg.External.CodeRoot = normalized
+		}
+	}
 	if !filepath.IsAbs(cfg.ProjectRoot) {
 		cfg.ProjectRoot = filepath.Join(base, cfg.ProjectRoot)
 	}
