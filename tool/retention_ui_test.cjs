@@ -22,6 +22,10 @@ if (!base || !out) throw new Error('retention_ui_test.cjs BASE_URL SCREENSHOT_DI
     const scope = overview.scopes[0];
     assert.equal(scope.name, 'fixture-scope');
     assert.equal(scope.history.length, 1);
+    assert.equal(scope.decided.freshness, 'unchecked');
+    assert.equal(scope.decided.host_review_state, 'saved');
+    assert.equal(scope.decided.source_availability, 'released');
+    assert.doesNotMatch(await page.locator('body').innerText(), /snapshot изменился|источники изменились/);
     assert(scope.drift_unchecked, 'absent source currency must remain unchecked');
     assert.match(await page.locator('body').innerText(), /Вопросы к ТЗ/);
     await page.screenshot({path: path.join(out, 'citation-corpus.png'), fullPage: true});
@@ -29,11 +33,13 @@ if (!base || !out) throw new Error('retention_ui_test.cjs BASE_URL SCREENSHOT_DI
     const reportURL = new URL(scope.decided.report, base);
     const report = await (await page.request.get(new URL('report.json', reportURL).href)).json();
     const result = await (await page.request.get(new URL('result.json', reportURL).href)).json();
-    assert.equal(result.schema_version, 2);
+    assert.equal(result.schema_version, 3);
     assert.equal(result.source_retention, 'citations');
     assert.equal(result.snapshot_id, report.snapshot_id);
     assert.equal(report.source_retention, 'citations');
-    assert.equal(report.freshness, 'stale');
+    assert.equal(report.freshness, 'unchecked');
+    assert.equal(report.host_review_state, 'saved');
+    assert.equal(report.source_availability, 'released');
     assert.equal(report.independent_review.conclusion, 'confirmed');
     assert(report.host_review.history.length > 0);
     assert(report.sources.length > 0);
@@ -46,7 +52,8 @@ if (!base || !out) throw new Error('retention_ui_test.cjs BASE_URL SCREENSHOT_DI
     await page.goto(reportURL.href);
     assert.equal(await page.locator('.requirement').count(), report.requirements.length);
     assert.equal(await page.locator('a[href*="sources/"]').count(), 0);
-    assert.match(await page.locator('body').innerText(), /stale/);
+    assert.match(await page.locator('body').innerText(), /актуальность не проверена/);
+    assert.doesNotMatch(await page.locator('body').innerText(), /источники изменились|Snapshot изменился|нужен новый run/);
     assert(await page.locator('.evidence pre').count() > 0, 'saved evidence quotes');
     assert(!await page.locator('body').textContent().then(text => text.includes('UNQUOTED_SOURCE_MARKER')));
 
@@ -88,8 +95,8 @@ if (!base || !out) throw new Error('retention_ui_test.cjs BASE_URL SCREENSHOT_DI
     assert.deepEqual(errors, []);
     assert(requests.every(url => url.startsWith(new URL(base).origin)), 'external network request');
     assert(requests.every(url => !url.includes('/sources/')), 'full source resource requested');
-    console.log(JSON.stringify({passed: true, base_path: new URL(base).pathname, schema: 2,
-      citation_only: true, stale: true, history: true, filters: true, search: true,
+    console.log(JSON.stringify({passed: true, base_path: new URL(base).pathname, schema: 3,
+      citation_only: true, unchecked: true, history: true, filters: true, search: true,
       contradiction_sides: true, anchors: true, no_js: true, mobile: true,
       external_requests: false, screenshots: fs.readdirSync(out)}, null, 2));
   } finally {

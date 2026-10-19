@@ -75,7 +75,7 @@ func TestCitationBundleLocalOfflineRestoreAndCleanup(t *testing.T) {
 		t.Fatal("restored config retained the old checkout", cfg.ProjectRoot)
 	}
 	status := runOK(t, "status", restoredConfig, "review").(Status)
-	if !status.DeliveryComplete || status.Freshness != "stale" {
+	if !status.DeliveryComplete || status.Freshness != "unchecked" {
 		t.Fatal("offline results lost or marked current", status)
 	}
 	view := runOK(t, "review", restoredConfig, "review").(ReviewContext)
@@ -302,7 +302,7 @@ func TestCitationMixedBundleDoesNotBorrowArchivedCheckout(t *testing.T) {
 		if _, err := os.Stat(cfg.ProjectRoot); !os.IsNotExist(err) {
 			t.Fatal("citations borrowed the archive workspace", cfg.ProjectRoot, err)
 		}
-		if status := runOK(t, "status", path, "review").(Status); status.Freshness != "stale" {
+		if status := runOK(t, "status", path, "review").(Status); status.Freshness != "unchecked" {
 			t.Fatal("archived neighbor made citations current")
 		}
 	}

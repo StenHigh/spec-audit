@@ -161,11 +161,13 @@ type ReviewContext struct {
 	DeliveryComplete bool   `json:"delivery_complete"`
 	Freshness        string `json:"freshness"`
 	ReviewSummary
-	Requirements []Requirement `json:"requirements"`
-	Roles        []RoleEntry   `json:"roles"`
-	Outcomes     []Outcome     `json:"outcomes"`
-	Entries      []Entry       `json:"entries"`
-	Executions   []Receipt     `json:"executions"`
+	Requirements       []Requirement `json:"requirements"`
+	Roles              []RoleEntry   `json:"roles"`
+	Outcomes           []Outcome     `json:"outcomes"`
+	Entries            []Entry       `json:"entries"`
+	Executions         []Receipt     `json:"executions"`
+	SourceAvailability string        `json:"source_availability"`
+	FreshnessReason    string        `json:"freshness_reason"`
 }
 
 func roleEntries(state State) []RoleEntry {
@@ -1053,8 +1055,13 @@ func summarizeReviews(runID string, m Manifest, state State, fresh bool, journal
 		summary.Latest, summary.Form, summary.Concur, summary.Own = record.decision(), record.form(), record.Concur, record.Own
 		summary.State = "outdated"
 		summary.Complete = len(pending(state)) == 0 && record.BasisSHA256 == reviewBasis(m.SnapshotID, state, previous)
-		if fresh && summary.Complete {
-			summary.State = "current"
+		if summary.Complete {
+			switch observationFor(m, fresh).Freshness {
+			case "fresh":
+				summary.State = "current"
+			case "unchecked":
+				summary.State = "saved"
+			}
 		}
 		previous = raw
 	}
@@ -1067,20 +1074,22 @@ func reviewContext(reports, run *os.Root, runID string, m Manifest, state State,
 		return ReviewContext{}, err
 	}
 	status := makeStatus(runID, m, state, fresh)
-	return ReviewContext{runID, m.SnapshotID, status.DeliveryComplete, status.Freshness, summarizeReviews(runID, m, state, fresh, journal), m.Requirements, roleEntries(state), outcomes(m, state, previousHost(reports, runID, m), elsewhereIndex(related)), state.Entries, state.Executions}, nil
+	return ReviewContext{runID, m.SnapshotID, status.DeliveryComplete, status.Freshness, summarizeReviews(runID, m, state, fresh, journal), m.Requirements, roleEntries(state), outcomes(m, state, previousHost(reports, runID, m), elsewhereIndex(related)), state.Entries, state.Executions, status.SourceAvailability, status.FreshnessReason}, nil
 }
 
 // RequirementView is review for one norm (tool-spec §29.1): both roles' texts and citations, the derived outcome row
 // and the host's latest verdict, so the host reads nothing out of entries by hand.
 type RequirementView struct {
-	RunID       string              `json:"run_id"`
-	SnapshotID  string              `json:"snapshot_id"`
-	Freshness   string              `json:"freshness"`
-	Requirement Requirement         `json:"requirement"`
-	Outcome     Outcome             `json:"outcome"`
-	Roles       map[string]RoleView `json:"roles"`
-	Host        *HostView           `json:"host"`
-	Executions  []TestExecution     `json:"executions"`
+	RunID              string              `json:"run_id"`
+	SnapshotID         string              `json:"snapshot_id"`
+	Freshness          string              `json:"freshness"`
+	Requirement        Requirement         `json:"requirement"`
+	Outcome            Outcome             `json:"outcome"`
+	Roles              map[string]RoleView `json:"roles"`
+	Host               *HostView           `json:"host"`
+	Executions         []TestExecution     `json:"executions"`
+	SourceAvailability string              `json:"source_availability"`
+	FreshnessReason    string              `json:"freshness_reason"`
 }
 
 type RoleView struct {
@@ -1112,7 +1121,7 @@ func requirementView(reports, run *os.Root, runID string, m Manifest, state Stat
 	if err != nil {
 		return RequirementView{}, err
 	}
-	view := RequirementView{RunID: runID, SnapshotID: m.SnapshotID, Freshness: context.Freshness, Roles: map[string]RoleView{}, Executions: []TestExecution{}}
+	view := RequirementView{RunID: runID, SnapshotID: m.SnapshotID, Freshness: context.Freshness, SourceAvailability: context.SourceAvailability, FreshnessReason: context.FreshnessReason, Roles: map[string]RoleView{}, Executions: []TestExecution{}}
 	found := false
 	for _, req := range m.Requirements {
 		if req.ID == id {
@@ -1179,11 +1188,13 @@ type ReviewBrief struct {
 	KnownDefects      int             `json:"known_defects"` // carried contradicted verdicts (§52.1)
 	Assessed          int             `json:"assessed"`
 	// Advisories warn before the decision (§53.2): a previous verdict the host cannot repeat without its own citations.
-	Advisories []string `json:"advisories"`
+	Advisories         []string `json:"advisories"`
+	SourceAvailability string   `json:"source_availability"`
+	FreshnessReason    string   `json:"freshness_reason"`
 }
 
 func reviewBrief(context ReviewContext) ReviewBrief {
-	brief := ReviewBrief{context.RunID, context.SnapshotID, context.DeliveryComplete, context.Freshness, context.State, context.BasisSHA256, context.History, context.Form, len(context.Requirements), context.Roles, context.Outcomes, 0, []string{}, 0, 0, 0, []string{}}
+	brief := ReviewBrief{context.RunID, context.SnapshotID, context.DeliveryComplete, context.Freshness, context.State, context.BasisSHA256, context.History, context.Form, len(context.Requirements), context.Roles, context.Outcomes, 0, []string{}, 0, 0, 0, []string{}, context.SourceAvailability, context.FreshnessReason}
 	for _, row := range context.Outcomes {
 		if p := row.PreviousHost; p != nil && row.Carried == nil && oneOf(p.Assertion, "relevant", "weak", "contradicts") {
 			tests := 0

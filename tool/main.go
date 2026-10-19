@@ -108,6 +108,8 @@ type SourceFile struct {
 }
 
 type Manifest struct {
+	// Observation is command-local presentation context, never snapshot identity or saved evidence (§80).
+	observation  *sourceObservation
 	External     *ExternalBasis   `json:"external,omitempty"`
 	Version      int              `json:"version"`
 	Config       Config           `json:"config"`
@@ -253,15 +255,17 @@ func incrementalSummary(m Manifest) *IncrementalSummary {
 }
 
 type Status struct {
-	RunID             string `json:"run_id"`
-	SnapshotID        string `json:"snapshot_id"`
-	DeliveryComplete  bool   `json:"delivery_complete"`
-	Freshness         string `json:"freshness"`
-	RequirementsTotal int    `json:"requirements_total"`
-	Expected          int    `json:"expected"`
-	Submitted         int    `json:"submitted"`
-	Pending           []Task `json:"pending"`
-	HostReviewState   string `json:"host_review_state,omitempty"`
+	RunID              string `json:"run_id"`
+	SnapshotID         string `json:"snapshot_id"`
+	DeliveryComplete   bool   `json:"delivery_complete"`
+	Freshness          string `json:"freshness"`
+	SourceAvailability string `json:"source_availability,omitempty"`
+	FreshnessReason    string `json:"freshness_reason,omitempty"`
+	RequirementsTotal  int    `json:"requirements_total"`
+	Expected           int    `json:"expected"`
+	Submitted          int    `json:"submitted"`
+	Pending            []Task `json:"pending"`
+	HostReviewState    string `json:"host_review_state,omitempty"`
 	// HostReviewComplete (tool-spec §65): the run has a decision on its final state; the summary rests on it even when
 	// the snapshot went stale afterwards — currency against the code as it is now is the corpus map's drift (§63).
 	HostReviewComplete bool `json:"host_review_complete"`
@@ -1530,6 +1534,8 @@ func makeStatus(runID string, m Manifest, state State, fresh bool) Status {
 	if !fresh {
 		status.Freshness = "stale"
 	}
+	o := observationFor(m, fresh)
+	status.Freshness, status.SourceAvailability, status.FreshnessReason = o.Freshness, o.Availability, o.Reason
 	status.Submitted = status.Expected - len(status.Pending)
 	status.DeliveryComplete = len(status.Pending) == 0
 	return status
@@ -1834,6 +1840,8 @@ func executeCommand(args []string) (any, error) {
 		}
 		current, snapshotErr := snapshot(cfg)
 		fresh = snapshotErr == nil && current.SnapshotID == m.SnapshotID
+		observation := observeSnapshot(cfg, m, current, snapshotErr)
+		m.observation = &observation
 		if !fresh && !readOnly {
 			return nil, errors.New("снимок stale; нужен новый run")
 		}
@@ -1913,6 +1921,7 @@ func executeCommand(args []string) (any, error) {
 		}
 		status := makeStatus(runID, m, state, fresh)
 		status.HostReviewState = view.State
+		status.HostReviewComplete = view.Complete
 		return status, nil
 	case "review":
 		if len(args) >= 4 && args[3] == "citations" {
@@ -1951,9 +1960,12 @@ func executeCommand(args []string) (any, error) {
 		report.HostReview = &view.ReviewSummary
 		report.HostReviewState = view.State
 		report.HostReviewComplete = view.Complete
-		report.HostReconciliationRequired = view.State != "current"
+		report.HostReconciliationRequired = !oneOf(view.State, "current", "saved")
 		if view.State == "current" {
 			report.Conclusion = "Хост согласовал результаты по текущим свидетельствам. Это его обоснованная оценка, не автоматическое соответствие или доказательство полноты ТЗ."
+		}
+		if view.State == "saved" {
+			report.Conclusion = savedSnapshotConclusion
 		}
 		report.SDK = loadSDKSummary(run, state.SDK)
 		if len(toolVersions.Records) > 0 {
@@ -2155,14 +2167,12 @@ func makeReport(runID string, m Manifest, state State, fresh bool) Report {
 	if !report.DeliveryComplete {
 		report.Conclusion = "Аудит не завершён: отсутствуют результаты заданий. Вывод о соответствии невозможен."
 	}
-	if !fresh {
+	if report.Freshness == "stale" {
 		report.Conclusion = "STALE: источники изменились. Ниже только исторические свидетельства; нужен новый run."
+	} else if report.Freshness == "unchecked" {
+		report.Conclusion = "Текущая актуальность не проверена. Сохранённые свидетельства относятся к снимку этого run; причина указана отдельно."
 	}
-	for i := range report.Executions {
-		if !fresh || report.Executions[i].SnapshotID != m.SnapshotID {
-			report.Executions[i].State = "stale"
-		}
-	}
+	report.Executions = observedExecutions(state.Executions, m.SnapshotID, report.Freshness)
 	for _, entry := range state.Entries {
 		if entry.Result != nil {
 			report.Summaries = append(report.Summaries, ResultSummary{entry.Task.TaskID, entry.Result.Summary, entry.Result.Limitations})

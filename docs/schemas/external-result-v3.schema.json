@@ -1,0 +1,254 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:spec-audit:external-result:3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "tool_version",
+    "scope",
+    "run_id",
+    "snapshot_id",
+    "accepted_head",
+    "basis",
+    "decision",
+    "report",
+    "paths",
+    "source_retention",
+    "report_basis",
+    "current_freshness"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 3
+    },
+    "tool_version": {
+      "type": "string"
+    },
+    "scope": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "snapshot_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "accepted_head": {
+      "type": "string"
+    },
+    "basis": {
+      "type": "object",
+      "required": [
+        "project",
+        "corpus",
+        "scope",
+        "spec_version",
+        "manifest_sha256",
+        "input_sha256",
+        "code_basis",
+        "freshness"
+      ]
+    },
+    "decision": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "missing",
+            "current",
+            "saved",
+            "outdated"
+          ]
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      }
+    },
+    "report": {
+      "type": "object",
+      "required": [
+        "run_id",
+        "snapshot_id",
+        "requirements",
+        "host_reconciliation_required",
+        "limitations",
+        "sources",
+        "generated_at"
+      ],
+      "properties": {
+        "freshness": {
+          "enum": [
+            "fresh",
+            "stale",
+            "unchecked"
+          ]
+        },
+        "source_availability": {
+          "enum": [
+            "available",
+            "released",
+            "unavailable"
+          ]
+        },
+        "freshness_reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source_retention": {
+                "const": "citations"
+              }
+            },
+            "required": [
+              "source_retention"
+            ]
+          },
+          "then": {
+            "properties": {
+              "sources": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "path",
+                    "kind",
+                    "sha256",
+                    "bytes",
+                    "origin",
+                    "full",
+                    "limitation"
+                  ],
+                  "properties": {
+                    "full": {
+                      "const": false
+                    },
+                    "limitation": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "url"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "raw_url"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "paths": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "source_retention": {
+      "enum": [
+        "archive",
+        "citations"
+      ]
+    },
+    "report_basis": {
+      "enum": [
+        "saved_run",
+        "historical_publication"
+      ]
+    },
+    "current_freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "source_availability",
+        "reason"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "fresh",
+            "stale",
+            "unchecked"
+          ]
+        },
+        "source_availability": {
+          "enum": [
+            "available",
+            "released",
+            "unavailable"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "report_basis": {
+            "const": "saved_run"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "report": {
+            "required": [
+              "freshness",
+              "source_availability",
+              "freshness_reason"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "source_retention": {
+            "const": "citations"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "report": {
+            "required": [
+              "source_retention"
+            ],
+            "properties": {
+              "source_retention": {
+                "const": "citations"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

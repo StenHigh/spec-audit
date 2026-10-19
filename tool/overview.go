@@ -199,22 +199,26 @@ type RunRef struct {
 }
 
 type RunOverview struct {
-	External         *ExternalBasis `json:"external,omitempty"`
-	RunID            string         `json:"run_id"`
-	PreparedAt       string         `json:"prepared_at"`
-	ToolVersion      string         `json:"tool_version"`
-	SnapshotCurrent  bool           `json:"snapshot_current"`
-	DeliveryComplete bool           `json:"delivery_complete"`
-	Expected         int            `json:"expected"`
-	Submitted        int            `json:"submitted"`
-	HostReviewState  string         `json:"host_review_state"`
-	ReviewID         string         `json:"review_id,omitempty"`
-	Report           string         `json:"report,omitempty"` // relative link to report.html, filled by corpus (§45)
-	Form             string         `json:"form,omitempty"`
-	Implementation   map[string]int `json:"implementation"`
-	Assertion        map[string]int `json:"assertion"`
-	Contradicted     []string       `json:"contradicted"` // norms the host found contradicted — the GAP list of the scope
-	Disagree         []string       `json:"disagree"`
+	External           *ExternalBasis `json:"external,omitempty"`
+	RunID              string         `json:"run_id"`
+	PreparedAt         string         `json:"prepared_at"`
+	ToolVersion        string         `json:"tool_version"`
+	SnapshotCurrent    bool           `json:"snapshot_current"`
+	Freshness          string         `json:"freshness"`
+	SourceAvailability string         `json:"source_availability"`
+	FreshnessReason    string         `json:"freshness_reason"`
+	HostReviewComplete bool           `json:"host_review_complete"`
+	DeliveryComplete   bool           `json:"delivery_complete"`
+	Expected           int            `json:"expected"`
+	Submitted          int            `json:"submitted"`
+	HostReviewState    string         `json:"host_review_state"`
+	ReviewID           string         `json:"review_id,omitempty"`
+	Report             string         `json:"report,omitempty"` // relative link to report.html, filled by corpus (§45)
+	Form               string         `json:"form,omitempty"`
+	Implementation     map[string]int `json:"implementation"`
+	Assertion          map[string]int `json:"assertion"`
+	Contradicted       []string       `json:"contradicted"` // norms the host found contradicted — the GAP list of the scope
+	Disagree           []string       `json:"disagree"`
 	// Attention lists the host verdicts that are not supported+relevant (contradicted, unknown, ambiguous, weak/missing/
 	// contradicts) with title and statement — what the corpus page shows per scope (§45).
 	Attention    []NormBrief `json:"attention"`
@@ -383,10 +387,10 @@ func scopeOverview(path string, cfg Config) (ScopeOverview, []ContradictedCitati
 	}
 	current := ""
 	var questions *Manifest // where the «Вопросы к ТЗ» come from (§68): the current snapshot, else the last accepted state
-	m, err := snapshot(cfg)
+	m, snapshotErr := snapshot(cfg)
 	scope.External = m.External
-	if err != nil {
-		scope.Error = err.Error()
+	if snapshotErr != nil {
+		scope.Error = snapshotErr.Error()
 		scope.Freshness = "unavailable"
 		if m.External != nil && cfg.IndexMode == "" {
 			scope.Requirements = len(m.Requirements)
@@ -444,7 +448,7 @@ func scopeOverview(path string, cfg Config) (ScopeOverview, []ContradictedCitati
 	var decidedCode []ContradictedCitation
 	decidedRuns := []RunOverview{}
 	for _, runID := range runs {
-		run, code, err := runOverview(reports, runID, current)
+		run, code, err := runOverview(reports, runID, cfg, m, snapshotErr)
 		if err != nil {
 			slog.Debug("overview: run пропущен", "run_id", runID, "error", err.Error())
 			continue
@@ -552,7 +556,7 @@ func scopeDrift(reports *os.Root, decided string, m Manifest) *ScopeDrift {
 	return drift
 }
 
-func runOverview(reports *os.Root, runID, current string) (RunOverview, []ContradictedCitation, error) {
+func runOverview(reports *os.Root, runID string, cfg Config, current Manifest, snapshotErr error) (RunOverview, []ContradictedCitation, error) {
 	run, err := reports.OpenRoot(runID)
 	if err != nil {
 		return RunOverview{}, nil, err
@@ -577,7 +581,7 @@ func runOverview(reports *os.Root, runID, current string) (RunOverview, []Contra
 	if err != nil {
 		return RunOverview{}, nil, err
 	}
-	view := RunOverview{External: m.External, RunID: runID, SnapshotCurrent: current == m.SnapshotID, Implementation: map[string]int{}, Assertion: map[string]int{}, Contradicted: []string{}, Disagree: []string{}, Attention: []NormBrief{}, verdicts: map[string]NormBrief{}, keys: map[string]string{}}
+	view := RunOverview{External: m.External, RunID: runID, SnapshotCurrent: snapshotErr == nil && current.SnapshotID == m.SnapshotID, Implementation: map[string]int{}, Assertion: map[string]int{}, Contradicted: []string{}, Disagree: []string{}, Attention: []NormBrief{}, verdicts: map[string]NormBrief{}, keys: map[string]string{}}
 	titles := map[string]string{}
 	for _, req := range m.Requirements {
 		titles[req.ID] = req.Title
@@ -595,14 +599,17 @@ func runOverview(reports *os.Root, runID, current string) (RunOverview, []Contra
 			}
 		}
 	}
+	observation := observeSnapshot(cfg, m, current, snapshotErr)
+	m.observation = &observation
 	status := makeStatus(runID, m, state, view.SnapshotCurrent)
+	view.Freshness, view.SourceAvailability, view.FreshnessReason = status.Freshness, status.SourceAvailability, status.FreshnessReason
 	view.DeliveryComplete, view.Expected, view.Submitted = status.DeliveryComplete, status.Expected, status.Submitted
 	journal, err := readReviews(run, runID, m)
 	if err != nil {
 		return RunOverview{}, nil, err
 	}
 	summary := summarizeReviews(runID, m, state, view.SnapshotCurrent, journal)
-	view.HostReviewState, view.Form = summary.State, summary.Form
+	view.HostReviewState, view.Form, view.HostReviewComplete = summary.State, summary.Form, summary.Complete
 	code := []ContradictedCitation{}
 	if summary.Latest != nil {
 		view.ReviewID = summary.Latest.ReviewID
@@ -805,10 +812,45 @@ func publish(out string, paths []string) (any, error) {
 		if err := os.MkdirAll(target, 0755); err != nil {
 			return nil, err
 		}
-		if err := os.WriteFile(filepath.Join(target, "report.html"), data, 0644); err != nil {
+		if err := copyReportResources(cfg.ReportsDir, runID, target); err != nil {
 			return nil, err
 		}
-		if err := copyReportResources(cfg.ReportsDir, runID, target); err != nil {
+		reportRaw, readErr := os.ReadFile(filepath.Join(cfg.ReportsDir, runID, "report.json"))
+		if readErr == nil {
+			var report Report
+			if err := strictJSON(reportRaw, &report); err != nil {
+				return nil, err
+			}
+			before, err := json.Marshal(report)
+			if err != nil {
+				return nil, err
+			}
+			report, err = projectSavedReport(scope.Config, runID, report)
+			if err != nil {
+				return nil, err
+			}
+			after, err := json.Marshal(report)
+			if err != nil {
+				return nil, err
+			}
+			if !bytes.Equal(before, after) {
+				var rendered bytes.Buffer
+				if err := reportTemplate.Execute(&rendered, report); err != nil {
+					return nil, err
+				}
+				data = rendered.Bytes()
+				raw, err := json.MarshalIndent(report, "", "  ")
+				if err != nil {
+					return nil, err
+				}
+				if err := os.WriteFile(filepath.Join(target, "report.json"), append(raw, '\n'), 0644); err != nil {
+					return nil, err
+				}
+			}
+		} else if !os.IsNotExist(readErr) {
+			return nil, readErr
+		}
+		if err := os.WriteFile(filepath.Join(target, "report.html"), data, 0644); err != nil {
 			return nil, err
 		}
 		copied++

@@ -126,7 +126,7 @@ func TestCitationReadersPreserveOfflineScopeAndHistoricalResult(t *testing.T) {
 	}
 	before := runOK(t, "overview", config).(Overview)
 	result := runOK(t, "external", "result", config, "A").(ExternalResult)
-	if result.SchemaVersion != 2 || result.SourceRetention != "citations" || result.ReportBasis != "saved_run" || result.CurrentFreshness == nil || result.CurrentFreshness.Status != "unchecked" || result.CurrentFreshness.Reason == "" {
+	if result.SchemaVersion != 3 || result.SourceRetention != "citations" || result.ReportBasis != "saved_run" || result.CurrentFreshness == nil || result.CurrentFreshness.Status != "fresh" || result.CurrentFreshness.Reason == "" {
 		t.Fatal("result does not distinguish historical and current freshness", result)
 	}
 	if result.Report.Freshness != "fresh" || result.Decision.State != "current" {
@@ -153,7 +153,7 @@ func TestCitationReadersPreserveOfflineScopeAndHistoricalResult(t *testing.T) {
 		t.Fatal("offline result claims current freshness")
 	}
 	legacy := resultFromReport(Report{}, nil)
-	if legacy.SchemaVersion != 1 || legacy.SourceRetention != "" || legacy.CurrentFreshness != nil || legacy.ReportBasis != "" {
+	if legacy.SchemaVersion != 3 || legacy.SourceRetention != "archive" || legacy.CurrentFreshness == nil || legacy.CurrentFreshness.Status != "unchecked" || legacy.ReportBasis != "historical_publication" {
 		t.Fatal("archive result schema changed", legacy)
 	}
 }

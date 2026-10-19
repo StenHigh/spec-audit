@@ -251,7 +251,6 @@ func attachSources(reports, run *os.Root, report *Report, m Manifest) error {
 	}
 	report.External = m.External
 	report.Sources = inv.Sources
-	byPath := map[string]SavedSource{}
 	for i, source := range report.Sources {
 		if source.Full {
 			if err := run.MkdirAll("sources", 0700); err != nil {
@@ -285,24 +284,8 @@ func attachSources(reports, run *os.Root, report *Report, m Manifest) error {
 			}
 			report.Sources[i] = source
 		}
-		byPath[source.Path] = source
 	}
-	for i := range report.Navigation.Files {
-		file := &report.Navigation.Files[i]
-		s, ok := byPath[file.Path]
-		if !ok {
-			continue
-		}
-		file.SourceURL = s.URL
-		file.SourceLimitation = s.Limitation
-		file.LiveURL = s.LiveURL
-		for j := range file.Evidence {
-			c := file.Evidence[j].Citation
-			if s.Full {
-				file.Evidence[j].SourceURL = sourceRangeURL(sourcePageKey(s), c.LineStart, c.LineEnd)
-			}
-		}
-	}
+	linkReportSources(report)
 	return nil
 }
 
@@ -352,4 +335,27 @@ func copyReportResources(reportsDir, runID, target string) error {
 	}
 	guard.Close()
 	return walkBundleArea(sources, func(name string, data []byte, _ uint32) error { return put("sources/"+name, data) })
+}
+
+func linkReportSources(report *Report) {
+	byPath := map[string]SavedSource{}
+	for _, source := range report.Sources {
+		byPath[source.Path] = source
+	}
+	for i := range report.Navigation.Files {
+		file := &report.Navigation.Files[i]
+		s, ok := byPath[file.Path]
+		if !ok {
+			continue
+		}
+		file.SourceURL = s.URL
+		file.SourceLimitation = s.Limitation
+		file.LiveURL = s.LiveURL
+		for j := range file.Evidence {
+			c := file.Evidence[j].Citation
+			if s.Full {
+				file.Evidence[j].SourceURL = sourceRangeURL(sourcePageKey(s), c.LineStart, c.LineEnd)
+			}
+		}
+	}
 }

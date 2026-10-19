@@ -366,6 +366,8 @@ func buildNavigation(report *Report, m Manifest) {
 		switch {
 		case currentHost && fresh:
 			row.Navigation.Basis = "host-current"
+		case currentHost && report.Freshness == "unchecked":
+			row.Navigation.Basis = "host-saved"
 		case currentHost:
 			row.Navigation.Basis = "host-stale"
 		case !fresh:
