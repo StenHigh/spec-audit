@@ -462,8 +462,15 @@ func loadConfig(path string, history ...bool) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	if cfg.External != nil && cfg.External.Input != "" && !filepath.IsAbs(cfg.External.Input) {
-		cfg.External.Input = filepath.Join(base, cfg.External.Input)
+	if cfg.External != nil && cfg.External.Input != "" {
+		if !filepath.IsAbs(cfg.External.Input) {
+			cfg.External.Input = filepath.Join(base, cfg.External.Input)
+		}
+		// Match canonical roots without resolving caller-supplied symlinks.
+		if normalized := exactSystemPath(cfg.External.Input); normalized != cfg.External.Input {
+			slog.Debug("[FIX] external.input: системный путь нормализован", "input", cfg.External.Input, "normalized", normalized)
+			cfg.External.Input = normalized
+		}
 	}
 	if !filepath.IsAbs(cfg.ProjectRoot) {
 		cfg.ProjectRoot = filepath.Join(base, cfg.ProjectRoot)
@@ -550,9 +557,6 @@ func loadConfig(path string, history ...bool) (Config, error) {
 		}
 	}
 	sort.Slice(cfg.Scopes, func(i, j int) bool { return cfg.Scopes[i].ID < cfg.Scopes[j].ID })
-	if cfg.External != nil && cfg.External.Input != "" && !filepath.IsAbs(cfg.External.Input) {
-		cfg.External.Input = filepath.Join(base, cfg.External.Input)
-	}
 	if err := validateRetention(cfg); err != nil {
 		return cfg, err
 	}
