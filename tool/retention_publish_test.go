@@ -67,7 +67,11 @@ func TestCitationPublishFreshStagingOmitsUnrelatedFullSources(t *testing.T) {
 			}
 			out := filepath.Join(base, "fresh-site")
 			result := runOK(t, "publish", out, config).(map[string]any)
-			if result["dir"] != out || result["index"] != filepath.Join(out, "index.html") || result["source_retention"] != "citations" {
+			physicalOut, err := filepath.EvalSymlinks(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result["dir"] != physicalOut || result["index"] != filepath.Join(physicalOut, "index.html") || result["source_retention"] != "citations" {
 				t.Fatal("staging paths leaked into publication response", result)
 			}
 			assertNoLifecycleMarker(t, out)

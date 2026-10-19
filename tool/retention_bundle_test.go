@@ -67,7 +67,11 @@ func TestCitationBundleLocalOfflineRestoreAndCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !within(filepath.Join(destination, "unavailable"), cfg.ProjectRoot) {
+	physicalDestination, err := filepath.EvalSymlinks(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !within(filepath.Join(physicalDestination, "unavailable"), cfg.ProjectRoot) {
 		t.Fatal("restored config retained the old checkout", cfg.ProjectRoot)
 	}
 	status := runOK(t, "status", restoredConfig, "review").(Status)
@@ -109,7 +113,11 @@ func TestCitationBundleExternalRequiresReleaseAndRestoresMetadata(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.External.CodeRoot != cfg.ProjectRoot || !within(destination, cfg.ProjectRoot) {
+	physicalDestination, err := filepath.EvalSymlinks(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.External.CodeRoot != cfg.ProjectRoot || !within(physicalDestination, cfg.ProjectRoot) {
 		t.Fatal("runtime root escaped restored package")
 	}
 	runOK(t, "status", restoredConfig, "complete")

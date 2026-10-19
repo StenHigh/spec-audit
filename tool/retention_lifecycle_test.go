@@ -369,7 +369,11 @@ func TestCitationLifecycleReimportBindsVerifiedMovedCheckout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bound.External.CodeRoot != moved {
+	physicalMoved, err := filepath.EvalSymlinks(moved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound.External.CodeRoot != physicalMoved {
 		t.Fatal("reimport kept the vanished checkout", bound.External.CodeRoot)
 	}
 	completeExternal(t, config, "moved")
