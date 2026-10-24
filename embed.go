@@ -6,5 +6,5 @@ import "embed"
 
 // Files holds skills/spec-audit and the contracts SKILL.md links to; dot-files are excluded by go:embed.
 //
-//go:embed skills/spec-audit docs/php-sdk-contract.md docs/external-input.md docs/schemas
+//go:embed skills/spec-audit docs/php-sdk-contract.md docs/external-input.md docs/external-start.md docs/schemas
 var Files embed.FS

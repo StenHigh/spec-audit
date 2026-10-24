@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/exec"
@@ -494,7 +495,7 @@ func gitRead(root string, args ...string) ([]byte, error) {
 	cmd.Stdout = &output
 	err := cmd.Run()
 	if err != nil {
-		return nil, errors.New("code_basis: Git-основание недоступно")
+		return nil, fmt.Errorf("code_basis: Git-основание недоступно: %w", err)
 	}
 	return output.Bytes(), nil
 }
@@ -530,17 +531,102 @@ func verifyCodeBasis(cfg Config, raw []byte, files []SourceFile, data map[string
 	if requestedRepository != repository && (remoteErr != nil || basis["repository"] != strings.TrimSpace(string(remote))) {
 		return errors.New("code_basis.repository не соответствует checkout")
 	}
+	var conflicts []error
 	for _, f := range files {
 		rel, err := filepath.Rel(repository, filepath.Join(cfg.ProjectRoot, f.Path))
 		if err != nil || !filepath.IsLocal(rel) {
 			return errors.New("code_basis: файл вне Git checkout")
 		}
 		b, err := gitRead(cfg.ProjectRoot, "show", commit+":"+filepath.ToSlash(rel))
-		if err != nil || !bytes.Equal(b, data[f.Path]) {
-			return fmt.Errorf("code_basis: dirty/untracked %s", f.Path)
+		if err == nil && bytes.Equal(b, data[f.Path]) {
+			continue
+		}
+		reason := "tracked: выбранные bytes отличаются от commit"
+		if err != nil {
+			reason = gitMissingReason(cfg.ProjectRoot, filepath.ToSlash(rel))
+		}
+		conflicts = append(conflicts, fmt.Errorf("code_basis: %q — %s", f.Path, reason))
+	}
+	slog.Debug("external: проверка Git-основания", "files", len(files), "conflicts", len(conflicts))
+	return errors.Join(conflicts...)
+}
+
+func gitMissingReason(root, path string) string {
+	if _, err := gitRead(root, "--literal-pathspecs", "ls-files", "--error-unmatch", "--", path); err == nil {
+		return "tracked: файл отсутствует в выбранном commit либо Git не смог прочитать его"
+	} else {
+		var exitError *exec.ExitError
+		if !errors.As(err, &exitError) || exitError.ExitCode() != 1 {
+			return "Git не смог установить причину недоступности файла"
 		}
 	}
-	return nil
+	if _, err := gitRead(root, "check-ignore", "--no-index", "--", path); err == nil {
+		return "ignored: файл исключён правилами Git и отсутствует в commit; обычный git status может его не показывать"
+	} else {
+		var exitError *exec.ExitError
+		if !errors.As(err, &exitError) || exitError.ExitCode() != 1 {
+			return "Git не смог проверить ignored; файл отсутствует в commit"
+		}
+	}
+	return "untracked: файл отсутствует в выбранном commit"
+}
+
+func externalSelectionError(cfg Config, manifest ExternalManifest) error {
+	expected := map[string][]string{"specs": {}, "references": {}}
+	actual := map[string][]string{"specs": {}, "references": {}}
+	missing := map[string][]string{"specs": {}, "references": {}}
+	extra := map[string][]string{"specs": {}, "references": {}}
+	both := []string{}
+	conflicts := 0
+	for _, file := range manifest.Files {
+		inSpecs := sourceSelected(cfg.Specs, file.Path)
+		inReferences := cfg.References != nil && sourceSelected(*cfg.References, file.Path)
+		if inSpecs && inReferences {
+			both = append(both, file.Path)
+		}
+		for _, group := range []struct {
+			name, role string
+			selected   bool
+		}{{"specs", "normative", inSpecs}, {"references", "reference", inReferences}} {
+			wanted := file.Role == group.role
+			if wanted {
+				expected[group.name] = append(expected[group.name], file.Path)
+			}
+			if group.selected {
+				actual[group.name] = append(actual[group.name], file.Path)
+			}
+			if wanted && !group.selected {
+				missing[group.name] = append(missing[group.name], file.Path)
+				conflicts++
+			}
+			if !wanted && group.selected {
+				extra[group.name] = append(extra[group.name], file.Path)
+				conflicts++
+			}
+		}
+	}
+	if conflicts == 0 {
+		return nil
+	}
+	slog.Debug("external: конфликт выбора источников", "files", len(manifest.Files), "conflicts", conflicts)
+	var message strings.Builder
+	message.WriteString("CONFIG specs/references должны точно соответствовать ролям манифеста: normative → specs, reference → references, archive → ни одна группа.\nФактический выбор ниже ограничен манифестом и учитывает paths/include/exclude; reference может быть .json.\n")
+	writePaths := func(label string, paths []string) {
+		sort.Strings(paths)
+		fmt.Fprintf(&message, "%s (%d):\n", label, len(paths))
+		for _, path := range paths {
+			fmt.Fprintf(&message, "  %q\n", path)
+		}
+	}
+	for _, group := range []string{"specs", "references"} {
+		writePaths(group+" ожидаемые", expected[group])
+		writePaths(group+" фактические", actual[group])
+		writePaths(group+" недостающие", missing[group])
+		writePaths(group+" лишние", extra[group])
+	}
+	writePaths("обе группы", both)
+	message.WriteString("Проверьте выбор CONFIG и совместимость границы scope с манифестом; scopes[] не фильтрует корпус. Диагностика не меняет роли или принятый индекс.")
+	return errors.New(message.String())
 }
 
 func externalBasis(x externalInput) *ExternalBasis {
@@ -570,9 +656,6 @@ func externalCommand(args []string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := verifyCodeBasis(cfg, x.request.CodeBasis, code, codeData); err != nil {
-		return nil, err
-	}
 	x.code = code
 	x.scope = cfg.External.Scope
 	if !slugRE.MatchString(cfg.External.Scope) {
@@ -583,11 +666,9 @@ func externalCommand(args []string) (any, error) {
 		if _, ok := codeData[f.Path]; ok {
 			return nil, errors.New("corpus пересекается с code/tests")
 		}
-		inSpecs := sourceSelected(cfg.Specs, f.Path)
-		inRefs := cfg.References != nil && sourceSelected(*cfg.References, f.Path)
-		if (f.Role == "normative") != inSpecs || (f.Role == "reference") != inRefs {
-			return nil, fmt.Errorf("CONFIG specs/references не соответствуют роли %s", f.Path)
-		}
+	}
+	if err := errors.Join(externalSelectionError(cfg, x.manifest), verifyCodeBasis(cfg, x.request.CodeBasis, code, codeData)); err != nil {
+		return nil, err
 	}
 	if args[0] == "check" {
 		return map[string]any{"schema_version": 1, "basis": externalBasis(x), "files": len(x.files), "code_sha256": codeDigest(code)}, nil

@@ -317,6 +317,25 @@ func indexConfig(cfg Config) (any, error) {
 	return index, nil
 }
 
+func sourceDiagnostic(configPath string, cfg Config, err error) error {
+	if err == nil {
+		return nil
+	}
+	hint := ""
+	var pathError *os.PathError
+	if errors.As(err, &pathError) {
+		hint = "; проверьте выбранный путь CONFIG и доступность источника"
+		if cfg.External != nil {
+			if releasedSnapshotSources(cfg) {
+				hint = "; временные источники штатно освобождены; сохранённые результаты доступны без нового импорта. Новый анализ требует точного входа"
+			} else {
+				hint += ". Для нового внешнего анализа восстановите точный вход: external check CONFIG AUDIT_INPUT, затем external import CONFIG AUDIT_INPUT из исходного CONFIG; используйте рабочий CONFIG из ответа. См. external-start.md в установленном skill"
+			}
+		}
+	}
+	return fmt.Errorf("CONFIG %q (project_root %q): %w%s", configPath, cfg.ProjectRoot, err, hint)
+}
+
 // tool-spec §26.2: a norm that names a section anchor (A-NNN, §N.N…) the snapshot's spec files never define may rest on
 // a section outside scope. The check is a reading aid: mentions in prose do not count as definitions.
 var (

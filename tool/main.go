@@ -756,7 +756,10 @@ func scanSnapshot(cfg Config) (Manifest, error) {
 				return m, err
 			}
 			info, err := root.Stat(directory)
-			if err != nil || (!info.IsDir() && !info.Mode().IsRegular()) {
+			if err != nil {
+				return m, fmt.Errorf("источник %q: %w", directory, err)
+			}
+			if !info.IsDir() && !info.Mode().IsRegular() {
 				return m, fmt.Errorf("источник должен быть каталогом или обычным файлом: %s", directory)
 			}
 			err = fs.WalkDir(root.FS(), directory, func(path string, entry fs.DirEntry, walkErr error) error {
@@ -1655,18 +1658,20 @@ func executeCommand(args []string) (any, error) {
 		return map[string]bool{"created": true}, nil
 	}
 	if len(args) == 3 && args[0] == "index" && args[2] == "summary" {
-		cfg, err := loadConfig(args[1])
+		cfg, err := loadConfig(args[1], true)
 		if err != nil {
 			return nil, err
 		}
-		return indexSummary(cfg)
+		value, err := indexSummary(cfg)
+		return value, sourceDiagnostic(args[1], cfg, err)
 	}
 	if len(args) == 2 && args[0] == "index" {
-		cfg, err := loadConfig(args[1])
+		cfg, err := loadConfig(args[1], true)
 		if err != nil {
 			return nil, err
 		}
-		return indexConfig(cfg)
+		value, err := indexConfig(cfg)
+		return value, sourceDiagnostic(args[1], cfg, err)
 	}
 	if len(args) > 0 && args[0] == "skill" {
 		return runSkillCommand(args[1:], version)

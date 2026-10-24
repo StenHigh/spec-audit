@@ -390,7 +390,7 @@ func scopeOverview(path string, cfg Config) (ScopeOverview, []ContradictedCitati
 	m, snapshotErr := snapshot(cfg)
 	scope.External = m.External
 	if snapshotErr != nil {
-		scope.Error = snapshotErr.Error()
+		scope.Error = sourceDiagnostic(path, cfg, snapshotErr).Error()
 		scope.Freshness = "unavailable"
 		if m.External != nil && cfg.IndexMode == "" {
 			scope.Requirements = len(m.Requirements)
