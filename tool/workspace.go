@@ -65,7 +65,15 @@ func lockCommand(args []string) (func(), error) {
 		if len(args) == 4 {
 			configs = append(configs, args[2])
 		}
-	case "corpus", "publish", "rerun":
+	case "corpus", "publish":
+		if len(args) > 2 {
+			var err error
+			configs, _, err = corpusArguments(args[2:])
+			if err != nil {
+				return nil, err
+			}
+		}
+	case "rerun":
 		if len(args) > 2 {
 			configs = args[2:]
 		}

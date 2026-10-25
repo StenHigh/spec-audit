@@ -29,7 +29,7 @@ const (
 )
 
 // Contracts SKILL.md links to; bundled byte-for-byte under references/docs/ so the installed copy needs no checkout.
-var skillDocs = []string{"php-sdk-contract.md", "external-input.md", "external-start.md", "schemas/source-manifest.schema.json", "schemas/audit-input.schema.json", "schemas/review-check.schema.json", "schemas/external-result.schema.json", "schemas/external-result-v2.schema.json", "schemas/external-result-v3.schema.json"}
+var skillDocs = []string{"php-sdk-contract.md", "external-input.md", "external-start.md", "schemas/source-manifest.schema.json", "schemas/audit-input.schema.json", "schemas/review-check.schema.json", "schemas/external-result.schema.json", "schemas/external-result-v2.schema.json", "schemas/external-result-v3.schema.json", "schemas/corpus-control.schema.json"}
 
 type SkillReceipt struct {
 	SchemaVersion string            `json:"schema_version"`

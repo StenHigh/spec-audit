@@ -22,8 +22,9 @@ import (
 // freshness and the latest run's delivery and host verdict per scope, plus totals. It reads what is recorded and
 // never renders a "corpus is complete" claim: every scope names only its own accepted set.
 type Overview struct {
-	Scopes []ScopeOverview `json:"scopes"`
-	Totals OverviewTotals  `json:"totals"`
+	Scopes        []ScopeOverview    `json:"scopes"`
+	Totals        OverviewTotals     `json:"totals"`
+	CorpusControl *CorpusControlFile `json:"corpus_control,omitempty"`
 	// ContradictedCode is the cross-scope memory (tool-spec §42.2): every code line the host cited under a contradicted
 	// verdict in any scope's decided run, so a host in a new scope sees «this file:lines is already contradicted in
 	// scope X» instead of deciding the same defect an eighth time. Hints, not verdicts.
@@ -81,15 +82,16 @@ func (g *Gap) add(a Assessment) {
 }
 
 type ScopeOverview struct {
-	Name         string         `json:"name,omitempty"`
-	External     *ExternalBasis `json:"external,omitempty"`
-	Config       string         `json:"config"`
-	IndexMode    string         `json:"index_mode"`
-	Freshness    string         `json:"freshness"`
-	Error        string         `json:"error,omitempty"`
-	Requirements int            `json:"requirements_total"`
-	Head         string         `json:"accepted_head,omitempty"`
-	Runs         int            `json:"runs"`
+	CorpusRevision *CorpusRevision `json:"corpus_revision,omitempty"`
+	Name           string          `json:"name,omitempty"`
+	External       *ExternalBasis  `json:"external,omitempty"`
+	Config         string          `json:"config"`
+	IndexMode      string          `json:"index_mode"`
+	Freshness      string          `json:"freshness"`
+	Error          string          `json:"error,omitempty"`
+	Requirements   int             `json:"requirements_total"`
+	Head           string          `json:"accepted_head,omitempty"`
+	Runs           int             `json:"runs"`
 	// History lists every decided run of the scope, newest first (§49); publish omits this list (§77).
 	History []RunRef     `json:"history"`
 	Latest  *RunOverview `json:"latest"`  // the most recently prepared run: delivery progress
@@ -315,14 +317,18 @@ func scopeDelta(baseline, current RunOverview) *Delta {
 	return d
 }
 
-func overview(paths []string) (Overview, error) {
+func overview(paths []string, controls ...*CorpusControlFile) (Overview, error) {
 	view := Overview{Scopes: []ScopeOverview{}, Totals: OverviewTotals{Implementation: map[string]int{}, Assertion: map[string]int{}}, ContradictedCode: []ContradictedCitation{}}
+	if len(controls) > 0 {
+		view.CorpusControl = controls[0]
+	}
 	for _, path := range paths {
 		cfg, err := loadConfig(path, true)
 		if err != nil {
 			return Overview{}, err
 		}
 		scope, cited := scopeOverview(path, cfg)
+		scope.CorpusRevision = compareCorpusRevision(scope, view.CorpusControl)
 		view.Scopes = append(view.Scopes, scope)
 		view.ContradictedCode = append(view.ContradictedCode, cited...)
 		view.Totals.Scopes++
@@ -702,8 +708,8 @@ type CorpusFile struct {
 
 // corpus writes the static corpus page and answers the overview with the page path. OUT_HTML is the host's file:
 // it is written whole, never inside a run directory.
-func corpus(out string, paths []string) (any, error) {
-	view, err := overview(paths)
+func corpus(out string, paths []string, controls ...*CorpusControlFile) (any, error) {
+	view, err := overview(paths, controls...)
 	if err != nil {
 		return nil, err
 	}
@@ -747,7 +753,7 @@ func renderCorpus(view Overview) ([]byte, error) {
 // OUT_DIR/overview.json — its data, OUT_DIR/<scope>/<run>/report.html — a copy of the latest decided run's report. Every
 // file is static and script-free except the run reports' own inline navigation; the tree can be served from any host.
 // The site is written whole on each publish; files of runs that no longer exist stay until the host removes OUT_DIR.
-func publish(out string, paths []string) (any, error) {
+func publish(out string, paths []string, controls ...*CorpusControlFile) (any, error) {
 	absCheck, err := filepath.Abs(out)
 	if err != nil {
 		return nil, err
@@ -765,7 +771,7 @@ func publish(out string, paths []string) (any, error) {
 			return nil, errors.New("publish: OUT пересекается с рабочей областью/исходниками")
 		}
 	}
-	view, err := overview(paths)
+	view, err := overview(paths, controls...)
 	if err != nil {
 		return nil, err
 	}
