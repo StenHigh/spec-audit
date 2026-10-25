@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/StenHigh/spec-audit/schemas/corpus-control/1",
+  "title": "Выбранные контрольные редакции корпусов",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "controls"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "controls": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1024,
+      "uniqueItems": true,
+      "description": "Каждый контекст project/corpus/line встречается ровно один раз; CLI дополнительно проверяет уникальность контекстов независимо от spec_version.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["project", "corpus", "line", "spec_version"],
+        "properties": {
+          "project": {"$ref": "#/$defs/nonempty"},
+          "corpus": {"$ref": "#/$defs/nonempty"},
+          "line": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/nonempty"}]},
+          "spec_version": {"$ref": "#/$defs/nonempty"}
+        }
+      }
+    }
+  },
+  "$defs": {"nonempty": {"type": "string", "pattern": "\\S"}}
+}

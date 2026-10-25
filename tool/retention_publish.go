@@ -11,7 +11,7 @@ import (
 
 // A citation-only publication starts in a fresh directory. In particular it
 // cannot inherit full source resources from an older archive-mode website.
-func publishWithRetention(out string, paths []string) (any, error) {
+func publishWithRetention(out string, paths []string, controls ...*CorpusControlFile) (any, error) {
 	citations, archives := false, false
 	for _, path := range paths {
 		cfg, err := loadConfig(path, true)
@@ -25,7 +25,7 @@ func publishWithRetention(out string, paths []string) (any, error) {
 		}
 	}
 	if !citations {
-		return publish(out, paths)
+		return publish(out, paths, controls...)
 	}
 	if archives {
 		return nil, errors.New("publish: citations и archive требуют отдельные сайты, чтобы полные источники не попали в результаты citations")
@@ -58,7 +58,7 @@ func publishWithRetention(out string, paths []string) (any, error) {
 		return nil, err
 	}
 	defer os.RemoveAll(stage)
-	value, err := publish(stage, paths)
+	value, err := publish(stage, paths, controls...)
 	if err != nil {
 		return nil, err
 	}
