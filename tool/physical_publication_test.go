@@ -16,6 +16,7 @@ func TestPublicationCleanupProtectsPhysicalConsumers(t *testing.T) {
 	for _, consumer := range []string{"object", "manifest", "config", "external-runtime", "local-citations", "separate-copy"} {
 		t.Run(consumer, func(t *testing.T) {
 			f := newExternalFixture(t)
+			f.base = exactSystemPath(f.base)
 			parent := f.install(t)
 			completeExternal(t, parent, "A")
 			pc, err := loadConfig(parent, true)
@@ -63,6 +64,7 @@ func TestPublicationCleanupProtectsPhysicalConsumers(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				t.Logf("[FIX:darwin-fixture] retained source relative to canonical fixture root: %s", relative)
 				cfg.Code.Paths = append(cfg.Code.Paths, filepath.ToSlash(relative))
 			}
 			for _, name := range []string{"rules.md", "source.go", "source_test.go", "go.mod"} {
