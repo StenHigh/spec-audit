@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -25,15 +26,16 @@ type CleanupCandidate struct {
 	Retained  string   `json:"retained"`
 }
 type CleanupPlan struct {
-	SchemaVersion int                `json:"schema_version"`
-	ID            string             `json:"id"`
-	BundleID      string             `json:"bundle_id"`
-	ArchiveSHA256 string             `json:"archive_sha256"`
-	ToolVersion   string             `json:"tool_version"`
-	Candidates    []CleanupCandidate `json:"candidates"`
-	BytesBefore   int64              `json:"bytes_before"`
-	BytesAfter    int64              `json:"bytes_after"`
-	FreedBytes    int64              `json:"expected_freed_bytes"`
+	PublicationBasis *PublicationCleanupBasis `json:"publication_basis,omitempty"`
+	SchemaVersion    int                      `json:"schema_version"`
+	ID               string                   `json:"id"`
+	BundleID         string                   `json:"bundle_id"`
+	ArchiveSHA256    string                   `json:"archive_sha256"`
+	ToolVersion      string                   `json:"tool_version"`
+	Candidates       []CleanupCandidate       `json:"candidates"`
+	BytesBefore      int64                    `json:"bytes_before"`
+	BytesAfter       int64                    `json:"bytes_after"`
+	FreedBytes       int64                    `json:"expected_freed_bytes"`
 }
 type CleanupProof struct {
 	SchemaVersion  int      `json:"schema_version"`
@@ -44,6 +46,36 @@ type CleanupProof struct {
 	VerifiedFiles  int      `json:"verified_files"`
 	ConfigsChecked int      `json:"configs_checked"`
 	Limitations    []string `json:"limitations"`
+}
+
+// PLAN includes the full live basis and can be larger than any individual state file.
+// Keep this bound shared by schema dispatch, readers and the exact CLI output check.
+const maxCleanupPlan = 256 << 20
+
+type cleanupPlanSizeWriter struct {
+	bytes int64
+	limit int64
+}
+
+func (w *cleanupPlanSizeWriter) Write(data []byte) (int, error) {
+	if int64(len(data)) > w.limit-w.bytes {
+		slog.Debug("[FIX:cleanup-plan] превышен лимит PLAN", "limit", w.limit)
+		return 0, fmt.Errorf("cleanup: PLAN превышает лимит %d байт", w.limit)
+	}
+	w.bytes += int64(len(data))
+	return len(data), nil
+}
+
+// Match main's Encoder, including indentation, HTML escaping and trailing LF.
+func checkCleanupPlanSize(p CleanupPlan, limit int64) error {
+	output := &cleanupPlanSizeWriter{limit: limit}
+	encoder := json.NewEncoder(output)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(p); err != nil {
+		return err
+	}
+	slog.Debug("[FIX:cleanup-plan] размер PLAN проверен", "bytes", output.bytes, "limit", limit)
+	return nil
 }
 
 func cleanupPlanID(p CleanupPlan) string { p.ID = ""; data, _ := json.Marshal(p); return digest(data) }
@@ -67,16 +99,41 @@ func cleanupCommand(args []string) (any, error) {
 		return nil, err
 	}
 	defer unlock()
+	if args[0] == "plan" && len(args) > 2 {
+		return publicationCleanupCommand(args, b)
+	}
+	if args[0] != "plan" && len(args) >= 3 {
+		raw, e := readExact(args[2], maxCleanupPlan)
+		if e != nil {
+			return nil, e
+		}
+		var header struct {
+			SchemaVersion int `json:"schema_version"`
+		}
+		if e := json.Unmarshal(raw, &header); e != nil {
+			return nil, e
+		}
+		if header.SchemaVersion == 2 {
+			return publicationCleanupCommand(args, b)
+		}
+	}
 	if len(args) == 2 && args[0] == "plan" {
 		if err := compareCleanupBasis(b.Index, nil); err != nil {
 			return nil, err
 		}
-		return makeCleanupPlan(b), nil
+		p, err := makeCleanupPlan(b)
+		if err != nil {
+			return nil, err
+		}
+		if err := checkCleanupPlanSize(p, maxCleanupPlan); err != nil {
+			return nil, err
+		}
+		return p, nil
 	}
 	if len(args) < 3 {
 		return nil, errors.New("cleanup: нужен PLAN")
 	}
-	raw, err := readExact(args[2], maxState)
+	raw, err := readExact(args[2], maxCleanupPlan)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +141,10 @@ func cleanupCommand(args []string) (any, error) {
 	if err := strictJSON(raw, &p); err != nil {
 		return nil, err
 	}
-	expected := makeCleanupPlan(b)
+	expected, err := makeCleanupPlan(b)
+	if err != nil {
+		return nil, err
+	}
 	if p.SchemaVersion != 1 || p.ID != cleanupPlanID(p) || !reflect.DeepEqual(p, expected) {
 		return nil, errors.New("cleanup: изменённый/чужой план или версия инструмента")
 	}
@@ -167,7 +227,7 @@ func cleanupCommand(args []string) (any, error) {
 	return finish(nil)
 }
 
-func makeCleanupPlan(b evidenceBundle) CleanupPlan {
+func makeCleanupPlan(b evidenceBundle) (CleanupPlan, error) {
 	p := CleanupPlan{SchemaVersion: 1, BundleID: b.Index.ID, ArchiveSHA256: b.SHA256, ToolVersion: version, Candidates: []CleanupCandidate{}}
 	areas := map[string]BundleArea{}
 	for _, a := range b.Index.Areas {
@@ -244,16 +304,26 @@ func makeCleanupPlan(b evidenceBundle) CleanupPlan {
 				continue
 			}
 			p.Candidates = append(p.Candidates, CleanupCandidate{f.Area, f.Path, f.SHA256, f.Bytes, "byte_duplicate", "Побайтовый дубль сданного raw завершённого run; оригинал и пакет сохранены", []string{parts[0] + "/state.json", parts[0] + "/host-reviews.json"}, retained})
-			p.FreedBytes += f.Bytes
 		}
+	}
+	var err error
+	p.Candidates, err = protectCleanupPhysicalFiles(b, nil, p.Candidates)
+	if err != nil {
+		return CleanupPlan{}, err
+	}
+	for _, candidate := range p.Candidates {
+		p.FreedBytes += candidate.Bytes
 	}
 	p.BytesAfter = p.BytesBefore - p.FreedBytes
 	p.ID = cleanupPlanID(p)
-	return p
+	return p, nil
 }
 
 func compareCleanupBasis(index BundleIndex, allowed []CleanupCandidate) error {
 	request := BundleRequest{SchemaVersion: 1, Configs: []string{}, Sites: []string{}}
+	if index.SchemaVersion == 3 {
+		request.SchemaVersion = 2
+	}
 	cfgs := []Config{}
 	for _, c := range index.Configs {
 		request.Configs = append(request.Configs, c.OriginalPath)

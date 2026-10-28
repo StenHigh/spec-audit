@@ -1238,7 +1238,7 @@ func TestPublish(t *testing.T) {
 	}
 	// An undecided newer run must not replace the latest host decision.
 	runOK(t, "prepare", config, "p3")
-	if answer := runOK(t, "publish", site, config).(map[string]any); answer["reports"] != 1 {
+	if answer := runOK(t, "publish", filepath.Join(base, "site-with-pending"), config).(map[string]any); answer["reports"] != 1 {
 		t.Fatal("новый run без решения не заменяет решённый", answer)
 	}
 	if output := os.Getenv("SPEC_AUDIT_CORPUS_FIXTURE"); output != "" {
@@ -1249,16 +1249,16 @@ func TestPublish(t *testing.T) {
 		}
 		writeFixture(t, previewReport, readFixture(t, filepath.Join(site, scope, "p2", "report.html")))
 	}
-	// A missing latest report is skipped, never replaced with an older report.
+	// Missing generated HTML is rebuilt from the same latest saved JSON report.
 	if err := os.Remove(filepath.Join(base, "runs/p2/report.html")); err != nil {
 		t.Fatal(err)
 	}
 	missingSite := filepath.Join(base, "missing-site")
-	if answer := runOK(t, "publish", missingSite, config).(map[string]any); answer["reports"] != 0 {
+	if answer := runOK(t, "publish", missingSite, config).(map[string]any); answer["reports"] != 1 {
 		t.Fatal("нет подмены старым отчётом", answer)
 	}
-	if page := string(readFixture(t, filepath.Join(missingSite, "index.html"))); strings.Contains(page, "/report.html") {
-		t.Fatal("нет ссылки на отсутствующий отчёт")
+	if page := string(readFixture(t, filepath.Join(missingSite, "index.html"))); !strings.Contains(page, "/p2/report.html") {
+		t.Fatal("нет ссылки на восстановленный последний отчёт")
 	}
 
 	runFail(t, "publish", site)

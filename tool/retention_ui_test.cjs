@@ -1,6 +1,7 @@
 // Development-only browser acceptance on deterministic citation-only output.
 'use strict';
 const assert = require('node:assert/strict');
+const {createHash} = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const {chromium} = require(process.env.SPEC_AUDIT_PLAYWRIGHT || 'playwright');
@@ -33,7 +34,10 @@ if (!base || !out) throw new Error('retention_ui_test.cjs BASE_URL SCREENSHOT_DI
     const reportURL = new URL(scope.decided.report, base);
     const report = await (await page.request.get(new URL('report.json', reportURL).href)).json();
     const result = await (await page.request.get(new URL('result.json', reportURL).href)).json();
-    assert.equal(result.schema_version, 3);
+    assert.equal(result.schema_version, 4);
+    const reportBytes = await (await page.request.get(new URL(result.report_ref.path, reportURL).href)).body();
+    assert.equal(result.report_ref.bytes, reportBytes.length);
+    assert.equal(result.report_ref.sha256, createHash('sha256').update(reportBytes).digest('hex'));
     assert.equal(result.source_retention, 'citations');
     assert.equal(result.snapshot_id, report.snapshot_id);
     assert.equal(report.source_retention, 'citations');
@@ -95,7 +99,7 @@ if (!base || !out) throw new Error('retention_ui_test.cjs BASE_URL SCREENSHOT_DI
     assert.deepEqual(errors, []);
     assert(requests.every(url => url.startsWith(new URL(base).origin)), 'external network request');
     assert(requests.every(url => !url.includes('/sources/')), 'full source resource requested');
-    console.log(JSON.stringify({passed: true, base_path: new URL(base).pathname, schema: 3,
+    console.log(JSON.stringify({passed: true, base_path: new URL(base).pathname, schema: 4,
       citation_only: true, unchecked: true, history: true, filters: true, search: true,
       contradiction_sides: true, anchors: true, no_js: true, mobile: true,
       external_requests: false, screenshots: fs.readdirSync(out)}, null, 2));

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -102,11 +103,17 @@ func readBundleRequest(path string) (BundleRequest, error) {
 	if err := strictJSON(data, &r); err != nil {
 		return r, err
 	}
-	if err := requiredKeys(data, "schema_version", "configs", "sites"); err != nil {
+	if err := requiredKeys(data, "schema_version", "configs"); err != nil {
 		return r, err
 	}
-	if r.SchemaVersion != 1 || len(r.Configs) == 0 || len(r.Configs) > 64 || len(r.Sites) > 64 {
+	if (r.SchemaVersion != 1 && r.SchemaVersion != 2) || len(r.Configs) == 0 || len(r.Configs) > 64 {
 		return r, errors.New("bundle request: версия/число configs/sites недопустимы")
+	}
+	if len(r.Sites) != 0 {
+		return r, errors.New("bundle export: sites больше не сохраняются; перенесите аудит и повторно сгенерируйте сайт")
+	}
+	if r.SchemaVersion == 2 && rawField(data, "sites") != nil {
+		return r, errors.New("bundle request schema 2 не допускает sites")
 	}
 	seen := map[string]bool{}
 	for _, p := range append(append([]string{}, r.Configs...), r.Sites...) {
@@ -152,6 +159,7 @@ func exportBundle(request, out string) (any, error) {
 			return nil, errors.New("bundle: OUT должен быть вне sites")
 		}
 	}
+	r.SchemaVersion = 2 // All new writes use the audit-only bundle contract.
 	b, err := collectBundle(r, cfgs)
 	if err != nil {
 		return nil, err
@@ -173,6 +181,17 @@ func exportBundle(request, out string) (any, error) {
 
 func collectBundle(request BundleRequest, cfgs []Config) (evidenceBundle, error) {
 	b := evidenceBundle{Index: BundleIndex{SchemaVersion: 1, ToolVersion: version, Areas: []BundleArea{}, Files: []BundleFile{}, Configs: []BundleConfig{}, Limitations: []string{}}, Objects: map[string][]byte{}}
+	if request.SchemaVersion >= 2 {
+		b.Index.SchemaVersion = 3
+	}
+	// Gather every selected reports root before traversing any parent area.
+	// Legacy bundles keep their original physical traversal.
+	var reportRoots []string
+	if request.SchemaVersion >= 2 {
+		for _, cfg := range cfgs {
+			reportRoots = append(reportRoots, cfg.ReportsDir)
+		}
+	}
 	var total int64
 	logicalFiles := map[string]BundleFile{}
 	add := func(area, path string, data []byte, mode uint32) error {
@@ -228,7 +247,9 @@ func collectBundle(request BundleRequest, cfgs []Config) (evidenceBundle, error)
 			return b, err
 		}
 		if citationRetention(cfg) {
-			b.Index.SchemaVersion = 2
+			if request.SchemaVersion < 2 {
+				b.Index.SchemaVersion = 2
+			}
 			if err := releasedExternalInputs(cfg); err != nil {
 				return b, err
 			}
@@ -254,7 +275,23 @@ func collectBundle(request BundleRequest, cfgs []Config) (evidenceBundle, error)
 		if err != nil {
 			return b, err
 		}
-		if err := walkBundleArea(cfg.ReportsDir, func(path string, data []byte, mode uint32) error { return add(reportsID, path, data, mode) }); err != nil {
+		excluded, err := nestedReportPaths(cfg.ReportsDir, reportRoots)
+		if err != nil {
+			return b, err
+		}
+		omit := map[string]bool{}
+		if request.SchemaVersion >= 2 {
+			omit, err = auditBundleOmissions(cfg.ReportsDir, reportRoots...)
+			if err != nil {
+				return b, err
+			}
+		}
+		if err := walkBundleAreaExcluding(cfg.ReportsDir, reportRoots, func(path string, data []byte, mode uint32) error {
+			if omit[path] {
+				return nil
+			}
+			return add(reportsID, path, data, mode)
+		}); err != nil {
 			return b, err
 		}
 		if !citationRetention(cfg) {
@@ -266,30 +303,11 @@ func collectBundle(request BundleRequest, cfgs []Config) (evidenceBundle, error)
 				b.Index.Limitations = append(b.Index.Limitations, id+": текущее дерево исходников отсутствует; доступна только сохранённая история")
 				workspaceID = ""
 			}
-			if workspaceID != "" && cfg.External != nil {
-				if _, err := scanSnapshot(cfg); err != nil {
+			if workspaceID != "" {
+				if err := walkBundleWorkspace(cfg, func(path string, data []byte, mode uint32) error {
+					return add(workspaceID, path, data, mode)
+				}); err != nil {
 					return b, err
-				}
-				if err := walkBundleArea(cfg.ProjectRoot, func(path string, data []byte, mode uint32) error { return add(workspaceID, path, data, mode) }); err != nil {
-					return b, err
-				}
-			} else if workspaceID != "" {
-				current, err := scanSnapshotWithoutAcceptance(cfg)
-				if err != nil {
-					return b, err
-				}
-				for _, file := range current.Files {
-					data, err := readExact(filepath.Join(cfg.ProjectRoot, file.Path), maxFile)
-					if err != nil {
-						return b, err
-					}
-					info, err := os.Stat(filepath.Join(cfg.ProjectRoot, file.Path))
-					if err != nil {
-						return b, err
-					}
-					if err := add(workspaceID, file.Path, data, uint32(info.Mode().Perm())); err != nil {
-						return b, err
-					}
 				}
 			}
 		}
@@ -315,7 +333,7 @@ func collectBundle(request BundleRequest, cfgs []Config) (evidenceBundle, error)
 			return b, err
 		}
 		for _, entry := range entries {
-			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || excluded[entry.Name()] {
 				continue
 			}
 			run, err := root.OpenRoot(entry.Name())
@@ -415,11 +433,89 @@ func collectBundle(request BundleRequest, cfgs []Config) (evidenceBundle, error)
 }
 
 func scanSnapshotWithoutAcceptance(cfg Config) (Manifest, error) { return scanSnapshot(cfg) }
+
+// Export and cleanup compare the same selected live workspace, including modes.
+func walkBundleWorkspace(cfg Config, add func(string, []byte, uint32) error) error {
+	if cfg.External != nil {
+		if _, err := scanSnapshot(cfg); err != nil {
+			return err
+		}
+		return walkBundleArea(cfg.ProjectRoot, add)
+	}
+	current, err := scanSnapshotWithoutAcceptance(cfg)
+	if err != nil {
+		return err
+	}
+	for _, file := range current.Files {
+		path := filepath.Join(cfg.ProjectRoot, file.Path)
+		data, err := readExact(path, maxFile)
+		if err != nil {
+			return err
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		if err := add(file.Path, data, uint32(info.Mode().Perm())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func transientBundleFile(path string) bool {
 	name := filepath.Base(path)
 	return name == ".workspace.lock" || strings.HasSuffix(name, ".lock") && strings.HasPrefix(name, ".")
 }
 func walkBundleArea(dir string, add func(string, []byte, uint32) error) error {
+	return walkBundleAreaExcluding(dir, nil, add)
+}
+
+// Selected nested reports roots own their files independently of their parents.
+func nestedReportPaths(dir string, reportRoots []string) (map[string]bool, error) {
+	excluded := map[string]bool{}
+	checked := map[string]bool{}
+	for _, child := range reportRoots {
+		if child == dir || !within(dir, child) {
+			continue
+		}
+		relative, err := filepath.Rel(dir, child)
+		if err != nil {
+			return nil, err
+		}
+		relative = filepath.ToSlash(relative)
+		first := strings.SplitN(relative, "/", 2)[0]
+		if !checked[first] && slugRE.MatchString(first) {
+			checked[first] = true
+			root, err := os.OpenRoot(dir)
+			if err != nil {
+				return nil, err
+			}
+			raw, err := readRoot(root, first+"/manifest.json", maxState)
+			if err == nil || os.IsNotExist(err) {
+				var evidence bool
+				evidence, err = savedRunEvidence(root, first, raw)
+				if err == nil && evidence {
+					slog.Debug("[FIX:audit-roots] reports_dir пересекается с run родителя", "reports_dir", child, "run", filepath.Join(dir, first))
+					err = fmt.Errorf("reports_dir %s пересекается с run родительской области %s", child, filepath.Join(dir, first))
+				}
+			}
+			root.Close()
+			if err != nil && !os.IsNotExist(err) {
+				return nil, err
+			}
+		}
+		excluded[relative] = true
+	}
+	return excluded, nil
+}
+
+// Skip child roots before reading their bytes or assigning ownership.
+func walkBundleAreaExcluding(dir string, reportRoots []string, add func(string, []byte, uint32) error) error {
+	excluded, err := nestedReportPaths(dir, reportRoots)
+	if err != nil {
+		return err
+	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return err
@@ -433,6 +529,10 @@ func walkBundleArea(dir string, add func(string, []byte, uint32) error) error {
 			return fmt.Errorf("bundle: symlink %s", path)
 		}
 		if e.IsDir() {
+			if excluded[path] {
+				slog.Debug("[FIX:bundle-ownership] дочернее хранилище исключено из родительского обхода", "root", dir, "child", path)
+				return fs.SkipDir
+			}
 			return nil
 		}
 		if !e.Type().IsRegular() {
@@ -597,12 +697,12 @@ func readBundle(path string) (evidenceBundle, error) {
 
 func validateBundle(b evidenceBundle) error {
 	ix := b.Index
-	if (ix.SchemaVersion != 1 && ix.SchemaVersion != 2) || !validDigest(ix.ID) || ix.ID != bundleID(ix) || len(ix.Configs) == 0 || len(ix.Files) > 200000 {
+	if (ix.SchemaVersion != 1 && ix.SchemaVersion != 2 && ix.SchemaVersion != 3) || !validDigest(ix.ID) || ix.ID != bundleID(ix) || len(ix.Configs) == 0 || len(ix.Files) > 200000 {
 		return errors.New("bundle: неподдерживаемая схема или неверная идентичность")
 	}
 	areas := map[string]BundleArea{}
 	for _, a := range ix.Areas {
-		if !slugRE.MatchString(a.ID) || !oneOf(a.Kind, "reports", "workspace", "site", "config") {
+		if !slugRE.MatchString(a.ID) || !oneOf(a.Kind, "reports", "workspace", "site", "config") || ix.SchemaVersion == 3 && a.Kind == "site" {
 			return errors.New("bundle: недопустимая область")
 		}
 		if _, ok := areas[a.ID]; ok {
@@ -615,6 +715,9 @@ func validateBundle(b evidenceBundle) error {
 	for _, f := range ix.Files {
 		if _, ok := areas[f.Area]; !ok || !localPath(f.Path) || !validDigest(f.SHA256) || f.Bytes < 0 || f.Bytes > maxFile || f.Mode > 0777 {
 			return errors.New("bundle: неверный логический путь/размер/mode")
+		}
+		if ix.SchemaVersion == 3 && !auditBundlePathAllowed(areas[f.Area], f.Path) {
+			return errors.New("bundle v3: сайт в audit-only пакете")
 		}
 		key := f.Area + "/" + f.Path
 		if paths[key] {
@@ -667,7 +770,7 @@ func validateBundle(b evidenceBundle) error {
 	if ix.SchemaVersion == 2 && !hasCitations {
 		return errors.New("bundle: схема 2 требует режим citations")
 	}
-	if ix.SchemaVersion == 2 {
+	if ix.SchemaVersion >= 2 {
 		for _, area := range ix.Areas {
 			if area.Kind != "workspace" {
 				continue
@@ -707,11 +810,38 @@ func validateBundle(b evidenceBundle) error {
 			return errors.New("bundle: внешний run без обязательных полных источников")
 		}
 	}
-	// Validate each retained source inventory against its manifest and common objects.
 	files := map[string]BundleFile{}
 	for _, f := range ix.Files {
 		files[f.Area+"/"+f.Path] = f
 	}
+	if ix.SchemaVersion == 3 {
+		for _, f := range ix.Files {
+			parts := strings.Split(f.Path, "/")
+			if areas[f.Area].Kind != "reports" || len(parts) != 2 || parts[1] != "report.html" || !slugRE.MatchString(parts[0]) {
+				continue
+			}
+			key := f.Area + "/" + parts[0] + "/"
+			manifest, hasManifest := files[key+"manifest.json"]
+			report, hasReport := files[key+"report.json"]
+			if !hasManifest || !hasReport {
+				continue // Names alone cannot identify unknown files as derived HTML.
+			}
+			var m Manifest
+			if err := strictJSON(b.Objects[manifest.SHA256], &m); err != nil {
+				return err
+			}
+			var r Report
+			if err := strictJSON(b.Objects[report.SHA256], &r); err != nil {
+				return err
+			}
+			if m.Version != 1 || !validDigest(m.SnapshotID) || r.RunID != parts[0] || r.SnapshotID != m.SnapshotID {
+				return errors.New("bundle v3: неверное основание производного отчёта")
+			}
+			slog.Debug("[FIX:bundle-report] производный HTML связан с сохранённым run", "area", f.Area, "run_id", parts[0])
+			return errors.New("bundle v3: производный HTML-отчёт в audit-only пакете")
+		}
+	}
+	// Validate each retained source inventory against its manifest and common objects.
 	for _, f := range ix.Files {
 		if areas[f.Area].Kind != "reports" || filepath.Base(f.Path) != "sources.json" {
 			continue
@@ -736,6 +866,12 @@ func validateBundle(b evidenceBundle) error {
 		for _, s := range inv.Sources {
 			if !localPath(s.Path) || !validDigest(s.SHA256) || s.Bytes < 0 || s.Bytes > maxFile {
 				return errors.New("bundle: неверная запись источника")
+			}
+			if ix.SchemaVersion == 3 && s.Full {
+				key := f.Area + "/" + filepath.ToSlash(filepath.Dir(f.Path)) + "/sources/" + sourcePageKey(s)
+				if paths[key+".html"] || paths[key+".bin"] {
+					return errors.New("bundle v3: производный source-viewer в audit-only пакете")
+				}
 			}
 			if citations {
 				if s.Full || s.Limitation == "" || s.URL != "" || s.RawURL != "" {

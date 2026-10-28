@@ -289,54 +289,6 @@ func attachSources(reports, run *os.Root, report *Report, m Manifest) error {
 	return nil
 }
 
-// Latest-only local publication still needs the resources linked by that report.
-func copyReportResources(reportsDir, runID, target string) error {
-	reports, err := os.OpenRoot(reportsDir)
-	if err != nil {
-		return err
-	}
-	defer reports.Close()
-	put := func(name string, data []byte) error {
-		parent := filepath.Join(target, filepath.Dir(name))
-		if err := mkdirExact(parent, 0755); err != nil {
-			return err
-		}
-		root, err := os.OpenRoot(parent)
-		if err != nil {
-			return err
-		}
-		defer root.Close()
-		return atomicWrite(root, filepath.Base(name), data, 0644)
-	}
-	data, err := readRoot(reports, runID+"/report.json", maxState)
-	if err == nil {
-		var report Report
-		if err := strictJSON(data, &report); err != nil {
-			return err
-		}
-		if err := put("report.json", data); err != nil {
-			return err
-		}
-		if report.SourceRetention == "citations" {
-			return nil
-		}
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	sources := filepath.Join(reportsDir, runID, "sources")
-	if _, err := os.Lstat(sources); os.IsNotExist(err) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-	guard, _, err := openExact(sources)
-	if err != nil {
-		return err
-	}
-	guard.Close()
-	return walkBundleArea(sources, func(name string, data []byte, _ uint32) error { return put("sources/"+name, data) })
-}
-
 func linkReportSources(report *Report) {
 	byPath := map[string]SavedSource{}
 	for _, source := range report.Sources {

@@ -5,7 +5,6 @@ package main
 import (
 	"bytes"
 	_ "embed"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -201,6 +200,7 @@ type RunRef struct {
 }
 
 type RunOverview struct {
+	PublicationPending string         `json:"publication_pending,omitempty"` // incomplete external publication, separate from the host decision
 	External           *ExternalBasis `json:"external,omitempty"`
 	RunID              string         `json:"run_id"`
 	PreparedAt         string         `json:"prepared_at"`
@@ -605,7 +605,7 @@ func runOverview(reports *os.Root, runID string, cfg Config, current Manifest, s
 			}
 		}
 	}
-	observation := observeSnapshot(cfg, m, current, snapshotErr)
+	observation := observationForPublication(cfg, m, current, snapshotErr)
 	m.observation = &observation
 	status := makeStatus(runID, m, state, view.SnapshotCurrent)
 	view.Freshness, view.SourceAvailability, view.FreshnessReason = status.Freshness, status.SourceAvailability, status.FreshnessReason
@@ -747,140 +747,6 @@ func renderCorpus(view Overview) ([]byte, error) {
 		return nil, err
 	}
 	return html.Bytes(), nil
-}
-
-// publish assembles a self-contained static site for the customer (tool-spec §49, §77): OUT_DIR/index.html — the corpus map,
-// OUT_DIR/overview.json — its data, OUT_DIR/<scope>/<run>/report.html — a copy of the latest decided run's report. Every
-// file is static and script-free except the run reports' own inline navigation; the tree can be served from any host.
-// The site is written whole on each publish; files of runs that no longer exist stay until the host removes OUT_DIR.
-func publish(out string, paths []string, controls ...*CorpusControlFile) (any, error) {
-	absCheck, err := filepath.Abs(out)
-	if err != nil {
-		return nil, err
-	}
-	absCheck, err = canonicalPath(absCheck)
-	if err != nil {
-		return nil, err
-	}
-	for _, path := range paths {
-		cfg, err := loadConfig(path, true)
-		if err != nil {
-			return nil, err
-		}
-		if cfg.External != nil && (within(cfg.ReportsDir, absCheck) || within(absCheck, cfg.ReportsDir) || within(cfg.ProjectRoot, absCheck) || within(absCheck, cfg.ProjectRoot)) {
-			return nil, errors.New("publish: OUT пересекается с рабочей областью/исходниками")
-		}
-	}
-	view, err := overview(paths, controls...)
-	if err != nil {
-		return nil, err
-	}
-	absOut, err := filepath.Abs(out)
-	if err != nil {
-		return nil, err
-	}
-	if err := mkdirExact(absOut, 0755); err != nil {
-		return nil, err
-	}
-	copied := 0
-	for i := range view.Scopes {
-		scope := &view.Scopes[i]
-		cfg, err := loadConfig(scope.Config, true)
-		if err != nil {
-			return nil, err
-		}
-		name := scopeName(scope.Config)
-		if cfg.External != nil {
-			n, err := publishExternalScope(absOut, scope, cfg)
-			if err != nil {
-				return nil, err
-			}
-			copied += n
-			continue
-		}
-		// Publish only the latest decided run; overview retains the full audit history.
-		scope.History = []RunRef{}
-		if scope.Decided == nil {
-			continue
-		}
-		runID := scope.Decided.RunID
-		source := filepath.Join(cfg.ReportsDir, runID, "report.html")
-		data, err := os.ReadFile(source)
-		if errors.Is(err, os.ErrNotExist) {
-			slog.Debug("publish: report.html отсутствует", "config", scope.Config, "run_id", runID)
-			scope.Decided.Report = ""
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		target := filepath.Join(absOut, name, runID)
-		if err := os.MkdirAll(target, 0755); err != nil {
-			return nil, err
-		}
-		if err := copyReportResources(cfg.ReportsDir, runID, target); err != nil {
-			return nil, err
-		}
-		reportRaw, readErr := os.ReadFile(filepath.Join(cfg.ReportsDir, runID, "report.json"))
-		if readErr == nil {
-			var report Report
-			if err := strictJSON(reportRaw, &report); err != nil {
-				return nil, err
-			}
-			before, err := json.Marshal(report)
-			if err != nil {
-				return nil, err
-			}
-			report, err = projectSavedReport(scope.Config, runID, report)
-			if err != nil {
-				return nil, err
-			}
-			after, err := json.Marshal(report)
-			if err != nil {
-				return nil, err
-			}
-			if !bytes.Equal(before, after) {
-				var rendered bytes.Buffer
-				if err := reportTemplate.Execute(&rendered, report); err != nil {
-					return nil, err
-				}
-				data = rendered.Bytes()
-				raw, err := json.MarshalIndent(report, "", "  ")
-				if err != nil {
-					return nil, err
-				}
-				if err := os.WriteFile(filepath.Join(target, "report.json"), append(raw, '\n'), 0644); err != nil {
-					return nil, err
-				}
-			}
-		} else if !os.IsNotExist(readErr) {
-			return nil, readErr
-		}
-		if err := os.WriteFile(filepath.Join(target, "report.html"), data, 0644); err != nil {
-			return nil, err
-		}
-		copied++
-		scope.Decided.Report = filepath.ToSlash(filepath.Join(name, runID, "report.html"))
-	}
-	html, err := renderCorpus(view)
-	if err != nil {
-		return nil, err
-	}
-	if err := os.WriteFile(filepath.Join(absOut, "index.html"), html, 0644); err != nil {
-		return nil, err
-	}
-	data, err := json.MarshalIndent(view, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	if err := os.WriteFile(filepath.Join(absOut, "overview.json"), append(data, '\n'), 0644); err != nil {
-		return nil, err
-	}
-	if err := recordPublication(absOut, paths); err != nil {
-		return nil, err
-	}
-	slog.Info("сайт опубликован", "dir", absOut, "scopes", view.Totals.Scopes, "reports", copied)
-	return map[string]any{"dir": absOut, "index": filepath.Join(absOut, "index.html"), "reports": copied, "scopes": view.Totals.Scopes}, nil
 }
 
 // reportLink is the relative path from the corpus page to a decided run's report.html; empty when it does not exist.

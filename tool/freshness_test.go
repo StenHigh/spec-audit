@@ -246,10 +246,7 @@ func TestSavedSnapshotLegacyHistoricalPublication(t *testing.T) {
 	f := citationLifecycleFixture(t)
 	config := f.install(t)
 	completeExternal(t, config, "A")
-	cfg, err := loadConfig(config)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg, _ := loadConfig(config, true)
 	path := filepath.Join(cfg.ReportsDir, "A/report.json")
 	var legacy map[string]json.RawMessage
 	if err := json.Unmarshal(readFixture(t, path), &legacy); err != nil {
@@ -259,38 +256,44 @@ func TestSavedSnapshotLegacyHistoricalPublication(t *testing.T) {
 	delete(legacy, "freshness_reason")
 	writeFixture(t, path, mustJSON(t, legacy))
 	originalJSON := readFixture(t, path)
-	originalHTML := readFixture(t, filepath.Join(cfg.ReportsDir, "A/report.html"))
 	completeExternal(t, config, "B")
 	runOK(t, "external", "release", config)
-	site := filepath.Join(f.base, "legacy-site")
-	runOK(t, "publish", site, config)
-	check := func(site string) {
-		for _, name := range []string{"A", "B"} {
-			var result ExternalResult
-			dir := filepath.Join(site, externalScopePath(cfg.External), name)
-			if err := strictJSON(readFixture(t, filepath.Join(dir, "result.json")), &result); err != nil {
-				t.Fatal(err)
-			}
-			if result.SchemaVersion != 3 || result.CurrentFreshness.Status != "unchecked" {
-				t.Fatal("historical result mislabeled", name)
-			}
-			if name == "A" {
-				if result.ReportBasis != "historical_publication" || !bytes.Equal(originalJSON, readFixture(t, filepath.Join(dir, "report.json"))) || !bytes.Equal(originalHTML, readFixture(t, filepath.Join(dir, "report.html"))) {
-					t.Fatal("legacy historical publication was rewritten")
-				}
-			} else if result.ReportBasis != "saved_run" || result.Report.SourceAvailability != "released" || result.Decision.State != "saved" {
-				t.Fatal("latest projection is not explicit")
-			}
+	check := func(site, run string, historical bool) {
+		dir := filepath.Join(site, externalScopePath(cfg.External), run)
+		var result SiteResult
+		if err := strictJSON(readFixture(t, filepath.Join(dir, "result.json")), &result); err != nil {
+			t.Fatal(err)
+		}
+		reportRaw := readFixture(t, filepath.Join(dir, "report.json"))
+		if err := validateSiteResult(result, reportRaw); err != nil {
+			t.Fatal(err)
+		}
+		if result.CurrentFreshness.Status != "unchecked" {
+			t.Fatal("offline result mislabeled")
+		}
+		if historical && result.ReportBasis != "historical_publication" || !historical && result.ReportBasis != "saved_run" {
+			t.Fatal("wrong result basis")
 		}
 	}
-	check(site)
-	archive := exportTestBundle(t, config, f.base)
+	site := filepath.Join(f.base, "legacy-latest")
+	runOK(t, "publish", site, config)
+	check(site, "B", false)
+	history := filepath.Join(f.base, "legacy-history")
+	runOK(t, "publish", history, "--run", "A", config)
+	check(history, "A", true)
+	if !bytes.Equal(originalJSON, readFixture(t, path)) {
+		t.Fatal("saved legacy report changed")
+	}
+	archive := exportAuditTestBundle(t, []string{config}, f.base)
 	restored := runOK(t, "bundle", "restore", archive, filepath.Join(f.base, "restored-legacy")).(map[string]any)
-	restoredConfig := restored["configs"].([]string)[0]
+	rc := restored["configs"].([]string)[0]
 	out := filepath.Join(f.base, "restored-legacy-site")
 	if requested := os.Getenv("SPEC_AUDIT_FRESHNESS_LEGACY_SITE"); requested != "" {
 		out = requested
 	}
-	runOK(t, "publish", out, restoredConfig)
-	check(out)
+	runOK(t, "publish", out, rc)
+	check(out, "B", false)
+	old := filepath.Join(f.base, "restored-history")
+	runOK(t, "publish", old, "--run", "A", rc)
+	check(old, "A", true)
 }
