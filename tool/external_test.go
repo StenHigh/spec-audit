@@ -115,7 +115,7 @@ func (f externalFixture) install(t *testing.T) string {
 	value := runOK(t, "external", "import", f.config, f.input).(map[string]any)
 	return value["config"].(string)
 }
-func completeExternal(t *testing.T, config, run string) TaskBatch {
+func completeExternalHost(t *testing.T, config, run string) TaskBatch {
 	t.Helper()
 	cfg, err := loadConfig(config)
 	if err != nil {
@@ -191,13 +191,28 @@ func completeExternal(t *testing.T, config, run string) TaskBatch {
 		writeFixture(t, path, mustJSON(t, decision))
 		runOK(t, "review", config, run, path)
 	}
-	view = runOK(t, "review", config, run).(ReviewContext)
-	check := ReviewCheck{1, run, view.SnapshotID, view.Latest.ReviewID, view.History[len(view.History)-1].RawSHA256, view.Latest.BasisSHA256, "independent-fixture-session", "deterministic-test-data-only", "confirmed", "Механический fixture перепроверки; не реальный аудит продукта", []string{"Тестовые данные, независимость модели этим тестом не доказана"}}
+	return batch
+}
+
+func completeExternal(t *testing.T, config, run string) TaskBatch {
+	t.Helper()
+	batch := completeExternalHost(t, config, run)
+	confirmExternal(t, config, run, "confirmed")
+	runOK(t, "report", config, run)
+	return batch
+}
+
+func confirmExternal(t *testing.T, config, run, conclusion string) {
+	t.Helper()
+	cfg, err := loadConfig(config, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := runOK(t, "review", config, run).(ReviewContext)
+	check := ReviewCheck{1, run, view.SnapshotID, view.Latest.ReviewID, view.History[len(view.History)-1].RawSHA256, view.Latest.BasisSHA256, "independent-fixture-session", "deterministic-test-data-only", conclusion, "Механический fixture перепроверки; не реальный аудит продукта", []string{"Тестовые данные, независимость модели этим тестом не доказана"}}
 	checkPath := filepath.Join(cfg.ReportsDir, run, "fixture-check.json")
 	writeFixture(t, checkPath, mustJSON(t, check))
 	runOK(t, "review-check", config, run, checkPath)
-	runOK(t, "report", config, run)
-	return batch
 }
 
 func TestExternalBoundaryAndSourceBytes(t *testing.T) {
@@ -404,7 +419,7 @@ func TestExternalHistoryPublicationAndScopes(t *testing.T) {
 	configA := f.install(t)
 	completeExternal(t, configA, "A")
 	cfgA, _ := loadConfig(configA)
-	before := readFixture(t, filepath.Join(cfgA.ReportsDir, "A/report.html"))
+	before := readFixture(t, filepath.Join(cfgA.ReportsDir, "A/report.json"))
 	// Independent scope with the same direct requirement IDs and the same sources.
 	other := filepath.Join(f.base, "other/config.yaml")
 	cfgOriginal, _ := loadConfig(f.config)
@@ -445,8 +460,17 @@ func TestExternalHistoryPublicationAndScopes(t *testing.T) {
 	completeExternal(t, configB, "B")
 	siteB := filepath.Join(f.base, "site-B")
 	runOK(t, "publish", siteB, configB, second)
-	if !bytes.Equal(before, historical) || !bytes.Equal(historical, readFixture(t, filepath.Join(siteB, externalScopePath(cfgA.External)+"/A/report.html"))) {
-		t.Fatal("old publication changed")
+	if !bytes.Equal(before, readFixture(t, filepath.Join(cfgA.ReportsDir, "A/report.json"))) || !bytes.Equal(historical, readFixture(t, filepath.Join(siteA, externalScopePath(cfgA.External)+"/A/report.html"))) {
+		t.Fatal("saved history or earlier output changed")
+	}
+	historySite := filepath.Join(f.base, "selected-history")
+	runOK(t, "publish", historySite, "--run", "A", configB)
+	var historicalReport Report
+	if err := strictJSON(readFixture(t, filepath.Join(historySite, externalScopePath(cfgA.External), "A/report.json")), &historicalReport); err != nil {
+		t.Fatal(err)
+	}
+	if historicalReport.External.SpecVersion != "fixture-A" {
+		t.Fatal("wrong historical basis")
 	}
 	var view Overview
 	if err := json.Unmarshal(readFixture(t, filepath.Join(siteB, "overview.json")), &view); err != nil {
@@ -455,16 +479,17 @@ func TestExternalHistoryPublicationAndScopes(t *testing.T) {
 	if len(view.Scopes[0].History) != 2 || view.Scopes[0].External.SpecVersion != "fixture-B" || view.Scopes[0].Delta == nil || len(view.Scopes[0].Delta.Incomparable) == 0 {
 		t.Fatal("history/delta missing", view.Scopes[0])
 	}
-	for _, name := range []string{externalScopePath(cfgA.External) + "/A/report.json", externalScopePath(cfgA.External) + "/B/result.json", externalScopePath(cfgOriginal.External) + "/A/report.html"} {
+	for _, name := range []string{externalScopePath(cfgA.External) + "/B/report.json", externalScopePath(cfgA.External) + "/B/result.json", externalScopePath(cfgOriginal.External) + "/A/report.html"} {
 		_ = readFixture(t, filepath.Join(siteB, name))
 	}
 	if output := os.Getenv("SPEC_AUDIT_EXTERNAL_UI"); output != "" {
 		copyTestTree(t, siteB, output)
+		copyTestTree(t, historySite, filepath.Join(output, "historical"))
 	}
 	if output := os.Getenv("SPEC_AUDIT_EXTERNAL_DELIVERY"); output != "" {
 		runOK(t, "prepare", configB, "pending")
 		request := filepath.Join(f.base, "delivery-request.json")
-		writeFixture(t, request, mustJSON(t, BundleRequest{1, []string{configB, second}, []string{siteA, siteB}}))
+		writeFixture(t, request, mustJSON(t, map[string]any{"schema_version": 2, "configs": []string{configB, second}}))
 		archive := filepath.Join(f.base, "delivery.tar.gz")
 		runOK(t, "bundle", "export", request, archive)
 		writeFixture(t, filepath.Join(output, "declared-history.tar.gz"), readFixture(t, archive))
@@ -611,7 +636,10 @@ func TestExternalIncrementalAndReviewCheck(t *testing.T) {
 	writeFixture(t, path, mustJSON(t, draft))
 	runOK(t, "review", config, "B", path)
 	runOK(t, "report", config, "B")
-	runFail(t, "publish", filepath.Join(f.base, "unchecked-site"), config)
+	pending := publicationView(t, filepath.Join(f.base, "unchecked-site"), config)
+	if pending.Scopes[0].Decided == nil || pending.Scopes[0].Decided.RunID != "A" || pending.Scopes[0].Latest.RunID != "B" {
+		t.Fatal("run awaiting independent review displaced the confirmed audit")
+	}
 	view = runOK(t, "review", config, "B").(ReviewContext)
 	check := ReviewCheck{1, "B", view.SnapshotID, view.Latest.ReviewID, view.History[len(view.History)-1].RawSHA256, view.Latest.BasisSHA256, "fixture-independent", "fresh-fixture-context", "confirmed", "Механический тест независимой перепроверки", []string{"Детерминированный fixture"}}
 	checkPath := filepath.Join(f.base, "check.json")

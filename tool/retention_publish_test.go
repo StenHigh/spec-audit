@@ -97,11 +97,11 @@ func TestCitationPublishFreshStagingOmitsUnrelatedFullSources(t *testing.T) {
 			}
 			if kind == "external" {
 				resultPath := filepath.ToSlash(filepath.Join(filepath.Dir(link), "result.json"))
-				var exported ExternalResult
+				var exported SiteResult
 				if err := strictJSON([]byte(files[resultPath]), &exported); err != nil {
 					t.Fatal(err)
 				}
-				if exported.SchemaVersion != 3 || exported.SourceRetention != "citations" || exported.Report.Freshness != "unchecked" {
+				if exported.SchemaVersion != 4 || exported.SourceRetention != "citations" || exported.CurrentFreshness.Status != "unchecked" {
 					t.Fatal("publication lost result mode or historical currency")
 				}
 			}
@@ -119,8 +119,7 @@ func TestCitationPublishPreservesExistingSiteAndRollsBackFailure(t *testing.T) {
 	if !reflect.DeepEqual(before, publicationBytes(t, good)) {
 		t.Fatal("existing output was changed by refusal")
 	}
-	// External publication writes report.html before it parses report.json.
-	// This refusal therefore exercises cleanup after the staging tree was used.
+	// Invalid saved JSON must refuse before exposing any generated site.
 	writeFixture(t, filepath.Join(cfg.ReportsDir, "A/report.json"), []byte("{invalid report"))
 	failed := filepath.Join(f.base, "failed-site")
 	runFail(t, "publish", failed, config)
@@ -130,23 +129,25 @@ func TestCitationPublishPreservesExistingSiteAndRollsBackFailure(t *testing.T) {
 	if !reflect.DeepEqual(before, publicationBytes(t, good)) {
 		t.Fatal("failed fresh publication changed the earlier site")
 	}
-	stages, err := filepath.Glob(filepath.Join(f.base, ".citation-site-*"))
+	stages, err := filepath.Glob(filepath.Join(f.base, ".publish-*"))
 	if err != nil || len(stages) != 0 {
 		t.Fatal("failed publication retained staging", stages, err)
 	}
 }
 
-func TestCitationPublishRejectsMixedArchiveSite(t *testing.T) {
+func TestCitationPublishSupportsMixedArchiveSite(t *testing.T) {
 	f, citations, _ := citationPublicationFixture(t)
 	archive, _ := fixture(t)
 	out := filepath.Join(f.base, "mixed-site")
-	for _, configs := range [][]string{{citations, archive}, {archive, citations}} {
-		args := append([]string{"publish", out}, configs...)
-		runFail(t, args...)
-		if _, err := os.Lstat(out); !os.IsNotExist(err) {
-			t.Fatal("mixed publication created an output", err)
-		}
+	runOK(t, "publish", out, citations, archive)
+	var view Overview
+	if err := strictJSON(readFixture(t, filepath.Join(out, "overview.json")), &view); err != nil {
+		t.Fatal(err)
 	}
+	if len(view.Scopes) != 2 || view.Scopes[0].Decided == nil || view.Scopes[1].Decided != nil {
+		t.Fatal("mixed scope map lost saved/unassessed state")
+	}
+	assertNoLifecycleMarker(t, out)
 }
 
 func TestCitationPublicationBrowserFixture(t *testing.T) {

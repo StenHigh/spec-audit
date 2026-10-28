@@ -1559,7 +1559,7 @@ func validReviewArgs(args []string) bool {
 }
 
 // usage is the command list of tool-spec §1–10 with later extensions; help prints it, wrong arguments refuse with it (§24.4).
-const usage = "команды: review-check CONFIG RUN_ID [RECEIPT]; external check|import CONFIG AUDIT_INPUT; external release CONFIG; external result CONFIG RUN_ID; bundle export REQUEST OUT | verify ARCHIVE | restore ARCHIVE NEW_DIR; cleanup plan ARCHIVE | verify ARCHIVE PLAN | apply ARCHIVE PLAN PROOF; help; init/index CONFIG; index CONFIG summary; anchors CONFIG [PATH...]; overview [--corpus-control FILE] CONFIG...; corpus OUT_HTML [--corpus-control FILE] CONFIG...; publish OUT_DIR [--corpus-control FILE] CONFIG...; plan CONFIG PREV_RUN; rerun RUN_ID CONFIG...; cite CONFIG PATH A B; reconcile CONFIG [RAW DECISION|relocate]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION|REQ-ID [text|brief]|summary|citations [PATH|REQ-ID|ROLE]]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; validate CONFIG RUN_ID host DECISION; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]"
+const usage = "команды: review-check CONFIG RUN_ID [RECEIPT]; external check|import CONFIG AUDIT_INPUT; external release CONFIG; external result CONFIG RUN_ID; bundle export REQUEST OUT | verify ARCHIVE | restore ARCHIVE NEW_DIR; cleanup plan ARCHIVE [--publications ID...] | verify ARCHIVE PLAN | apply ARCHIVE PLAN PROOF; help; init/index CONFIG; index CONFIG summary; anchors CONFIG [PATH...]; overview [--corpus-control FILE] CONFIG...; corpus OUT_HTML [--corpus-control FILE] CONFIG...; publish OUT_DIR [--from AUDIT_ROOT | --run RUN_ID CONFIG | CONFIG...] [--corpus-control FILE]; plan CONFIG PREV_RUN; rerun RUN_ID CONFIG...; cite CONFIG PATH A B; reconcile CONFIG [RAW DECISION|relocate]; check CONFIG RAW [DECISION]; prepare/tasks/status/report CONFIG RUN_ID; review CONFIG RUN_ID [DECISION|REQ-ID [text|brief]|summary|citations [PATH|REQ-ID|ROLE]]; draft CONFIG RUN_ID; submit/validate/retry/test/php-facts/php-typed CONFIG RUN_ID ...; validate CONFIG RUN_ID host DECISION; version; update; skill install|update --dir DIR --host codex|claude|both [--replace]"
 
 func execute(args []string) (any, error) {
 	unlock, err := lockCommand(args)
@@ -1603,6 +1603,9 @@ func executeCommand(args []string) (any, error) {
 		}
 		return checkAcceptance(cfg, args[2:])
 	}
+	if len(args) >= 2 && args[0] == "publish" {
+		return publishCommand(args[1], args[2:])
+	}
 	if len(args) >= 2 && args[0] == "overview" {
 		paths, controlFile, err := corpusArguments(args[1:])
 		if err != nil {
@@ -1614,7 +1617,7 @@ func executeCommand(args []string) (any, error) {
 		}
 		return overview(paths, control)
 	}
-	if len(args) >= 3 && oneOf(args[0], "corpus", "publish") {
+	if len(args) >= 3 && args[0] == "corpus" {
 		paths, controlFile, err := corpusArguments(args[2:])
 		if err != nil {
 			return nil, err
@@ -1623,10 +1626,7 @@ func executeCommand(args []string) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if args[0] == "corpus" {
-			return corpus(args[1], paths, control)
-		}
-		return publishWithRetention(args[1], paths, control)
+		return corpus(args[1], paths, control)
 	}
 	if len(args) >= 3 && args[0] == "rerun" {
 		return rerun(args[1], args[2:])
@@ -1873,58 +1873,10 @@ func executeCommand(args []string) (any, error) {
 			ext.CodeRoot = cfg.External.CodeRoot
 			m.Config.External = &ext
 		}
-		state = newState(m)
-		data, err = readRoot(run, "state.json", maxState)
+		state, err = readRunState(run, m, fresh)
 		if err != nil {
 			return nil, err
 		}
-		var savedState State
-		if err := strictJSON(data, &savedState); err != nil {
-			return nil, err
-		}
-		if m.Incremental != nil && m.Incremental.Grouping == "" && !sameTaskIDs(savedState, state) {
-			// tool-spec §64: runs prepared between 0.1.39 and 0.1.55 carry incremental-N tasks without the marker,
-			// earlier ones the §50 form — the saved task IDs decide which form the run was prepared in.
-			state = legacyIncrementalState(m)
-		}
-		if len(savedState.Entries) != len(state.Entries) {
-			return nil, errors.New("повреждено число заданий в state")
-		}
-		var sources *sourceCache
-		if fresh {
-			// One cache for every stored answer: a cited file is read and hashed once per command (tool-spec §60).
-			root, err := os.OpenRoot(m.Config.ProjectRoot)
-			if err != nil {
-				return nil, err
-			}
-			defer root.Close()
-			sources = newSourceCache(root)
-		}
-		for i, entry := range savedState.Entries {
-			state.Entries[i].Task.Attempt = entry.Task.Attempt
-			if entry.Task.Attempt < 1 || !reflect.DeepEqual(entry.Task, state.Entries[i].Task) {
-				return nil, errors.New("повреждено описание задания в state")
-			}
-			if entry.Result != nil {
-				if err := validateResult(*entry.Result, entry.Task, m, sources); err != nil {
-					return nil, fmt.Errorf("сохранённый результат повреждён: %w", err)
-				}
-			}
-			if entry.RawSHA256 != "" {
-				if entry.Result == nil || !validDigest(entry.RawSHA256) {
-					return nil, errors.New("неверное происхождение raw")
-				}
-				raw, err := readRoot(run, fmt.Sprintf("results/%s-attempt-%d.json", entry.Task.TaskID, entry.Task.Attempt), maxResult)
-				var recorded Result
-				if err != nil || digest(raw) != entry.RawSHA256 || strictJSON(raw, &recorded) != nil || !reflect.DeepEqual(recorded, *entry.Result) {
-					return nil, errors.New("сохранённый raw не совпадает с hash/state")
-				}
-			}
-		}
-		if err := verifySDKRecords(run, savedState.SDK); err != nil {
-			return nil, err
-		}
-		state = savedState
 	}
 	switch command {
 	case "prepare", "tasks":
@@ -2435,4 +2387,60 @@ func carriedVerdict(m Manifest, id string) *CarriedVerdict {
 		}
 	}
 	return nil
+}
+
+// Shared strict reader for ordinary commands, publication and portable state.
+func readRunState(run *os.Root, m Manifest, fresh bool) (State, error) {
+	state := newState(m)
+	data, err := readRoot(run, "state.json", maxState)
+	if err != nil {
+		return State{}, err
+	}
+	var savedState State
+	if err := strictJSON(data, &savedState); err != nil {
+		return State{}, err
+	}
+	if m.Incremental != nil && m.Incremental.Grouping == "" && !sameTaskIDs(savedState, state) {
+		// tool-spec §64: runs prepared between 0.1.39 and 0.1.55 carry incremental-N tasks without the marker,
+		// earlier ones the §50 form — the saved task IDs decide which form the run was prepared in.
+		state = legacyIncrementalState(m)
+	}
+	if len(savedState.Entries) != len(state.Entries) {
+		return State{}, errors.New("повреждено число заданий в state")
+	}
+	var sources *sourceCache
+	if fresh {
+		// One cache for every stored answer: a cited file is read and hashed once per command (tool-spec §60).
+		root, err := os.OpenRoot(m.Config.ProjectRoot)
+		if err != nil {
+			return State{}, err
+		}
+		defer root.Close()
+		sources = newSourceCache(root)
+	}
+	for i, entry := range savedState.Entries {
+		state.Entries[i].Task.Attempt = entry.Task.Attempt
+		if entry.Task.Attempt < 1 || !reflect.DeepEqual(entry.Task, state.Entries[i].Task) {
+			return State{}, errors.New("повреждено описание задания в state")
+		}
+		if entry.Result != nil {
+			if err := validateResult(*entry.Result, entry.Task, m, sources); err != nil {
+				return State{}, fmt.Errorf("сохранённый результат повреждён: %w", err)
+			}
+		}
+		if entry.RawSHA256 != "" {
+			if entry.Result == nil || !validDigest(entry.RawSHA256) {
+				return State{}, errors.New("неверное происхождение raw")
+			}
+			raw, err := readRoot(run, fmt.Sprintf("results/%s-attempt-%d.json", entry.Task.TaskID, entry.Task.Attempt), maxResult)
+			var recorded Result
+			if err != nil || digest(raw) != entry.RawSHA256 || strictJSON(raw, &recorded) != nil || !reflect.DeepEqual(recorded, *entry.Result) {
+				return State{}, errors.New("сохранённый raw не совпадает с hash/state")
+			}
+		}
+	}
+	if err := verifySDKRecords(run, savedState.SDK); err != nil {
+		return State{}, err
+	}
+	return savedState, nil
 }

@@ -1,6 +1,7 @@
 // Development-only HTTP/browser acceptance on deterministic synthetic output.
 'use strict';
 const assert=require('node:assert/strict');
+const {createHash}=require('node:crypto');
 const fs=require('node:fs');
 const path=require('node:path');
 const {chromium}=require(process.env.SPEC_AUDIT_PLAYWRIGHT||'playwright');
@@ -23,7 +24,8 @@ if(!base||!out)throw new Error('external_ui_test.cjs BASE_URL SCREENSHOT_DIR');
   const reportURL=new URL(scope.decided.report,base);
   const report=await (await page.request.get(new URL('report.json',reportURL).href)).json();
   const result=await (await page.request.get(new URL('result.json',reportURL).href)).json();
-  assert.equal(result.snapshot_id,report.snapshot_id);assert.equal(result.basis.spec_version,'fixture-B');assert.equal(result.report.independent_review.conclusion,'confirmed');
+  assert.equal(result.snapshot_id,report.snapshot_id);assert.equal(result.basis.spec_version,'fixture-B');assert.equal(result.schema_version,4);assert.equal(result.report_ref.path,'report.json');assert.equal(report.independent_review.conclusion,'confirmed');
+  const reportBytes=await(await page.request.get(new URL(result.report_ref.path,reportURL).href)).body();assert.equal(result.report_ref.bytes,reportBytes.length);assert.equal(result.report_ref.sha256,createHash('sha256').update(reportBytes).digest('hex'));
   await page.goto(reportURL.href);
   assert.equal(await page.locator('.requirement').count(),report.requirements.length);
   for(const [value,min] of [['implementation_gap',1],['test_gap',1],['unknown',1],['spec_question',1],['disagreement',1]]){
@@ -44,7 +46,7 @@ if(!base||!out)throw new Error('external_ui_test.cjs BASE_URL SCREENSHOT_DIR');
   const raw=await (await page.request.get(new URL(source.raw_url,reportURL).href)).body();assert(raw.subarray(0,3).equals(Buffer.from([239,187,191])));assert(raw.includes(Buffer.from('\r\n')));assert(raw.includes(Buffer.from('е\u0308')));
   await page.screenshot({path:path.join(out,'source-line-1.png'),fullPage:true});
   const sourceRange=new URL(source.url,reportURL);sourceRange.search='?start=2&end=3';sourceRange.hash='L2';await page.goto(sourceRange.href);assert.equal(await page.locator('.line.selected').count(),2);
-  const old=scope.history.find(r=>r.run_id==='A');assert(old);const oldReportURL=new URL(old.report,base);const oldReport=await (await page.request.get(new URL('report.json',oldReportURL).href)).json();assert.equal(oldReport.external.spec_version,'fixture-A');
+  const old=scope.history.find(r=>r.run_id==='A');assert(old);assert(!old.report);const historicalBase=new URL('historical/',base);const historicalOverview=await(await page.request.get(new URL('overview.json',historicalBase).href)).json();const oldReportURL=new URL(historicalOverview.scopes[0].decided.report,historicalBase);const oldReport=await (await page.request.get(new URL('report.json',oldReportURL).href)).json();assert.equal(oldReport.external.spec_version,'fixture-A');
   const oldContext=oldReport.sources.find(s=>s.path==='context.md');assert(oldContext);await page.goto(new URL(oldContext.url,oldReportURL).href);assert.match(await page.locator('h1').innerText(),/context.md/);
   assert.equal(oldReport.external.freshness.status,'unknown');
   const conflictBase=new URL('conflict/',base);const conflictOverview=await (await page.request.get(new URL('overview.json',conflictBase).href)).json();assert(conflictOverview.totals.questions>0);

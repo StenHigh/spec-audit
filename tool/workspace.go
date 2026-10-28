@@ -65,7 +65,9 @@ func lockCommand(args []string) (func(), error) {
 		if len(args) == 4 {
 			configs = append(configs, args[2])
 		}
-	case "corpus", "publish":
+	case "publish":
+		return empty, nil // publish resolves and locks all discovered stores itself.
+	case "corpus":
 		if len(args) > 2 {
 			var err error
 			configs, _, err = corpusArguments(args[2:])

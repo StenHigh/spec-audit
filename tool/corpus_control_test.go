@@ -97,27 +97,17 @@ func TestCorpusControlReleasedScopes(t *testing.T) {
 		}
 	}
 	request := filepath.Join(f.base, "control-bundle.json")
-	writeFixture(t, request, mustJSON(t, BundleRequest{1, []string{a2, b1}, []string{site}}))
+	writeFixture(t, request, mustJSON(t, map[string]any{"schema_version": 2, "configs": []string{a2, b1}}))
 	archive := filepath.Join(f.base, "control.tar.gz")
 	runOK(t, "bundle", "export", request, archive)
 	runOK(t, "bundle", "verify", archive)
 	restored := runOK(t, "bundle", "restore", archive, filepath.Join(f.base, "restored-control")).(map[string]any)
-	found := false
 	restoredControl := filepath.Join(f.base, "restored-control", "control.json")
-	for _, restoredSite := range restored["sites"].([]string) {
-		publicRaw := readFixture(t, filepath.Join(restoredSite, "overview.json"))
-		if bytes.Equal(readFixture(t, filepath.Join(site, "overview.json")), publicRaw) {
-			found = true
-			var publicView Overview
-			if err := json.Unmarshal(publicRaw, &publicView); err != nil {
-				t.Fatal(err)
-			}
-			writeFixture(t, restoredControl, mustJSON(t, publicView.CorpusControl))
-		}
+	if len(restored["sites"].([]string)) != 0 {
+		t.Fatal("new bundle retained sites")
 	}
-	if !found {
-		t.Fatal("bundle changed published control metadata")
-	}
+	// The caller selects the same control again; it is not an implicit audit setting.
+	writeFixture(t, restoredControl, readFixture(t, control))
 	if err := os.Remove(control); err != nil {
 		t.Fatal(err)
 	}

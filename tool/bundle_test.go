@@ -18,7 +18,19 @@ func exportTestBundle(t *testing.T, config, base string, sites ...string) string
 	request := filepath.Join(base, "bundle-request.json")
 	writeFixture(t, request, mustJSON(t, BundleRequest{1, []string{config}, sites}))
 	out := filepath.Join(base, "evidence.tar.gz")
-	runOK(t, "bundle", "export", request, out)
+	// Frozen legacy writer shape: old bundles must remain readable after the
+	// public exporter switches to audit-only v3. New export is exercised separately.
+	cfg, err := loadConfig(config, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := collectBundle(BundleRequest{1, []string{config}, sites}, []Config{cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeBundle(out, b); err != nil {
+		t.Fatal(err)
+	}
 	return out
 }
 func TestBundleExternalRestoreAndCleanup(t *testing.T) {

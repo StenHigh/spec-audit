@@ -201,7 +201,7 @@ func TestCitationBundleRejectsModeAndInventoryCorruption(t *testing.T) {
 			case "legacy_schema":
 				b.Index.SchemaVersion = 1
 			case "unsupported_schema":
-				b.Index.SchemaVersion = 3
+				b.Index.SchemaVersion = 99
 			case "run_mode":
 				mutateRetentionBundleFile(t, &b, "review/manifest.json", func(data []byte) []byte {
 					var m Manifest

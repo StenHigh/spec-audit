@@ -3,10 +3,7 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -91,191 +88,6 @@ func externalResult(config, runID string) (any, error) {
 	return resultFromReport(report, map[string]string{"report_json": filepath.Join(cfg.ReportsDir, runID, "report.json"), "report_html": filepath.Join(cfg.ReportsDir, runID, "report.html"), "sources": filepath.Join(cfg.ReportsDir, runID, "sources.json")}), nil
 }
 
-// Published external runs retain their relative addresses and exact representations.
-func publishExternalScope(out string, scope *ScopeOverview, cfg Config) (int, error) {
-	name := externalScopePath(cfg.External)
-	if !slugRE.MatchString(cfg.External.Scope) {
-		return 0, errors.New("external.scope: недопустимый slug")
-	}
-	root, err := os.OpenRoot(cfg.ReportsDir)
-	if err != nil {
-		return 0, err
-	}
-	defer root.Close()
-	if scope.External == nil && scope.Decided != nil {
-		scope.External = scope.Decided.External
-	}
-	copied := 0
-	for i, history := range scope.History {
-		if !slugRE.MatchString(history.RunID) {
-			return copied, errors.New("publish: неверный исторический run")
-		}
-		source := history.RunID + "/report.html"
-		html, err := readRoot(root, source, maxFile)
-		if os.IsNotExist(err) {
-			scope.History[i].Report = ""
-			continue
-		}
-		if err != nil {
-			return copied, err
-		}
-		target := filepath.Join(out, name, history.RunID)
-		if err := mkdirExact(target, 0755); err != nil {
-			return copied, err
-		}
-		data, err := readRoot(root, history.RunID+"/report.json", maxState)
-		if err == nil {
-			var report Report
-			if err := strictJSON(data, &report); err != nil {
-				return copied, err
-			}
-			if !reportRetentionMatches(report, cfg) {
-				return copied, errors.New("publish: политика хранения отчёта не совпадает с CONFIG")
-			}
-			if report.External != nil && (report.IndependentReview == nil || report.IndependentReview.Conclusion != "confirmed") {
-				return copied, errors.New("publish: внешнему run нужна независимая review-check с conclusion confirmed и новый report")
-			}
-			if report.External != nil {
-				run, err := root.OpenRoot(history.RunID)
-				if err != nil {
-					return copied, err
-				}
-				manifestData, err := readRoot(run, "manifest.json", maxState)
-				if err != nil {
-					run.Close()
-					return copied, err
-				}
-				var m Manifest
-				if err := strictJSON(manifestData, &m); err != nil {
-					run.Close()
-					return copied, err
-				}
-				stateData, err := readRoot(run, "state.json", maxState)
-				if err != nil {
-					run.Close()
-					return copied, err
-				}
-				var state State
-				if err := strictJSON(stateData, &state); err != nil {
-					run.Close()
-					return copied, err
-				}
-				reviews, err := readReviews(run, history.RunID, m)
-				if err != nil {
-					run.Close()
-					return copied, err
-				}
-				current := summarizeReviews(history.RunID, m, state, false, reviews)
-				if !current.Complete || report.HostReview == nil || !reflect.DeepEqual(current.Latest, report.HostReview.Latest) {
-					run.Close()
-					return copied, errors.New("publish: report не отражает текущее полное решение; нужны review-check и новый report")
-				}
-				check, checkErr := checkForReport(run, report)
-				run.Close()
-				if checkErr != nil {
-					return copied, checkErr
-				}
-				if check == nil || !reflect.DeepEqual(check, report.IndependentReview) {
-					return copied, errors.New("publish: перепроверка report не совпадает с сохранённым основанием")
-				}
-			}
-			latest := scope.Decided != nil && scope.Decided.RunID == history.RunID
-			if latest {
-				before, err := json.Marshal(report)
-				if err != nil {
-					return copied, err
-				}
-				report, err = projectSavedReport(scope.Config, history.RunID, report)
-				if err != nil {
-					return copied, err
-				}
-				after, err := json.Marshal(report)
-				if err != nil {
-					return copied, err
-				}
-				if !bytes.Equal(before, after) {
-					var rendered bytes.Buffer
-					if err := reportTemplate.Execute(&rendered, report); err != nil {
-						return copied, err
-					}
-					html = rendered.Bytes()
-					data, err = json.MarshalIndent(report, "", "  ")
-					if err != nil {
-						return copied, err
-					}
-					data = append(data, '\n')
-				}
-			}
-			if err := publishImmutable(filepath.Join(target, "report.json"), data); err != nil {
-				return copied, err
-			}
-			result := resultFromReport(report, map[string]string{"report_html": "report.html", "report_json": "report.json", "site": "../../../../index.html"})
-			if !latest {
-				result.ReportBasis = "historical_publication"
-				result.CurrentFreshness = &ResultFreshness{Status: "unchecked", SourceAvailability: "unavailable", Reason: "Историческая публикация; наблюдение относится к моменту её формирования."}
-			}
-			resultRaw, err := json.MarshalIndent(result, "", "  ")
-			if err != nil {
-				return copied, err
-			}
-			if err := publishImmutable(filepath.Join(target, "result.json"), append(resultRaw, '\n')); err != nil {
-				return copied, err
-			}
-		} else if !os.IsNotExist(err) {
-			return copied, err
-		}
-		if err := publishImmutable(filepath.Join(target, "report.html"), html); err != nil {
-			return copied, err
-		}
-		if !citationRetention(cfg) {
-			sourcesDir := filepath.Join(cfg.ReportsDir, history.RunID, "sources")
-			if _, err := os.Lstat(sourcesDir); err == nil {
-				if err := walkBundleArea(sourcesDir, func(path string, data []byte, _ uint32) error {
-					if err := mkdirExact(filepath.Join(target, "sources", filepath.Dir(path)), 0755); err != nil {
-						return err
-					}
-					return publishImmutable(filepath.Join(target, "sources", path), data)
-				}); err != nil {
-					return copied, err
-				}
-			} else if !os.IsNotExist(err) {
-				return copied, err
-			}
-		}
-		link := filepath.ToSlash(filepath.Join(name, history.RunID, "report.html"))
-		scope.History[i].Report = link
-		if scope.Decided != nil && scope.Decided.RunID == history.RunID {
-			scope.Decided.Report = link
-		}
-		copied++
-	}
-	return copied, nil
-}
-
-func publishImmutable(path string, data []byte) error {
-	guard, _, err := openExact(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	guard.Close()
-	old, err := readExact(path, maxFile)
-	if err == nil {
-		if !bytes.Equal(old, data) {
-			return fmt.Errorf("публикация уже содержит другую редакцию %s; используйте новый каталог", filepath.Base(path))
-		}
-		return nil
-	}
-	if !os.IsNotExist(err) {
-		return err
-	}
-	root, err := os.OpenRoot(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	return atomicWrite(root, filepath.Base(path), data, 0644)
-}
-
 // projectSavedReport reuses the validated run reader and the existing renderer;
 // it updates presentation only, never saved report/raw/journal bytes.
 func projectSavedReport(config, runID string, report Report) (Report, error) {
@@ -349,4 +161,71 @@ func projectSavedReport(config, runID string, report Report) (Report, error) {
 	buildNavigation(&report, m)
 	linkReportSources(&report)
 	return report, nil
+}
+
+// SiteResult v4 references the single report in a generated run directory.
+// The standalone external result command intentionally remains schema v3.
+type ReportReference struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Bytes  int    `json:"bytes"`
+}
+type DecisionReference struct {
+	Path    string `json:"path"`
+	Pointer string `json:"pointer"`
+}
+type SiteResult struct {
+	SchemaVersion    int                `json:"schema_version"`
+	ToolVersion      string             `json:"tool_version"`
+	Scope            string             `json:"scope"`
+	RunID            string             `json:"run_id"`
+	SnapshotID       string             `json:"snapshot_id"`
+	AcceptedHead     string             `json:"accepted_head"`
+	Basis            *ExternalBasis     `json:"basis"`
+	SourceRetention  string             `json:"source_retention"`
+	ReportBasis      string             `json:"report_basis"`
+	CurrentFreshness *ResultFreshness   `json:"current_freshness"`
+	Paths            map[string]string  `json:"paths"`
+	ReportRef        ReportReference    `json:"report_ref"`
+	DecisionRef      *DecisionReference `json:"decision_ref"`
+}
+
+func compactResult(report Report, raw []byte, historical bool) SiteResult {
+	full := resultFromReport(report, map[string]string{"report_html": "report.html", "report_json": "report.json", "site": "../../../../index.html"})
+	if historical {
+		full.ReportBasis = "historical_publication"
+		full.CurrentFreshness = &ResultFreshness{Status: "unchecked", SourceAvailability: report.SourceAvailability, Reason: "Исторический аудит выбран явно."}
+	}
+	r := SiteResult{4, full.ToolVersion, full.Scope, full.RunID, full.SnapshotID, full.AcceptedHead, full.Basis, full.SourceRetention, full.ReportBasis, full.CurrentFreshness, full.Paths, ReportReference{"report.json", digest(raw), len(raw)}, nil}
+	if report.HostReview != nil {
+		r.DecisionRef = &DecisionReference{"report.json", "/host_review"}
+	}
+	return r
+}
+func validateSiteResult(r SiteResult, raw []byte) error {
+	if r.SchemaVersion != 4 || r.ReportRef.Path != "report.json" || r.ReportRef.SHA256 != digest(raw) || r.ReportRef.Bytes != len(raw) {
+		return errors.New("result v4: неверная ссылка или hash/bytes отчёта")
+	}
+	var report Report
+	if err := strictJSON(raw, &report); err != nil {
+		return err
+	}
+	head := ""
+	if report.Accepted != nil {
+		head = report.Accepted.Head
+	}
+	if r.RunID != report.RunID || r.SnapshotID != report.SnapshotID || r.AcceptedHead != head || !samePublicationJSON(r.Basis, report.External) || report.External == nil || r.Scope != report.External.Scope || r.SourceRetention != resultFromReport(report, nil).SourceRetention {
+		return errors.New("result v4: чужое основание отчёта")
+	}
+	if report.HostReview == nil {
+		if r.DecisionRef != nil {
+			return errors.New("result v4: отсутствует цель decision_ref")
+		}
+	} else if r.DecisionRef == nil || r.DecisionRef.Path != "report.json" || r.DecisionRef.Pointer != "/host_review" {
+		return errors.New("result v4: неверная ссылка на решение")
+	}
+	if !oneOf(r.ReportBasis, "saved_run", "historical_publication") || r.CurrentFreshness == nil || !oneOf(r.CurrentFreshness.Status, "fresh", "stale", "unchecked") || !oneOf(r.CurrentFreshness.SourceAvailability, "available", "released", "unavailable") || r.CurrentFreshness.Reason == "" {
+		return errors.New("result v4: неверное наблюдение")
+	}
+	return nil
 }
