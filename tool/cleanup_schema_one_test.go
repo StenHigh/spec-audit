@@ -20,6 +20,7 @@ func TestCleanupSchemaOneProtectsPhysicalConsumers(t *testing.T) {
 			shared := strings.HasSuffix(consumer, "shared")
 			t.Run(fmt.Sprintf("bundle-%d/%s", schema, consumer), func(t *testing.T) {
 				f := newExternalFixture(t)
+				f.base = exactSystemPath(f.base)
 				parent := f.install(t)
 				completeExternal(t, parent, "A")
 				pc, err := loadConfig(parent, true)
@@ -40,6 +41,7 @@ func TestCleanupSchemaOneProtectsPhysicalConsumers(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				t.Logf("[FIX:darwin-fixture] source relative to canonical fixture root: %s", relative)
 				cfg := Config{Version: 1, ProjectRoot: f.base, ReportsDir: filepath.Join(f.base, "secondary-runs"), Specs: Sources{Paths: []string{"secondary/rules.md"}}, Code: Sources{Paths: []string{"secondary/source.go", filepath.ToSlash(relative)}}, Tests: Sources{Paths: []string{"secondary/source_test.go"}}, Runtime: Runtime{Kind: "none"}}
 				if strings.HasPrefix(consumer, "citations-") {
 					cfg.SourceRetention = "citations"
@@ -155,6 +157,7 @@ func TestCleanupSchemaOneProtectsPhysicalConsumers(t *testing.T) {
 // Exercise the omitted JSON runtime root without requiring project execution.
 func TestCleanupSchemaOneProtectsExternalRuntime(t *testing.T) {
 	f := newExternalFixture(t)
+	f.base = exactSystemPath(f.base)
 	parent := f.install(t)
 	completeExternal(t, parent, "A")
 	pc, err := loadConfig(parent, true)
@@ -162,10 +165,15 @@ func TestCleanupSchemaOneProtectsExternalRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	code := filepath.Join(pc.ReportsDir, "A", "dispatch", "all-mapper", "result.json")
+	relative, err := filepath.Rel(f.base, code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("[FIX:darwin-fixture] runtime source relative to canonical fixture root: %s", relative)
 	for _, name := range []string{"rules.md", "source.go", "source_test.go", "go.mod"} {
 		writeFixture(t, filepath.Join(f.base, "secondary", name), readFixture(t, "../acceptance/corpus/"+name))
 	}
-	cfg := Config{Version: 1, ProjectRoot: f.base, ReportsDir: filepath.Join(f.base, "external-runs"), Specs: Sources{Paths: []string{"rules.md"}}, Code: Sources{Paths: []string{"secondary/source.go", strings.TrimPrefix(code, f.base+string(filepath.Separator))}}, Tests: Sources{Paths: []string{"secondary/source_test.go"}}, Runtime: Runtime{Kind: "none"}}
+	cfg := Config{Version: 1, ProjectRoot: f.base, ReportsDir: filepath.Join(f.base, "external-runs"), Specs: Sources{Paths: []string{"rules.md"}}, Code: Sources{Paths: []string{"secondary/source.go", filepath.ToSlash(relative)}}, Tests: Sources{Paths: []string{"secondary/source_test.go"}}, Runtime: Runtime{Kind: "none"}}
 	raw, err := yaml.Marshal(cfg)
 	if err != nil {
 		t.Fatal(err)
