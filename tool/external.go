@@ -670,6 +670,9 @@ func externalCommand(args []string) (any, error) {
 	if err := errors.Join(externalSelectionError(cfg, x.manifest), verifyCodeBasis(cfg, x.request.CodeBasis, code, codeData)); err != nil {
 		return nil, err
 	}
+	if err := validateExternalSpecs(cfg, x); err != nil {
+		return nil, err
+	}
 	if args[0] == "check" {
 		return map[string]any{"schema_version": 1, "basis": externalBasis(x), "files": len(x.files), "code_sha256": codeDigest(code)}, nil
 	}
@@ -682,6 +685,31 @@ func externalCommand(args []string) (any, error) {
 	}
 	defer unlock()
 	return installExternal(args[1], cfg, x, codeData)
+}
+
+// validateExternalSpecs uses the verified input bytes before either command creates state (§84).
+func validateExternalSpecs(cfg Config, x externalInput) error {
+	if cfg.IndexMode == "accepted" {
+		return nil
+	}
+	m := Manifest{Files: externalSourceFiles(x.manifest)}
+	// Use a stable order for diagnostics, regardless of manifest ordering.
+	sort.Slice(m.Files, func(i, j int) bool { return m.Files[i].Path < m.Files[j].Path })
+	for _, file := range m.Files {
+		if file.Kind != "spec" || file.Reference {
+			continue
+		}
+		reqs, questions, err := parseSpec(file.Path, x.files[file.Path])
+		if err != nil {
+			return err
+		}
+		m.Requirements = append(m.Requirements, reqs...)
+		m.Questions = append(m.Questions, questions...)
+		if len(m.Requirements) > 512 {
+			return errors.New("не более 512 требований")
+		}
+	}
+	return resolveQuestionReferences(&m, func(path string) ([]byte, error) { return x.files[path], nil })
 }
 
 func sourceSelected(group Sources, path string) bool {

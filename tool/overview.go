@@ -117,9 +117,11 @@ type ScopeQuestion struct {
 }
 
 type QuestionNorm struct {
-	ID      string     `json:"id"`
-	Title   string     `json:"title"`
-	Verdict *NormBrief `json:"verdict"` // nil without a decided run or when the decided run did not judge the norm
+	ID        string     `json:"id"`
+	Title     string     `json:"title"`
+	Verdict   *NormBrief `json:"verdict"` // nil without a decided run or when the decided run did not judge the norm
+	Reference bool       `json:"reference,omitempty"`
+	Source    *Citation  `json:"source,omitempty"`
 }
 
 // specQuestions lists the open questions of the current snapshot: declared `### Q-…` blocks, or one question per
@@ -143,7 +145,15 @@ func specQuestions(m Manifest, decided *RunOverview) []ScopeQuestion {
 	for _, q := range m.Questions {
 		sq := ScopeQuestion{ID: q.ID, Title: q.Title, Text: q.Text, Norms: []QuestionNorm{}, Source: at(q.Source)}
 		for _, id := range q.Requirements {
-			sq.Norms = append(sq.Norms, norm(id))
+			n := norm(id)
+			for _, ref := range q.ReferenceNorms {
+				if ref.ID == id {
+					source := ref.Source
+					n = QuestionNorm{ID: id, Title: ref.Title, Reference: true, Source: &source}
+					break
+				}
+			}
+			sq.Norms = append(sq.Norms, n)
 		}
 		questions = append(questions, sq)
 	}
