@@ -829,7 +829,7 @@ func scanSnapshot(cfg Config) (Manifest, error) {
 		}
 		m.External = basis
 	}
-	if err := checkQuestions(m); err != nil {
+	if err := resolveQuestionReferences(&m, func(path string) ([]byte, error) { return readRoot(root, path, maxFile) }); err != nil {
 		return m, err
 	}
 	sort.Slice(m.Files, func(i, j int) bool { return m.Files[i].Path < m.Files[j].Path })

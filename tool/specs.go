@@ -53,11 +53,19 @@ func (req Requirement) containsSource(citation Citation) bool {
 // SpecQuestion is a question to the owner of the specification (tool-spec §68): declared by a `### Q-…` block in a
 // normative spec file, it names what the text leaves open and the norms it touches. It is a fact about the TZ, not a verdict.
 type SpecQuestion struct {
-	ID           string   `json:"id"`
-	Title        string   `json:"title"`
-	Text         string   `json:"text"`
-	Requirements []string `json:"requirements"`
-	Source       Citation `json:"source"`
+	ID             string              `json:"id"`
+	Title          string              `json:"title"`
+	Text           string              `json:"text"`
+	Requirements   []string            `json:"requirements"`
+	Source         Citation            `json:"source"`
+	ReferenceNorms []QuestionReference `json:"reference_norms,omitempty"`
+}
+
+// QuestionReference identifies a neighboring norm without making it an audited requirement (§84).
+type QuestionReference struct {
+	ID     string   `json:"id"`
+	Title  string   `json:"title"`
+	Source Citation `json:"source"`
 }
 
 var questionHeading = regexp.MustCompile(`^(Q-[A-Z0-9]+-[0-9]{3,}) — (.+)$`)
@@ -657,7 +665,86 @@ func anchorIndex(cfg Config, extra []string) (AnchorIndex, error) {
 	return index, nil
 }
 
-// checkQuestions rejects a repeated question ID or a question naming a norm outside the snapshot (tool-spec §68).
+// resolveQuestionReferences reads only selected reference sources and saves only definitions used by questions (§84).
+// Arbitrary reference prose is not subjected to the declared requirement field rules.
+func resolveQuestionReferences(m *Manifest, read func(string) ([]byte, error)) error {
+	local, wanted := map[string]bool{}, map[string]bool{}
+	for _, req := range m.Requirements {
+		local[req.ID] = true
+	}
+	for _, q := range m.Questions {
+		for _, id := range q.Requirements {
+			if !local[id] {
+				wanted[id] = true
+			}
+		}
+	}
+	definitions := map[string][]QuestionReference{}
+	if len(wanted) > 0 {
+		for _, file := range m.Files {
+			if file.Kind != "spec" || !file.Reference {
+				continue
+			}
+			data, err := read(file.Path)
+			if err != nil {
+				return err
+			}
+			if len(data) != file.Bytes || digest(data) != file.SHA256 {
+				return fmt.Errorf("изменился справочный источник при проверке вопросов: %s", file.Path)
+			}
+			if !utf8.Valid(data) {
+				continue
+			} // Binary context cannot declare a Markdown heading.
+			tree := goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser().Parse(text.NewReader(data))
+			for node := tree.FirstChild(); node != nil; node = node.NextSibling() {
+				heading, ok := node.(*ast.Heading)
+				if !ok || heading.Level != 3 || heading.Lines().Len() != 1 {
+					continue
+				}
+				segment := heading.Lines().At(0)
+				match := requirementHeading.FindStringSubmatch(strings.TrimSpace(string(data[segment.Start:segment.Stop])))
+				if match == nil || !wanted[match[1]] {
+					continue
+				}
+				line := bytes.Count(data[:segment.Start], []byte("\n")) + 1
+				quote, err := lineQuote(data, line, line)
+				if err != nil {
+					return err
+				}
+				definitions[match[1]] = append(definitions[match[1]], QuestionReference{match[1], match[2], Citation{file.Path, line, line, quote}})
+			}
+		}
+	}
+	for i := range m.Questions {
+		q := &m.Questions[i]
+		q.ReferenceNorms = nil
+		seen := map[string]bool{}
+		for _, id := range q.Requirements {
+			if local[id] || seen[id] {
+				continue
+			}
+			seen[id] = true
+			found := definitions[id]
+			if len(found) > 1 {
+				locations := []string{}
+				for _, ref := range found {
+					locations = append(locations, fmt.Sprintf("%s:%d", ref.Source.Path, ref.Source.LineStart))
+				}
+				return fmt.Errorf("вопрос %s (%s:%d): неоднозначное справочное определение %s: %s", q.ID, q.Source.Path, q.Source.LineStart, id, strings.Join(locations, ", "))
+			}
+			if len(found) == 1 {
+				q.ReferenceNorms = append(q.ReferenceNorms, found[0])
+			}
+		}
+	}
+	if err := checkQuestions(*m); err != nil {
+		return err
+	}
+	slog.Debug("[FIX] вопросы: ссылки проверены", "questions", len(m.Questions), "reference_ids", len(wanted))
+	return nil
+}
+
+// checkQuestions rejects repeated questions and links without local or selected reference definitions (§68/84).
 func checkQuestions(m Manifest) error {
 	norms, seen := map[string]bool{}, map[string]bool{}
 	for _, req := range m.Requirements {
@@ -668,9 +755,13 @@ func checkQuestions(m Manifest) error {
 			return fmt.Errorf("повторный ID вопроса %s", q.ID)
 		}
 		seen[q.ID] = true
+		references := map[string]bool{}
+		for _, ref := range q.ReferenceNorms {
+			references[ref.ID] = true
+		}
 		for _, id := range q.Requirements {
-			if !norms[id] {
-				return fmt.Errorf("вопрос %s ссылается на норму вне snapshot: %s", q.ID, id)
+			if !norms[id] && !references[id] {
+				return fmt.Errorf("вопрос %s (%s:%d): норма %s не найдена в specs или выбранных references", q.ID, q.Source.Path, q.Source.LineStart, id)
 			}
 		}
 	}
